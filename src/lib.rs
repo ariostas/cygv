@@ -1,1 +1,1 @@
-pub mod factorials;
+pub mod factorial;

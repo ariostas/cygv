@@ -1,4 +1,4 @@
-//! Factorials
+//! Factorial
 //!
 //! This module contains functions to compute factorials and associated numbers.
 
@@ -32,12 +32,12 @@ impl RecipMut for Float {
 /// We compute $H_{10,2}=\frac{1968329}{1270080}$.
 /// ```
 /// use rug::Rational;
-/// use cyinvariants::factorials;
+/// use cyinvariants::factorial;
 ///
 /// let mut h_10_2 = Rational::new();
 /// let mut tmp_var = Rational::new();
 ///
-/// factorials::harmonic(10, 2, &mut h_10_2, &mut tmp_var);
+/// factorial::harmonic(10, 2, &mut h_10_2, &mut tmp_var);
 ///
 /// assert_eq!(h_10_2, Rational::from((1_968_329, 1_270_080)));
 /// ```
@@ -61,14 +61,14 @@ where
 /// $$\frac{0!2!4!6!8!10!}{1!3!5!7!9!}=3840$$
 /// ```
 /// use rug::Rational;
-/// use cyinvariants::factorials;
+/// use cyinvariants::factorial;
 ///
 /// let mut res = Rational::new();
 ///
 /// let num = vec![0,2,4,6,8,10];
 /// let den = vec![1,3,5,7,9];
 ///
-/// factorials::factorial_prod(&num, &den, &mut res);
+/// factorial::factorial_prod(&num, &den, &mut res);
 ///
 /// assert_eq!(res, Rational::from((3_840, 1)));
 /// ```
