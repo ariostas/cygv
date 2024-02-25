@@ -32,7 +32,7 @@ impl RecipMut for Float {
 /// We compute $H_{10,2}=\frac{1968329}{1270080}$.
 /// ```
 /// use rug::Rational;
-/// use cyinvariants::factorial;
+/// use cygv::factorial;
 ///
 /// let mut h_10_2 = Rational::new();
 /// let mut tmp_var = Rational::new();
@@ -61,7 +61,7 @@ where
 /// $$\frac{0!2!4!6!8!10!}{1!3!5!7!9!}=3840$$
 /// ```
 /// use rug::Rational;
-/// use cyinvariants::factorial;
+/// use cygv::factorial;
 ///
 /// let mut res = Rational::new();
 ///
