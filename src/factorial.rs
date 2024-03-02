@@ -2,6 +2,7 @@
 //!
 //! This module contains functions to compute factorials and associated numbers.
 
+use core::cmp::Ordering;
 use core::ops::{AddAssign, DivAssign, MulAssign};
 use rug::{Assign, Float, Rational};
 use std::collections::HashMap;
@@ -102,10 +103,14 @@ where
     };
 
     for i in 1..=*max_power {
-        if power > 0 {
-            *res *= (i as u64).pow(power as u32);
-        } else if power < 0 {
-            *res /= (i as u64).pow(-power as u32);
+        match power.cmp(&0) {
+            Ordering::Greater => {
+                *res *= (i as u64).pow(power as u32);
+            }
+            Ordering::Less => {
+                *res /= (i as u64).pow(-power as u32);
+            }
+            _ => {}
         }
         if let Some(c) = power_diffs.get(&i) {
             power += *c;

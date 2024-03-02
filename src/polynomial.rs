@@ -26,6 +26,26 @@ pub struct Polynomial<T> {
     pub nonzero: Vec<u32>,
 }
 
+impl<T> Default for Polynomial<T>
+where
+    for<'a> T: Clone
+        + AddAssign<&'a T>
+        + Assign<i32>
+        + Assign<&'a T>
+        + DivAssign<&'a T>
+        + DivAssign<u32>
+        + MulAssign<&'a T>
+        + MulAssign<i32>
+        + MulAssign<u32>
+        + PartialEq<i32>
+        + PartialOrd<T>
+        + SubAssign<&'a T>,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Polynomial<T>
 where
     for<'a> T: Clone
@@ -100,10 +120,11 @@ where
 
     /// Find the minimum degree of the polynomial.
     pub fn min_degree(&self, poly_props: &PolynomialProperties<T>) -> u32 {
-        for &i in self.nonzero.iter() {
-            return poly_props.semigroup.degrees[i as usize];
-        }
-        poly_props.semigroup.max_degree + 1
+        self.nonzero
+            .iter()
+            .cloned()
+            .next()
+            .unwrap_or(poly_props.semigroup.max_degree + 1)
     }
 
     /// Clone the polynomial, but truncated to a given degree.
@@ -195,7 +216,7 @@ where
         let mut deg1;
         let mut deg2;
         let max_deg = poly_props.semigroup.max_degree;
-        let mut tmp_vec = DVector::zeros(poly_props.semigroup.elements.nrows() as usize);
+        let mut tmp_vec = DVector::zeros(poly_props.semigroup.elements.nrows());
         let (pshort, plong) = if self.nonzero.len() < rhs.nonzero.len() {
             (self, rhs)
         } else {
@@ -366,11 +387,11 @@ where
         let max_deg = poly_props.semigroup.max_degree;
         let min_deg = self.min_degree(poly_props);
         let invert = n < 0;
-        let mut n = n.abs() as u32;
+        let mut n = n.unsigned_abs();
         let mut tmp_poly = if invert {
             self.truncated(max_deg - (n - 1) * min_deg, poly_props, coeff_cache)
         } else {
-            let tmp_poly2 = self.recipr(&poly_props, coeff_cache)?;
+            let tmp_poly2 = self.recipr(poly_props, coeff_cache)?;
             let tmp_poly3 =
                 tmp_poly2.truncated(max_deg - (n - 1) * min_deg, poly_props, coeff_cache);
             tmp_poly2.drop(coeff_cache);
