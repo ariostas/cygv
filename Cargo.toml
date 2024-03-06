@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+itertools = "0.12.1"
 nalgebra = "0.32.3"
 rug = "1.24.0"
 
