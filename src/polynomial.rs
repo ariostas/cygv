@@ -21,7 +21,7 @@ use std::collections::HashMap;
 /// the coefficient. It also contains a vector listing the sorted indices of
 /// its nonzero coefficients. Even though this is redundant information, it is
 /// useful to have this list to make some operations more efficient.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Polynomial<T> {
     pub coeffs: HashMap<u32, T>,
     pub nonzero: Vec<u32>,
@@ -319,11 +319,11 @@ where
     pub fn clone(&self, coeff_cache: &mut NumCache<T>) -> Self {
         let mut res = Self::new();
         for (i, c) in self.coeffs.iter() {
-            res.nonzero.push(*i);
             let mut coeff = coeff_cache.pop();
             coeff.assign(c);
             res.coeffs.insert(*i, coeff);
         }
+        res.nonzero = self.nonzero.clone();
         res
     }
 
@@ -359,7 +359,7 @@ where
         let mut tmp_poly = Self::one(coeff_cache);
         let min_deg = p0.min_degree(poly_props);
         for i in 1..=max_deg / min_deg {
-            let tmp_poly2 = tmp_poly.mul(&tmp_poly, poly_props, coeff_cache);
+            let tmp_poly2 = tmp_poly.mul(&p0, poly_props, coeff_cache);
             tmp_poly2.move_into(&mut tmp_poly, coeff_cache);
             if i % 2 == 0 {
                 res.add_assign(&tmp_poly, coeff_cache)
@@ -390,13 +390,13 @@ where
         let invert = n < 0;
         let mut n = n.unsigned_abs();
         let mut tmp_poly = if invert {
-            self.truncated(max_deg - (n - 1) * min_deg, poly_props, coeff_cache)
-        } else {
             let tmp_poly2 = self.recipr(poly_props, coeff_cache)?;
             let tmp_poly3 =
                 tmp_poly2.truncated(max_deg - (n - 1) * min_deg, poly_props, coeff_cache);
             tmp_poly2.drop(coeff_cache);
             tmp_poly3
+        } else {
+            self.truncated(max_deg - (n - 1) * min_deg, poly_props, coeff_cache)
         };
         loop {
             if n % 2 != 0 {
