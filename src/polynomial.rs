@@ -4,6 +4,7 @@
 //! of monomials.
 
 pub mod error;
+pub mod prettyprint;
 pub mod properties;
 
 use crate::cache::NumCache;
