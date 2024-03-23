@@ -1,22 +1,22 @@
-//! A module for caching dynamically-allocated numerical variables.
+//! A module for object pools of dynamically-allocated numerical variables.
 //!
 //! This module is useful to avoid frequently allocating and deallocating
 //! arbitrary-precision rational and multi-precision floating-point numbers.
 
-/// A structure to cache numbers.
+/// A structure to pool numerical variables.
 ///
 /// The structure stores a clonable template number so that we can easily
-/// implement creating new numbers when the cache is empty without having to
+/// implement creating new numbers when the pool is empty without having to
 /// worry about the specifics of how they should be initialized.
 #[derive(Clone, Debug)]
-pub struct NumCache<T> {
+pub struct NumberPool<T> {
     template_num: T,
     nums: Vec<T>,
     max_nums: usize,
 }
 
-impl<T: Clone> NumCache<T> {
-    /// Create a new number cache with a given maximum size.
+impl<T: Clone> NumberPool<T> {
+    /// Create a new number pool with a given maximum size.
     pub fn new(template_num: T, max_nums: usize) -> Self {
         let nums = Vec::with_capacity(max_nums);
         Self {
@@ -26,7 +26,7 @@ impl<T: Clone> NumCache<T> {
         }
     }
 
-    /// Pop a number from the cache. If the cache is empty the template number
+    /// Pop a number from the pool. If the pool is empty the template number
     /// is cloned.
     pub fn pop(&mut self) -> T {
         if let Some(c) = self.nums.pop() {
@@ -36,7 +36,7 @@ impl<T: Clone> NumCache<T> {
         }
     }
 
-    /// Push a number to the cache. If the cache is full the number is dropped.
+    /// Push a number to the pool. If the pool is full the number is dropped.
     pub fn push(&mut self, c: T) {
         if self.nums.len() < self.max_nums {
             self.nums.push(c);
@@ -55,13 +55,13 @@ mod tests {
         let one = Rational::from(1);
         let two = Rational::from(2);
 
-        let mut cache = NumCache::new(zero.clone(), 2);
+        let mut pool = NumberPool::new(zero.clone(), 2);
 
-        cache.push(one.clone());
-        cache.push(two.clone());
-        cache.push(two.clone());
-        assert_eq!(cache.pop(), two);
-        assert_eq!(cache.pop(), one);
-        assert_eq!(cache.pop(), zero);
+        pool.push(one.clone());
+        pool.push(two.clone());
+        pool.push(two.clone());
+        assert_eq!(pool.pop(), two);
+        assert_eq!(pool.pop(), one);
+        assert_eq!(pool.pop(), zero);
     }
 }
