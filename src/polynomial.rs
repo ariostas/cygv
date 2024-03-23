@@ -104,7 +104,8 @@ where
         pos_cutoff.assign(&poly_props.zero_cutoff);
         neg_cutoff.assign(&poly_props.zero_cutoff);
         neg_cutoff *= -1;
-        for (i, c) in self.coeffs.iter() {
+        for i in self.nonzero.iter() {
+            let c = self.coeffs.get(i).unwrap();
             if *c <= pos_cutoff && *c >= neg_cutoff {
                 to_delete.push(*i);
             } else {
@@ -121,11 +122,10 @@ where
 
     /// Find the minimum degree of the polynomial.
     pub fn min_degree(&self, poly_props: &PolynomialProperties<T>) -> u32 {
-        self.nonzero
-            .iter()
-            .cloned()
-            .next()
-            .unwrap_or(poly_props.semigroup.max_degree + 1)
+        if let Some(idx) = self.nonzero.iter().next() {
+            return poly_props.semigroup.degrees[*idx as usize];
+        }
+        poly_props.semigroup.max_degree + 1
     }
 
     /// Clone the polynomial, but truncated to a given degree.
@@ -488,52 +488,258 @@ macro_rules! polynomial {
 
 #[cfg(test)]
 mod tests {
-    use crate::semigroup;
-
     use super::*;
+    use crate::semigroup;
     use nalgebra::{DMatrix, RowDVector};
     use rug::Rational;
     use semigroup::Semigroup;
 
-    // Create a simple semigroup for testing.
+    // Construct simple data for testing
     fn example_semigroup() -> Semigroup {
-        #[rustfmt::skip]
-        let exponents = DMatrix::from_column_slice(2, 6,
+        let elements = DMatrix::from_column_slice(
+            2,
+            6,
             &[
                 0, 0, // 1
                 1, 0, // x
                 0, 1, // y
                 2, 0, // x^2
                 1, 1, // x*y
-                0, 2  // y^2
-            ]
+                0, 2, // y^2
+            ],
         );
         let grading_vector = RowDVector::from_row_slice(&[1, 1]);
-        Semigroup::from_data(exponents, grading_vector).unwrap()
+        Semigroup::from_data(elements, grading_vector).unwrap()
     }
 
     #[test]
-    fn test_polynomial() {
+    fn test_identity() {
+        let tmp_rational = Rational::new();
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let p = Polynomial::one(&mut coeff_cache);
+        let p_res = polynomial!(
+            tmp_rational,
+            (0, 1) // 1
+        );
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_cleanup() {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
         let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
-
         let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
 
-        #[rustfmt::skip]
+        let mut p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 0), // 0*x
+            (2, 1), // 1*y
+            (3, 0), // 0*x^2
+            (4, 1), // 1*x*y
+            (5, 0)  // 0*y^2
+        );
+        let p_res = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (2, 1), // 1*y
+            (4, 1)  // 1*x*y
+        );
+        p.clean_up(&poly_props, &mut coeff_cache);
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_min_degree() {
+        let tmp_rational = Rational::new();
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let p0 = Polynomial::one(&mut coeff_cache);
         let p1 = polynomial!(
             tmp_rational,
-            (0, 1),    // 1
-            (1, 2),    // 2*x
-            (2, 3),    // 3*y
-            (3, 4),    // 4*x^2
-            (4, 5),    // 5*x*y
-            (5, 6)     // 6*y^2
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
         );
+        let p2 = polynomial!(
+            tmp_rational,
+            (5, 6) // 6*y^2
+        );
+        let p3: Polynomial<Rational> = Polynomial::new();
 
-        // Test multiplication
-        let p2 = p1.mul(&p1, &poly_props, &mut coeff_cache);
-        let p2_res = polynomial!(
+        println!("{:?}", poly_props);
+
+        assert_eq!(p0.min_degree(&poly_props), 0);
+        assert_eq!(p1.min_degree(&poly_props), 1);
+        assert_eq!(p2.min_degree(&poly_props), 2);
+        assert_eq!(p3.min_degree(&poly_props), 3);
+    }
+
+    #[test]
+    fn test_truncated() {
+        let tmp_rational = Rational::new();
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 0), // 0*x
+            (2, 1), // 1*y
+            (3, 0), // 0*x^2
+            (4, 1), // 1*x*y
+            (5, 0)  // 0*y^2
+        );
+        let p_res = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 0), // 0*x
+            (2, 1)  // 1*y
+        );
+        let p = p.truncated(1, &poly_props, &mut coeff_cache);
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_add_assign() {
+        let tmp_rational = Rational::new();
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let mut p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+        let p1 = p.clone(&mut coeff_cache);
+        p.add_assign(&p1, &mut coeff_cache);
+        let p_res = polynomial!(
+            tmp_rational,
+            (0, 2),  // 2
+            (1, 4),  // 4*x
+            (2, 6),  // 6*y
+            (3, 8),  // 8*x^2
+            (4, 10), // 10*x*y
+            (5, 12)  // 12*y^2
+        );
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_sub_assign() {
+        let tmp_rational = Rational::new();
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let mut p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+        let p1 = polynomial!(
+            tmp_rational,
+            (0, 2),  // 2
+            (1, 4),  // 4*x
+            (2, 6),  // 6*y
+            (3, 8),  // 8*x^2
+            (4, 10), // 10*x*y
+            (5, 12)  // 12*y^2
+        );
+        p.sub_assign(&p1, &mut coeff_cache);
+        let p_res = polynomial!(
+            tmp_rational,
+            (0, -1), // -1
+            (1, -2), // -2*x
+            (2, -3), // -3*y
+            (3, -4), // -4*x^2
+            (4, -5), // -5*x*y
+            (5, -6)  // -6*y^2
+        );
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_mul_scalar_assign() {
+        let tmp_rational = Rational::from((2, 1));
+
+        let mut p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+        p.mul_scalar_assign(&tmp_rational);
+        let p_res = polynomial!(
+            tmp_rational,
+            (0, 2),  // 2
+            (1, 4),  // 4*x
+            (2, 6),  // 6*y
+            (3, 8),  // 8*x^2
+            (4, 10), // 10*x*y
+            (5, 12)  // 12*y^2
+        );
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_div_scalar_assign() {
+        let tmp_rational = Rational::from((1, 2));
+
+        let mut p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+        p.div_scalar_assign(&tmp_rational);
+        let p_res = polynomial!(
+            tmp_rational,
+            (0, 2),  // 2
+            (1, 4),  // 4*x
+            (2, 6),  // 6*y
+            (3, 8),  // 8*x^2
+            (4, 10), // 10*x*y
+            (5, 12)  // 12*y^2
+        );
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_mul() {
+        let tmp_rational = Rational::new();
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let p1 = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+        let p = p1.mul(&p1, &poly_props, &mut coeff_cache);
+        let p_res = polynomial!(
             tmp_rational,
             (0, 1),  // 1
             (1, 4),  // 4*x
@@ -542,8 +748,235 @@ mod tests {
             (4, 22), // 22*x*y
             (5, 21)  // 21*y^2
         );
-        assert_eq!(p2, p2_res);
+        assert_eq!(p, p_res);
+    }
 
-        // TODO: add more tests
+    #[test]
+    fn test_mul_scalar_add_assign() {
+        let mut tmp_rational = Rational::new();
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+        tmp_rational.assign(2);
+
+        let mut p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+        let p1 = p.clone(&mut coeff_cache);
+        p.mul_scalar_add_assign(&tmp_rational, &p1, &mut coeff_cache);
+        let p_res = polynomial!(
+            tmp_rational,
+            (0, 3),  // 3
+            (1, 6),  // 6*x
+            (2, 9),  // 9*y
+            (3, 12), // 12*x^2
+            (4, 15), // 15*x*y
+            (5, 18)  // 18*y^2
+        );
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_div_scalar_add_assign() {
+        let mut tmp_rational = Rational::new();
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+        tmp_rational.assign((1, 2));
+
+        let mut p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+        let p1 = p.clone(&mut coeff_cache);
+        p.div_scalar_add_assign(&tmp_rational, &p1, &mut coeff_cache);
+        let p_res = polynomial!(
+            tmp_rational,
+            (0, 3),  // 3
+            (1, 6),  // 6*x
+            (2, 9),  // 9*y
+            (3, 12), // 12*x^2
+            (4, 15), // 15*x*y
+            (5, 18)  // 18*y^2
+        );
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_clone() {
+        let tmp_rational = Rational::new();
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+        let p_clone = p.clone(&mut coeff_cache);
+        assert_eq!(p, p_clone);
+    }
+
+    #[test]
+    fn test_move_into() {
+        let tmp_rational = Rational::new();
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+        let p_clone = p.clone(&mut coeff_cache);
+        let mut p_res = Polynomial::new();
+        p_clone.move_into(&mut p_res, &mut coeff_cache);
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_recipr() {
+        let tmp_rational = Rational::new();
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let p1 = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+        let mut p = p1.recipr(&poly_props, &mut coeff_cache).unwrap();
+        p.clean_up(&poly_props, &mut coeff_cache);
+        let p_res = polynomial!(
+            tmp_rational,
+            (0, 1),  // 1
+            (1, -2), // -2*x
+            (2, -3), // -3*y
+            (4, 7),  // 7*x*y
+            (5, 3)   // 3*y^2
+        );
+        assert_eq!(p, p_res);
+    }
+
+    #[test]
+    fn test_pow() {
+        let tmp_rational = Rational::new();
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let p = polynomial!(
+            tmp_rational,
+            (0, 1), // 1
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+
+        let p_0 = p.pow(0, &poly_props, &mut coeff_cache).unwrap();
+        let p_0_res = Polynomial::one(&mut coeff_cache);
+        assert_eq!(p_0, p_0_res);
+
+        let p_m1 = p.pow(-1, &poly_props, &mut coeff_cache).unwrap();
+        let p_m1_res = p.recipr(&poly_props, &mut coeff_cache).unwrap();
+        assert_eq!(p_m1, p_m1_res);
+
+        let p_1 = p.pow(1, &poly_props, &mut coeff_cache).unwrap();
+        assert_eq!(p, p_1);
+
+        let p_2 = p.pow(2, &poly_props, &mut coeff_cache).unwrap();
+        let p_2_res = p.mul(&p, &poly_props, &mut coeff_cache);
+        assert_eq!(p_2, p_2_res);
+
+        let p_3 = p.pow(3, &poly_props, &mut coeff_cache).unwrap();
+        let p_3_res = p.mul(&p_2, &poly_props, &mut coeff_cache);
+        assert_eq!(p_3, p_3_res);
+    }
+
+    #[test]
+    fn test_exp_pos_neg() {
+        let tmp_rational = Rational::new();
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let p = polynomial!(
+            tmp_rational,
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+
+        let (p_exp_pos, p_exp_neg) = p.exp_pos_neg(&poly_props, &mut coeff_cache).unwrap();
+        let p_exp_pos_res = polynomial!(
+            tmp_rational,
+            (0, 1),       // 1
+            (1, 2),       // 2*x
+            (2, 3),       // 3*y
+            (3, 6),       // 6*x^2
+            (4, 11),      // 11*x*y
+            (5, (21, 2))  // (21/2)*y^2
+        );
+        let p_exp_neg_res = polynomial!(
+            tmp_rational,
+            (0, 1),       // 1
+            (1, -2),      // -2*x
+            (2, -3),      // -3*y
+            (3, -2),      // -2*x^2
+            (4, 1),       // 1*x*y
+            (5, (-3, 2))  // (-3/2)*y^2
+        );
+        assert_eq!(p_exp_pos, p_exp_pos_res);
+        assert_eq!(p_exp_neg, p_exp_neg_res);
+    }
+
+    #[test]
+    fn test_li_2() {
+        let tmp_rational = Rational::new();
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let mut coeff_cache = NumCache::new(tmp_rational.clone(), 100);
+
+        let p = polynomial!(
+            tmp_rational,
+            (1, 2), // 2*x
+            (2, 3), // 3*y
+            (3, 4), // 4*x^2
+            (4, 5), // 5*x*y
+            (5, 6)  // 6*y^2
+        );
+
+        let p_li_2 = p.li_2(&poly_props, &mut coeff_cache).unwrap();
+        let p_li_2_res = polynomial!(
+            tmp_rational,
+            (1, 2),       // 2*x
+            (2, 3),       // 3*y
+            (3, 5),       // 5*x^2
+            (4, 8),       // 8*x*y
+            (5, (33, 4))  // (33/4)*y^2
+        );
+        assert_eq!(p_li_2, p_li_2_res);
     }
 }
