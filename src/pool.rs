@@ -50,7 +50,7 @@ mod tests {
     use rug::Rational;
 
     #[test]
-    fn test_cache() {
+    fn test_pool() {
         let zero = Rational::new();
         let one = Rational::from(1);
         let two = Rational::from(2);
