@@ -1,4 +1,5 @@
 pub mod factorial;
+pub mod fundamental_period;
 pub mod polynomial;
 pub mod pool;
 pub mod semigroup;
