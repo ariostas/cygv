@@ -73,7 +73,7 @@ where
 ///
 /// assert_eq!(res, Rational::from((3_840, 1)));
 /// ```
-pub fn factorial_prod<T>(n: &[i32], d: &[i32], res: &mut T)
+pub fn factorial_prod<T>(n: &[u32], d: &[u32], res: &mut T)
 where
     T: Assign<u64> + MulAssign<u64> + DivAssign<u64>,
 {
@@ -85,14 +85,14 @@ where
             continue;
         }
         power += 1;
-        *power_diffs.entry(*c as u32).or_insert(0) -= 1;
+        *power_diffs.entry(*c).or_insert(0) -= 1;
     }
     for c in d.iter() {
         if *c == 0 {
             continue;
         }
         power -= 1;
-        *power_diffs.entry(*c as u32).or_insert(0) += 1;
+        *power_diffs.entry(*c).or_insert(0) += 1;
     }
 
     res.assign(1);
