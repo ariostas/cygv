@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-/// An error structure for non-positive degrees of non-identity elements.
+/// An error structure for semigroup errors.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SemigroupError {
     NonPositiveDegreeError,

@@ -122,7 +122,7 @@ where
 
     /// Find the minimum degree of the polynomial.
     pub fn min_degree(&self, poly_props: &PolynomialProperties<T>) -> u32 {
-        if let Some(idx) = self.nonzero.iter().next() {
+        if let Some(idx) = self.nonzero.first() {
             return poly_props.semigroup.degrees[*idx as usize];
         }
         poly_props.semigroup.max_degree + 1
