@@ -1,4 +1,5 @@
 pub mod factorial;
+pub mod misc;
 pub mod polynomial;
 pub mod pool;
 pub mod semigroup;
