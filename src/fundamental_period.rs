@@ -384,13 +384,7 @@ where
     } else if nefpart
         .iter()
         .map(|v| v.iter().max().unwrap_or(&0))
-        .any(|c| *c >= (h11pd as i32))
-    {
-        return Err(FundamentalPeriodError::InconsistentNefPartition);
-    } else if nefpart
-        .iter()
-        .map(|v| v.iter().min().unwrap_or(&0))
-        .any(|c| *c < 0)
+        .any(|c| *c >= (h11pd as i32) || *c < 0)
     {
         return Err(FundamentalPeriodError::InconsistentNefPartition);
     }
@@ -469,7 +463,7 @@ where
         c0.nonzero.sort_unstable();
     });
 
-    c0.clean_up(&poly_props, &mut coeff_pool);
+    c0.clean_up(poly_props, &mut coeff_pool);
 
     // Now compute the inverse and derivatives in parallel
     let tasks_c1 = Arc::new(Mutex::new(neg1.iter()));
@@ -544,12 +538,12 @@ where
         p.nonzero.sort_unstable();
     }
 
-    c0_inv.clean_up(&poly_props, &mut coeff_pool);
+    c0_inv.clean_up(poly_props, &mut coeff_pool);
     for p in c1.iter_mut() {
-        p.clean_up(&poly_props, &mut coeff_pool);
+        p.clean_up(poly_props, &mut coeff_pool);
     }
     for p in c2.values_mut() {
-        p.clean_up(&poly_props, &mut coeff_pool);
+        p.clean_up(poly_props, &mut coeff_pool);
     }
 
     Ok(FundamentalPeriod { c0, c1, c2, c0_inv })
