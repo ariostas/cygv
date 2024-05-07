@@ -333,10 +333,10 @@ fn compute_c_2neg<T>(
 /// c0 is the fundamental period, while c1 and c2 are the first and second derivatives of the coefficients.
 /// c0_inv is the inverse of the fundamental period.
 pub struct FundamentalPeriod<T> {
-    c0: Polynomial<T>,
-    c1: Vec<Polynomial<T>>,
-    c2: HashMap<(u32, u32), Polynomial<T>>,
-    c0_inv: Polynomial<T>,
+    pub c0: Polynomial<T>,
+    pub c1: Vec<Polynomial<T>>,
+    pub c2: HashMap<(u32, u32), Polynomial<T>>,
+    pub c0_inv: Polynomial<T>,
 }
 
 // -> Result<(Polynomial<T>,Vec<Polynomial<T>>,HashMap<(u32,u32),Polynomial<T>>),FundamentalPeriodError>
