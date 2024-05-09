@@ -1,5 +1,6 @@
 pub mod factorial;
 pub mod fundamental_period;
+pub mod instanton;
 pub mod misc;
 pub mod polynomial;
 pub mod pool;
