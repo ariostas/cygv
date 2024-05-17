@@ -90,6 +90,15 @@ where
         }
     }
 
+    /// Clear the polynomial, while moving the allocated coefficients to the
+    /// pool.
+    pub fn clear(&mut self, coeff_pool: &mut NumberPool<T>) {
+        for (_, c) in self.coeffs.drain() {
+            coeff_pool.push(c);
+        }
+        self.nonzero.clear();
+    }
+
     /// Clean up the polynomial, removing monomials whose coefficient are
     /// below a given cutoff.
     pub fn clean_up(
