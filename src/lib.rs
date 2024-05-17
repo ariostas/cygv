@@ -5,6 +5,7 @@ pub mod misc;
 pub mod polynomial;
 pub mod pool;
 pub mod semigroup;
+pub mod series_inversion;
 
 // Re-export the main structs
 pub use polynomial::{
