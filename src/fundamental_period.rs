@@ -61,8 +61,7 @@ fn compute_c_0neg<T>(
         + Assign<&'a T>
         + AddAssign<&'a T>
         + SubAssign<&'a T>
-        + MulAssign<&'a T>
-        + std::fmt::Display,
+        + MulAssign<&'a T>,
 {
     let mut a: Vec<_> = (0..q.ncols()).map(|_| template_var.clone()).collect();
     let mut tmp_num0 = template_var.clone();
@@ -367,8 +366,7 @@ where
         + SubAssign<&'a T>
         + Send
         + Sync
-        + RecipMut
-        + std::fmt::Display,
+        + RecipMut,
 {
     let curves = &sg.elements;
     let h11 = q.ncols();

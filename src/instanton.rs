@@ -137,7 +137,7 @@ fn compute_inst_thread<T>(
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
-    cy_dim: u32,
+    is_threefold: bool,
 ) where
     for<'a> T: Clone
         + AddAssign<&'a T>
@@ -171,7 +171,7 @@ fn compute_inst_thread<T>(
                 intnum_ind[0] = t;
                 intnum_ind[1] = a;
                 intnum_ind[2] = b;
-                if cy_dim == 3 {
+                if is_threefold {
                     intnum_ind.sort_unstable();
                 }
                 let Some(x) = intnum_dict.get(&(intnum_ind[0], intnum_ind[1], intnum_ind[2]))
@@ -250,7 +250,7 @@ pub fn compute_instanton_data<T>(
     intnum_idxpairs: &HashSet<(usize, usize)>,
     n_indices: usize,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
-    cy_dim: u32,
+    is_threefold: bool,
 ) -> Result<InstantonData<T>, PolynomialError>
 where
     for<'a> T: Clone
@@ -342,7 +342,15 @@ where
             let tx = tx.clone();
             let tasks = Arc::clone(&tasks_inst_iter);
             s.spawn(|| {
-                compute_inst_thread(tasks, tx, &f_poly, poly_props, np, intnum_dict, cy_dim);
+                compute_inst_thread(
+                    tasks,
+                    tx,
+                    &f_poly,
+                    poly_props,
+                    np,
+                    intnum_dict,
+                    is_threefold,
+                );
             });
         }
         drop(tx);
@@ -418,7 +426,7 @@ mod tests {
         let (intnum_dict, intnum_idxpairs) = result.unwrap();
 
         let inst_data =
-            compute_instanton_data(fp, &poly_props, &intnum_idxpairs, 2, &intnum_dict, 3);
+            compute_instanton_data(fp, &poly_props, &intnum_idxpairs, 2, &intnum_dict, true);
         assert!(inst_data.is_ok());
         let inst_data = inst_data.unwrap();
 

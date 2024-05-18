@@ -81,7 +81,7 @@ where
     for (i, diff) in closest_curve_diff.iter().enumerate() {
         let tmp_poly = match diff.cmp(&0) {
             Ordering::Greater => expalpha[i].0.pow(*diff, poly_props, np).unwrap(),
-            Ordering::Less => expalpha[i].0.pow(-*diff, poly_props, np).unwrap(),
+            Ordering::Less => expalpha[i].1.pow(-*diff, poly_props, np).unwrap(),
             _ => {
                 continue;
             }
@@ -215,6 +215,7 @@ where
         + MulAssign<u32>
         + PartialEq<i32>
         + PartialOrd<T>
+        + PartialOrd<f32>
         + SubAssign<&'a T>
         + Send
         + Sync
@@ -246,18 +247,24 @@ where
 
     let InstantonData { mut inst, expalpha } = inst_data;
 
-    let all_degs: HashSet<_> = poly_props.semigroup.degrees.iter().cloned().collect();
+    let all_degs: HashSet<_> = poly_props
+        .semigroup
+        .degrees
+        .iter()
+        .cloned()
+        .filter(|c| *c != 0)
+        .collect();
     let mut distinct_degs: Vec<_> = all_degs.into_iter().collect();
     distinct_degs.sort_unstable();
 
     for d in distinct_degs.iter() {
         let mut vec_deg = Vec::new();
         let mut qn_to_compute = Vec::new();
-        let mut gv_qn_to_compute = Vec::new();
+        let mut gv_qn_to_compute = HashMap::new();
         let mut h22gv_qn_to_compute = HashMap::new();
         // First find the points of interest
         for (i, dd) in poly_props.semigroup.degrees.iter().enumerate() {
-            match d.cmp(dd) {
+            match dd.cmp(d) {
                 Ordering::Equal => {
                     vec_deg.push(i);
                 }
@@ -288,17 +295,17 @@ where
                     tmp_gv_rounded.round_mut();
                     tmp_gv -= &tmp_gv_rounded;
                     tmp_gv.abs_mut();
-                    if tmp_gv > poly_props.zero_cutoff {
+                    if tmp_gv > 1e-3 {
                         return Err(SeriesInversionError::NonIntegerGVError);
                     }
                     tmp_gv.assign(&tmp_gv_rounded);
                     tmp_gv.abs_mut();
-                    if tmp_gv <= poly_props.zero_cutoff {
+                    if tmp_gv < 0.5 {
                         continue;
                     }
                     final_gv.insert((j as u32, 0), tmp_gv_rounded.clone());
                     qn_to_compute.push(j);
-                    gv_qn_to_compute.push(tmp_gv_rounded.clone());
+                    gv_qn_to_compute.insert(j, tmp_gv_rounded.clone());
                 } else {
                     tmp_gv_rounded.assign(&tmp_gv);
                     tmp_gv_rounded.abs_mut();
@@ -307,7 +314,7 @@ where
                     }
                     final_gv.insert((j as u32, 0), tmp_gv.clone());
                     qn_to_compute.push(j);
-                    gv_qn_to_compute.push(tmp_gv.clone());
+                    gv_qn_to_compute.insert(j, tmp_gv.clone());
                 }
             }
         } else {
@@ -321,12 +328,12 @@ where
                         tmp_gv_rounded.round_mut();
                         tmp_gv -= &tmp_gv_rounded;
                         tmp_gv.abs_mut();
-                        if tmp_gv > poly_props.zero_cutoff {
+                        if tmp_gv > 1e-3 {
                             return Err(SeriesInversionError::NonIntegerGVError);
                         }
                         tmp_gv.assign(&tmp_gv_rounded);
                         tmp_gv.abs_mut();
-                        if tmp_gv <= poly_props.zero_cutoff {
+                        if tmp_gv < 0.5 {
                             continue;
                         }
                         final_gv.insert((j as u32, k as u32), tmp_gv_rounded.clone());
@@ -385,7 +392,7 @@ where
                             continue;
                         }
                         let mut tmp_poly = li2qn.clone(&mut main_pool);
-                        tmp_gv.assign(&gv_qn_to_compute[j as usize]);
+                        tmp_gv.assign(&gv_qn_to_compute[&(j as usize)]);
                         tmp_gv *= poly_props.semigroup.elements[(k, j as usize)];
                         tmp_poly.mul_scalar_assign(&tmp_gv);
                         inst_k.sub_assign(&tmp_poly, &mut main_pool);
