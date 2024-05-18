@@ -334,7 +334,7 @@ where
 
     // Compute instanton corrections
     let mut inst: Vec<_> = (0..n_indices).map(|_| Polynomial::<T>::new()).collect();
-    let tasks_inst: Vec<_> = (0..h11).collect();
+    let tasks_inst: Vec<_> = (0..n_indices).collect();
     let tasks_inst_iter = Arc::new(Mutex::new(tasks_inst.iter()));
     thread::scope(|s| {
         let (tx, rx) = channel();
@@ -423,10 +423,16 @@ mod tests {
                                 2, 1, -1, -5;];
         let result = process_int_nums(intnums.clone(), true);
         assert!(result.is_ok());
-        let (intnum_dict, intnum_idxpairs) = result.unwrap();
+        let (intnum_dict, intnum_idxpairs, n_indices) = result.unwrap();
 
-        let inst_data =
-            compute_instanton_data(fp, &poly_props, &intnum_idxpairs, 2, &intnum_dict, true);
+        let inst_data = compute_instanton_data(
+            fp,
+            &poly_props,
+            &intnum_idxpairs,
+            n_indices,
+            &intnum_dict,
+            true,
+        );
         assert!(inst_data.is_ok());
         let inst_data = inst_data.unwrap();
 

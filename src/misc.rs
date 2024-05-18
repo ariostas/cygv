@@ -16,7 +16,14 @@ use std::collections::{HashMap, HashSet};
 pub fn process_int_nums(
     intnums: DMatrix<i32>,
     is_threefold: bool,
-) -> Result<(HashMap<(usize, usize, usize), i32>, HashSet<(usize, usize)>), MiscError> {
+) -> Result<
+    (
+        HashMap<(usize, usize, usize), i32>,
+        HashSet<(usize, usize)>,
+        usize,
+    ),
+    MiscError,
+> {
     if intnums.ncols() == 0 {
         return Err(MiscError::EmptyIntNums);
     } else if intnums.nrows() != 4 {
@@ -51,8 +58,13 @@ pub fn process_int_nums(
             return Err(MiscError::RepeatedIdxIntNums);
         }
     }
+    let n_indices = if is_threefold {
+        intnum_idxpairs.iter().map(|p| p.1).max().unwrap()
+    } else {
+        intnum_dict.keys().map(|p| p.0).max().unwrap()
+    } + 1;
 
-    Ok((intnum_dict, intnum_idxpairs))
+    Ok((intnum_dict, intnum_idxpairs, n_indices))
 }
 
 #[cfg(test)]
@@ -68,14 +80,16 @@ mod tests {
                                -1, 3, 2;];
         let result = process_int_nums(intnums.clone(), true);
         assert!(result.is_ok());
-        let (intnum_dict, intnum_idxpairs) = result.unwrap();
+        let (intnum_dict, intnum_idxpairs, n_indices) = result.unwrap();
         assert_eq!(intnum_dict.len(), 3);
         assert_eq!(intnum_idxpairs.len(), 6);
+        assert_eq!(n_indices, 4);
 
         let result = process_int_nums(intnums.clone(), false);
         assert!(result.is_ok());
-        let (intnum_dict, intnum_idxpairs) = result.unwrap();
+        let (intnum_dict, intnum_idxpairs, n_indices) = result.unwrap();
         assert_eq!(intnum_dict.len(), 3);
         assert_eq!(intnum_idxpairs.len(), 3);
+        assert_eq!(n_indices, 1);
     }
 }
