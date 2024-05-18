@@ -1,4 +1,4 @@
-//! Affine semigroups that generate SCRP cones
+//! Affine semigroups that generate SCRP cones.
 //!
 //! This module contains functions to construct (truncated) affine semigroups
 //! that generate scrongly-convex rational polyhedral cones. In other words, the
@@ -14,7 +14,7 @@ use itertools::Itertools;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use std::collections::HashSet;
 
-/// A structure for an affine truncated semigroup
+/// A structure for an affine truncated semigroup.
 ///
 /// The affine semigroup needs a grading vector that results in a
 /// positive-definite grading, which equivalently means that the semigroup

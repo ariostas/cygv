@@ -1,7 +1,4 @@
-//! A module for object pools of dynamically-allocated numerical variables.
-//!
-//! This module is useful to avoid frequently allocating and deallocating
-//! arbitrary-precision rational and multi-precision floating-point numbers.
+//! Object pools of dynamically-allocated numerical variables.
 
 /// A structure to pool numerical variables.
 ///

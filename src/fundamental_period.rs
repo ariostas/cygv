@@ -1,4 +1,4 @@
-//! Compute the fundamental period and its derivatives.
+//! Fundamental period and its derivatives.
 
 pub mod error;
 

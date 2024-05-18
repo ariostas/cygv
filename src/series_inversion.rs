@@ -1,6 +1,4 @@
-//! Series inversion
-//!
-//! This module contains code to perform the esties inversion
+//! Series inversion algorithm.
 
 pub mod error;
 

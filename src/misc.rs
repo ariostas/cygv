@@ -1,6 +1,4 @@
-//! Miscellaneous
-//!
-//! This module contains miscellaneous functions needed for some computations.
+//! Miscellaneous functions
 
 pub mod error;
 

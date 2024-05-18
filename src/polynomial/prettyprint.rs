@@ -1,10 +1,10 @@
-//! Pretty print polynomials.
+//! Pretty-print polynomials.
 
 use super::Polynomial;
 use super::PolynomialProperties;
 use core::fmt;
 
-/// A pretty print struct for polynomials.
+/// A pretty-print struct for polynomials.
 #[derive(Debug, Clone)]
 pub struct PrettyPrintPolynomial<'a, T> {
     pub polynomial: &'a Polynomial<T>,

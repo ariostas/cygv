@@ -1,7 +1,4 @@
-//! Polynomial
-//!
-//! This module provides tools to work with polynomials containing a fixed set
-//! of monomials.
+//! Polynomials containing a fixed set of monomials.
 
 pub mod coefficient;
 pub mod error;
@@ -467,6 +464,7 @@ where
 }
 
 #[macro_export]
+/// Construct a polynomial directly from data.
 macro_rules! polynomial {
     ( $t:expr, $( ($k:expr, $v:expr) ),* ) => {
         {
@@ -567,8 +565,6 @@ mod tests {
             (5, 6) // 6*y^2
         );
         let p3: Polynomial<Rational> = Polynomial::new();
-
-        println!("{:?}", poly_props);
 
         assert_eq!(p0.min_degree(&poly_props), 0);
         assert_eq!(p1.min_degree(&poly_props), 1);

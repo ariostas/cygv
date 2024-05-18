@@ -1,6 +1,4 @@
-//! Factorial
-//!
-//! This module contains functions to compute factorials and associated numbers.
+//! Factorials and related numbers.
 
 use core::cmp::Ordering;
 use core::ops::{AddAssign, DivAssign, MulAssign};

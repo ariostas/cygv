@@ -1,6 +1,4 @@
-//! Intanton
-//!
-//! This module contains functions to compute instanton correction.
+//! Instanton corrections.
 
 use crate::fundamental_period::FundamentalPeriod;
 use crate::polynomial::{

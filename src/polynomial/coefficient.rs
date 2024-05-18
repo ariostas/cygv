@@ -43,7 +43,7 @@ impl AbsMut for Float {
     }
 }
 
-/// A compound trait of all the traits a reasonable polynomial coefficient should reasonably have.
+/// A compound trait of all the traits a reasonable polynomial coefficient should have.
 pub trait PolynomialCoeff<T>:
     for<'a> Assign<&'a T>
     + for<'a> AddAssign<&'a T>

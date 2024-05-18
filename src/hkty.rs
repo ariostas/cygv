@@ -1,6 +1,4 @@
-//! HKTY
-//!
-//! This module implements the full HKTY procedure.
+//! HKTY procedure.
 
 use crate::polynomial::coefficient::PolynomialCoeff;
 use crate::{
