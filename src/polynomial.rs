@@ -3,16 +3,17 @@
 //! This module provides tools to work with polynomials containing a fixed set
 //! of monomials.
 
+pub mod coefficient;
 pub mod error;
 pub mod prettyprint;
 pub mod properties;
 
 use crate::pool::NumberPool;
-use core::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
+use coefficient::PolynomialCoeff;
+use core::ops::{DivAssign, MulAssign};
 use error::PolynomialError;
 use nalgebra::DVector;
 use properties::PolynomialProperties;
-use rug::Assign;
 use std::collections::HashMap;
 
 /// A polynomial structure.
@@ -29,18 +30,7 @@ pub struct Polynomial<T> {
 
 impl<T> Default for Polynomial<T>
 where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>,
+    T: PolynomialCoeff<T>,
 {
     fn default() -> Self {
         Self::new()
@@ -49,18 +39,7 @@ where
 
 impl<T> Polynomial<T>
 where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>,
+    T: PolynomialCoeff<T>,
 {
     /// Create a new polynomial.
     pub fn new() -> Self {
@@ -508,7 +487,7 @@ mod tests {
     use super::*;
     use crate::semigroup;
     use nalgebra::{DMatrix, RowDVector};
-    use rug::Rational;
+    use rug::{Assign, Rational};
     use semigroup::Semigroup;
 
     // Construct simple data for testing

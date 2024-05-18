@@ -13,3 +13,6 @@ pub use polynomial::{
 };
 pub use pool::NumberPool;
 pub use semigroup::Semigroup;
+
+// Re-export main trait
+pub use polynomial::coefficient::PolynomialCoeff;

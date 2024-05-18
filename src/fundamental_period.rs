@@ -2,17 +2,14 @@
 
 pub mod error;
 
-use crate::factorial::{factorial_prod, harmonic, RecipMut};
-use crate::polynomial::Polynomial;
+use crate::factorial::{factorial_prod, harmonic};
+use crate::polynomial::{coefficient::PolynomialCoeff, Polynomial};
 use crate::pool::NumberPool;
 use crate::semigroup::Semigroup;
 use crate::PolynomialProperties;
-use core::marker::{Send, Sync};
-use core::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
 use core::slice::Iter;
 use error::FundamentalPeriodError;
 use nalgebra::{DMatrix, DMatrixView, DVector};
-use rug::Assign;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -52,16 +49,7 @@ fn compute_c_0neg<T>(
     curves_dot_q0: DMatrixView<i32>,
     beta_pairs: &[(usize, usize)],
 ) where
-    for<'a> T: Clone
-        + RecipMut
-        + Assign<u64>
-        + MulAssign<i32>
-        + MulAssign<u64>
-        + DivAssign<u64>
-        + Assign<&'a T>
-        + AddAssign<&'a T>
-        + SubAssign<&'a T>
-        + MulAssign<&'a T>,
+    T: PolynomialCoeff<T>,
 {
     let mut a: Vec<_> = (0..q.ncols()).map(|_| template_var.clone()).collect();
     let mut tmp_num0 = template_var.clone();
@@ -151,16 +139,7 @@ fn compute_c_1neg<T>(
     curves_dot_q0: DMatrixView<i32>,
     beta_pairs: &[(usize, usize)],
 ) where
-    for<'a> T: Clone
-        + RecipMut
-        + Assign<u64>
-        + MulAssign<i32>
-        + MulAssign<u64>
-        + DivAssign<u64>
-        + Assign<&'a T>
-        + AddAssign<&'a T>
-        + SubAssign<&'a T>
-        + MulAssign<&'a T>,
+    T: PolynomialCoeff<T>,
 {
     let mut a: Vec<_> = (0..q.ncols()).map(|_| template_var.clone()).collect();
     let mut tmp_fact = template_var.clone();
@@ -262,16 +241,7 @@ fn compute_c_2neg<T>(
     curves_dot_q0: DMatrixView<i32>,
     beta_pairs: &[(usize, usize)],
 ) where
-    for<'a> T: Clone
-        + RecipMut
-        + Assign<u64>
-        + MulAssign<i32>
-        + MulAssign<u64>
-        + DivAssign<u64>
-        + Assign<&'a T>
-        + AddAssign<&'a T>
-        + SubAssign<&'a T>
-        + MulAssign<&'a T>,
+    T: PolynomialCoeff<T>,
 {
     let mut tmp_fact = template_var.clone();
     let mut tmp_final = template_var.clone();
@@ -349,24 +319,7 @@ pub fn compute_omega<T>(
     intnum_idxpairs: &HashSet<(usize, usize)>,
 ) -> Result<FundamentalPeriod<T>, FundamentalPeriodError>
 where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<u64>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + DivAssign<u64>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + MulAssign<u64>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>
-        + Send
-        + Sync
-        + RecipMut,
+    T: PolynomialCoeff<T>,
 {
     let curves = &sg.elements;
     let h11 = q.ncols();

@@ -4,56 +4,16 @@
 
 pub mod error;
 
-use crate::polynomial::error::PolynomialError;
+use crate::polynomial::{coefficient::PolynomialCoeff, error::PolynomialError};
 use crate::{instanton::InstantonData, NumberPool, Polynomial, PolynomialProperties};
 use core::cmp::Ordering;
-use core::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
 use core::slice::Iter;
 use error::SeriesInversionError;
 use nalgebra::DVector;
-use rug::{Assign, Float, Rational};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-
-/// Rounds a number to the closest integer in place.
-pub trait RoundMut {
-    fn round_mut(&mut self);
-}
-
-impl RoundMut for Rational {
-    #[inline]
-    fn round_mut(&mut self) {
-        Rational::round_mut(self);
-    }
-}
-
-impl RoundMut for Float {
-    #[inline]
-    fn round_mut(&mut self) {
-        Float::round_mut(self);
-    }
-}
-
-/// Takes the absolute value in place.
-pub trait AbsMut {
-    fn abs_mut(&mut self);
-}
-
-impl AbsMut for Rational {
-    #[inline]
-    fn abs_mut(&mut self) {
-        Rational::abs_mut(self);
-    }
-}
-
-impl AbsMut for Float {
-    #[inline]
-    fn abs_mut(&mut self) {
-        Float::abs_mut(self);
-    }
-}
 
 /// Computes qN for generator curves
 fn compute_qn<T>(
@@ -64,18 +24,7 @@ fn compute_qn<T>(
     np: &mut NumberPool<T>,
 ) -> Polynomial<T>
 where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>,
+    T: PolynomialCoeff<T>,
 {
     let mut res = closest_curve.clone(np);
     for (i, diff) in closest_curve_diff.iter().enumerate() {
@@ -105,18 +54,7 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
 ) where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>,
+    T: PolynomialCoeff<T>,
 {
     let h11 = poly_props.semigroup.elements.nrows();
     let mut closest_curve = Polynomial::new();
@@ -203,24 +141,7 @@ pub fn invert_series<T, const FIND_GV: bool, const IS_THREEFOLD: bool>(
     poly_props: &PolynomialProperties<T>,
 ) -> Result<HashMap<(u32, u32), T>, SeriesInversionError>
 where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<i32>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + PartialOrd<f32>
-        + SubAssign<&'a T>
-        + Send
-        + Sync
-        + RoundMut
-        + AbsMut,
+    T: PolynomialCoeff<T>,
 {
     let mut final_gv = HashMap::new();
 

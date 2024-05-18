@@ -3,10 +3,11 @@
 //! This module contains functions to compute instanton correction.
 
 use crate::fundamental_period::FundamentalPeriod;
-use crate::polynomial::{error::PolynomialError, properties::PolynomialProperties, Polynomial};
+use crate::polynomial::{
+    coefficient::PolynomialCoeff, error::PolynomialError, properties::PolynomialProperties,
+    Polynomial,
+};
 use crate::NumberPool;
-use core::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
-use rug::Assign;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -24,20 +25,7 @@ fn compute_alpha_thread<T>(
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
 ) where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>
-        + Send
-        + Sync,
+    T: PolynomialCoeff<T>,
 {
     loop {
         let t;
@@ -60,20 +48,7 @@ fn compute_beta_thread<T>(
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
 ) where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>
-        + Send
-        + Sync,
+    T: PolynomialCoeff<T>,
 {
     loop {
         let (t0, t1);
@@ -98,20 +73,7 @@ fn compute_f_thread<T>(
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
 ) where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>
-        + Send
-        + Sync,
+    T: PolynomialCoeff<T>,
 {
     loop {
         let (t0, t1);
@@ -139,20 +101,7 @@ fn compute_inst_thread<T>(
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
     is_threefold: bool,
 ) where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>
-        + Send
-        + Sync,
+    T: PolynomialCoeff<T>,
 {
     let h11 = poly_props.semigroup.elements.nrows();
     let mut intnum_ind = [0_usize; 3];
@@ -207,20 +156,7 @@ fn compute_expalpha_thread<T>(
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
 ) where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>
-        + Send
-        + Sync,
+    T: PolynomialCoeff<T>,
 {
     loop {
         let t;
@@ -253,20 +189,7 @@ pub fn compute_instanton_data<T>(
     is_threefold: bool,
 ) -> Result<InstantonData<T>, PolynomialError>
 where
-    for<'a> T: Clone
-        + AddAssign<&'a T>
-        + Assign<i32>
-        + Assign<&'a T>
-        + DivAssign<&'a T>
-        + DivAssign<u32>
-        + MulAssign<&'a T>
-        + MulAssign<i32>
-        + MulAssign<u32>
-        + PartialEq<i32>
-        + PartialOrd<T>
-        + SubAssign<&'a T>
-        + Send
-        + Sync,
+    T: PolynomialCoeff<T>,
 {
     let h11 = poly_props.semigroup.elements.nrows();
     let n_threads = thread::available_parallelism()
