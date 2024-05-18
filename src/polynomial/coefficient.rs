@@ -90,4 +90,4 @@ pub trait PolynomialCoeff<T>:
 
 impl PolynomialCoeff<Rational> for Rational {}
 
-impl PolynomialCoeff<Rational> for Float {}
+impl PolynomialCoeff<Float> for Float {}
