@@ -327,7 +327,7 @@ where
     let ambient_dim = (h11pd as i32) - (h11 as i32);
     let cy_codim = if nefpart.is_empty() { 1 } else { nefpart.len() };
     let cy_dim = ambient_dim - (cy_codim as i32);
-    let mut coeff_pool = NumberPool::new(poly_props.zero_cutoff.clone(), 0);
+    let mut coeff_pool = NumberPool::new(poly_props.zero_cutoff.clone(), 1000);
 
     // Run some basic checks on the input data
     if cy_dim < 3 {
@@ -410,16 +410,14 @@ where
                 _ => {}
             }
         }
-        c0.nonzero = c0.coeffs.keys().cloned().collect();
-        c0.nonzero.sort_unstable();
     });
-
+    c0.nonzero = c0.coeffs.keys().cloned().collect();
+    c0.nonzero.sort_unstable();
     c0.clean_up(poly_props, &mut coeff_pool);
 
     // Now compute the inverse and derivatives in parallel
     let tasks_c1 = Arc::new(Mutex::new(neg1.iter()));
     let tasks_c2 = Arc::new(Mutex::new(neg2.iter()));
-    let mut coeff_pool = NumberPool::new(poly_props.zero_cutoff.clone(), 100);
 
     thread::scope(|s| {
         // Compute inverse of fundamental period
@@ -479,6 +477,16 @@ where
             }
         }
     });
+    for p in c1.iter_mut() {
+        p.nonzero = p.coeffs.keys().cloned().collect();
+        p.nonzero.sort_unstable();
+        p.clean_up(poly_props, &mut coeff_pool);
+    }
+    for p in c2.values_mut() {
+        p.nonzero = p.coeffs.keys().cloned().collect();
+        p.nonzero.sort_unstable();
+        p.clean_up(poly_props, &mut coeff_pool);
+    }
 
     for p in c1.iter_mut() {
         p.nonzero = p.coeffs.keys().cloned().collect();

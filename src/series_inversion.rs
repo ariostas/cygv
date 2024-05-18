@@ -244,8 +244,9 @@ where
                     let Some(gv_ref) = inst_k.coeffs.get(&(j as u32)) else {
                         continue;
                     };
+                    tmp_gv.assign(gv_ref);
                     if FIND_GV {
-                        tmp_gv_rounded.assign(gv_ref);
+                        tmp_gv_rounded.assign(&tmp_gv);
                         tmp_gv_rounded.round_mut();
                         tmp_gv -= &tmp_gv_rounded;
                         tmp_gv.abs_mut();
@@ -264,7 +265,7 @@ where
                         });
                         h22list.push((k, tmp_gv_rounded.clone()));
                     } else {
-                        tmp_gv_rounded.assign(gv_ref);
+                        tmp_gv_rounded.assign(&tmp_gv);
                         tmp_gv_rounded.abs_mut();
                         if tmp_gv_rounded <= poly_props.zero_cutoff {
                             continue;
