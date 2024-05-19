@@ -36,6 +36,7 @@ pub mod instanton;
 pub mod misc;
 pub mod polynomial;
 pub mod pool;
+pub mod python;
 pub mod semigroup;
 pub mod series_inversion;
 
@@ -52,3 +53,11 @@ pub use semigroup::Semigroup;
 // Re-export main trait
 #[doc(inline)]
 pub use polynomial::coefficient::PolynomialCoeff;
+
+// Re-export python module
+#[doc(inline)]
+pub use python::cygv;
+
+// Re-export main functions
+#[doc(inline)]
+pub use hkty::*;
