@@ -1,0 +1,92 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  release:
+    types:
+      - published
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  make-sdist:
+    name: Make SDist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build SDist
+        run: pipx run build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-sdist
+          path: dist/*.tar.gz
+
+  build-wheels:
+    name: Build wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-13, macos-14]
+    steps:
+    - name: Check out repo
+      uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    - name: Build wheels
+      run: |
+        python -m pip install pipx
+        pipx run cibuildwheel
+      env:
+        CIBW_ENVIRONMENT: 'PATH="$HOME/.cargo/bin:$PATH" CARGO_TERM_COLOR="always"'
+        CIBW_BEFORE_BUILD: rustup show
+        CIBW_BEFORE_BUILD_LINUX: >
+          curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain=stable --profile=minimal -y &&
+          rustup show
+        CIBW_TEST_COMMAND: 'pytest -vv {project}'
+        CIBW_TEST_REQUIRES: pytest
+        CIBW_SKIP: cp38-macosx_universal2 cp38-macosx_arm64 *-musllinux_i686
+        CIBW_BUILD_VERBOSITY: 1
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: cibw-wheels-${{ github.event.release.tag_name }}-${{ matrix.os }}
+        retention-days: 1
+        path: wheelhouse/*.whl
+
+  deploy-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [build-wheels, make-sdist]
+    environment:
+      name: pypi
+      url: https://pypi.org/p/cygv
+    permissions:
+      id-token: write
+    if: github.event_name == 'release' && github.event.action == 'published'
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-*
+          path: dist
+          merge-multiple: true
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  deploy-crate:
+    name: Publish to Crates.io
+    runs-on: ubuntu-latest
+    # just to make sure both get deployed together
+    needs: [build-wheels, make-sdist]
+    if: github.event_name == 'release' && github.event.action == 'published'
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Publish to Crates.io
+        run: |
+          cargo login ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          cargo publish
