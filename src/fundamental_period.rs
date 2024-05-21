@@ -271,7 +271,11 @@ fn compute_c_2neg<T>(
             neg_ints_iter.next().is_none(),
             "the curve has more than two negative intersections"
         );
-        let sn = if (neg_int1 + neg_int2) % 2 == 0 {1} else {-1};
+        let sn = if (neg_int1 + neg_int2) % 2 == 0 {
+            1
+        } else {
+            -1
+        };
 
         let mut n: Vec<_> = curves_dot_q0.column(t).iter().map(|c| *c as u32).collect();
         n.push((-neg_int1 - 1) as u32);

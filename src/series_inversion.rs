@@ -79,7 +79,13 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
             .for_each(|(d, s)| *d = *s);
         closest_dist = closest_curve_diff
             .iter()
-            .map(|d| if *d == 0 {0_f32} else {(*d as f32).abs().log2() + 1_f32})
+            .map(|d| {
+                if *d == 0 {
+                    0_f32
+                } else {
+                    (*d as f32).abs().log2() + 1_f32
+                }
+            })
             .sum();
         // Now check to see if there is a better starting curve
         for (prev_inds, prev_qns) in previous_qn_ind.iter().zip(previous_qn.iter()) {
@@ -94,7 +100,13 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
                     .for_each(|((s1, s2), d)| *d = s1 - s2);
                 tmp_dist = tmp_curve_diff
                     .iter()
-                    .map(|d| if *d == 0 {0_f32} else {(*d as f32).abs().log2() + 1_f32})
+                    .map(|d| {
+                        if *d == 0 {
+                            0_f32
+                        } else {
+                            (*d as f32).abs().log2() + 1_f32
+                        }
+                    })
                     .sum();
                 if tmp_dist < closest_dist {
                     let Some(ind) = poly_props.monomial_map.get(&tmp_curve_diff.as_view()) else {

@@ -1,7 +1,7 @@
+use crate::run_hkty;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
-use rug::{Float, Rational, ops::PowAssign};
-use crate::run_hkty;
+use rug::{ops::PowAssign, Float, Rational};
 
 fn to_matrix(m: Vec<Vec<i32>>) -> DMatrix<i32> {
     let n_cols = m.len();
@@ -58,7 +58,6 @@ pub fn compute_gvgw(
     nefpart: Option<Vec<Vec<i32>>>,
     prec: Option<u32>,
 ) -> PyResult<Vec<((Vec<i32>, u32), String)>> {
-
     let generators = to_matrix(generators);
     let grading_vector = to_rowvector(grading_vector);
     let q = to_matrix(q);
@@ -71,21 +70,117 @@ pub fn compute_gvgw(
         let mut zero_cutoff = Float::with_val(n_bits, 10);
         zero_cutoff.pow_assign(-(n_bits as i32) / 3);
         let res = match (find_gv, is_threefold) {
-            (true, true) => run_hkty::<Float, true, true>(generators, grading_vector, zero_cutoff, max_deg, min_points, q, nefpart, intnums),
-            (false, true) => run_hkty::<Float, false, true>(generators, grading_vector, zero_cutoff, max_deg, min_points, q, nefpart, intnums),
-            (true, false) => run_hkty::<Float, true, false>(generators, grading_vector, zero_cutoff, max_deg, min_points, q, nefpart, intnums),
-            (false, false) => run_hkty::<Float, false, false>(generators, grading_vector, zero_cutoff, max_deg, min_points, q, nefpart, intnums),
+            (true, true) => run_hkty::<Float, true, true>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                q,
+                nefpart,
+                intnums,
+            ),
+            (false, true) => run_hkty::<Float, false, true>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                q,
+                nefpart,
+                intnums,
+            ),
+            (true, false) => run_hkty::<Float, true, false>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                q,
+                nefpart,
+                intnums,
+            ),
+            (false, false) => run_hkty::<Float, false, false>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                q,
+                nefpart,
+                intnums,
+            ),
         };
-        final_res = res.into_iter().map(|((v, c), gvgw)| ((to_vec(v), c), if find_gv {gvgw.to_integer().unwrap().to_string()} else {gvgw.to_string()})).collect();
+        final_res = res
+            .into_iter()
+            .map(|((v, c), gvgw)| {
+                (
+                    (to_vec(v), c),
+                    if find_gv {
+                        gvgw.to_integer().unwrap().to_string()
+                    } else {
+                        gvgw.to_string()
+                    },
+                )
+            })
+            .collect();
     } else {
         let zero_cutoff = Rational::new();
         let res = match (find_gv, is_threefold) {
-            (true, true) => run_hkty::<Rational, true, true>(generators, grading_vector, zero_cutoff, max_deg, min_points, q, nefpart, intnums),
-            (false, true) => run_hkty::<Rational, false, true>(generators, grading_vector, zero_cutoff, max_deg, min_points, q, nefpart, intnums),
-            (true, false) => run_hkty::<Rational, true, false>(generators, grading_vector, zero_cutoff, max_deg, min_points, q, nefpart, intnums),
-            (false, false) => run_hkty::<Rational, false, false>(generators, grading_vector, zero_cutoff, max_deg, min_points, q, nefpart, intnums),
+            (true, true) => run_hkty::<Rational, true, true>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                q,
+                nefpart,
+                intnums,
+            ),
+            (false, true) => run_hkty::<Rational, false, true>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                q,
+                nefpart,
+                intnums,
+            ),
+            (true, false) => run_hkty::<Rational, true, false>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                q,
+                nefpart,
+                intnums,
+            ),
+            (false, false) => run_hkty::<Rational, false, false>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                q,
+                nefpart,
+                intnums,
+            ),
         };
-        final_res = res.into_iter().map(|((v, c), gvgw)| ((to_vec(v), c), if find_gv {gvgw.into_numer_denom().0.to_string()} else {gvgw.to_string()})).collect();
+        final_res = res
+            .into_iter()
+            .map(|((v, c), gvgw)| {
+                (
+                    (to_vec(v), c),
+                    if find_gv {
+                        gvgw.into_numer_denom().0.to_string()
+                    } else {
+                        gvgw.to_string()
+                    },
+                )
+            })
+            .collect();
     };
 
     Ok(final_res)
