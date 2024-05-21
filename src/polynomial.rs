@@ -316,7 +316,7 @@ where
             coeff.assign(c);
             res.coeffs.insert(*i, coeff);
         }
-        res.nonzero = self.nonzero.clone();
+        res.nonzero.clone_from(&self.nonzero);
         res
     }
 

@@ -537,7 +537,7 @@ mod tests {
 
         let q = DMatrix::from_column_slice(6, 2, &[1, 1, 1, 0, 1, 2, 0, 0, -1, 1, 1, -1]);
         let nefpart = Vec::new();
-        let intnum_idxpairs = vec![(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
+        let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
         let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs);
         assert!(fp.is_ok());
@@ -545,7 +545,7 @@ mod tests {
 
         let c0_size = 4;
         let c0_coeffs = vec![1, 360, 1247400];
-        let c0_coeffs: HashSet<_> = c0_coeffs.into_iter().map(|c| Rational::from(c)).collect();
+        let c0_coeffs: HashSet<_> = c0_coeffs.into_iter().map(Rational::from).collect();
         assert_eq!(fp.c0.nonzero.len(), c0_size);
         assert_eq!(
             fp.c0.coeffs.clone().into_values().collect::<HashSet<_>>(),
@@ -556,7 +556,7 @@ mod tests {
         let c1_0_coeffs = vec![
             60, -6930, 3312, 166320, 2772, 1361360, -36756720, -334639305, 13142520,
         ];
-        let c1_0_coeffs: HashSet<_> = c1_0_coeffs.into_iter().map(|c| Rational::from(c)).collect();
+        let c1_0_coeffs: HashSet<_> = c1_0_coeffs.into_iter().map(Rational::from).collect();
         assert_eq!(fp.c1[0].nonzero.len(), c1_0_size);
         assert_eq!(
             fp.c1[0]
@@ -570,7 +570,7 @@ mod tests {
         let c1_1_coeffs = vec![
             -60, 6930, -540, -1361360, -166320, 540, -2598750, 60, 36756720, 334639305,
         ];
-        let c1_1_coeffs: HashSet<_> = c1_1_coeffs.into_iter().map(|c| Rational::from(c)).collect();
+        let c1_1_coeffs: HashSet<_> = c1_1_coeffs.into_iter().map(Rational::from).collect();
         assert_eq!(fp.c1[1].nonzero.len(), c1_1_size);
         assert_eq!(
             fp.c1[1]
@@ -595,7 +595,7 @@ mod tests {
         ];
         let c2_00_coeffs: HashSet<_> = c2_00_coeffs
             .into_iter()
-            .map(|c| Rational::from(c))
+            .map(Rational::from)
             .collect();
         assert_eq!(fp.c2[&(0, 0)].nonzero.len(), c2_00_size);
         assert_eq!(
@@ -625,7 +625,7 @@ mod tests {
         ];
         let c2_01_coeffs: HashSet<_> = c2_01_coeffs
             .into_iter()
-            .map(|c| Rational::from(c))
+            .map(Rational::from)
             .collect();
         assert_eq!(fp.c2[&(0, 1)].nonzero.len(), c2_01_size);
         assert_eq!(
@@ -655,7 +655,7 @@ mod tests {
         ];
         let c2_11_coeffs: HashSet<_> = c2_11_coeffs
             .into_iter()
-            .map(|c| Rational::from(c))
+            .map(Rational::from)
             .collect();
         assert_eq!(fp.c2[&(1, 1)].nonzero.len(), c2_11_size);
         assert_eq!(

@@ -132,8 +132,8 @@ mod tests {
         let mut tmp_float = Float::new(prec);
         let mut true_float = Float::new(prec);
 
-        let n_m = vec![(0, 1), (1, 1), (10, 1), (10, 2)];
-        let h_n_m = vec![(0, 1), (1, 1), (7_381, 2_520), (1_968_329, 1_270_080)];
+        let n_m = [(0, 1), (1, 1), (10, 1), (10, 2)];
+        let h_n_m = [(0, 1), (1, 1), (7_381, 2_520), (1_968_329, 1_270_080)];
 
         for (h, (n, m)) in h_n_m.iter().zip(n_m.iter()) {
             harmonic(*n, *m, &mut res_rat, &mut tmp_rat);

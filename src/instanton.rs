@@ -332,7 +332,7 @@ mod tests {
 
         let q = DMatrix::from_column_slice(6, 2, &[1, 1, 1, 0, 1, 2, 0, 0, -1, 1, 1, -1]);
         let nefpart = Vec::new();
-        let intnum_idxpairs = vec![(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
+        let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
         let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs);
         assert!(fp.is_ok());
@@ -370,7 +370,7 @@ mod tests {
         ];
         let inst0_coeffs: HashSet<_> = inst0_coeffs
             .into_iter()
-            .map(|c| Rational::from(c))
+            .map(Rational::from)
             .collect();
         assert_eq!(inst_data.inst[0].nonzero.len(), inst0_size);
         assert_eq!(
@@ -401,7 +401,7 @@ mod tests {
         ];
         let inst1_coeffs: HashSet<_> = inst1_coeffs
             .into_iter()
-            .map(|c| Rational::from(c))
+            .map(Rational::from)
             .collect();
         assert_eq!(inst_data.inst[1].nonzero.len(), inst1_size);
         assert_eq!(
@@ -419,7 +419,7 @@ mod tests {
         ];
         let expalpha_pos0_coeffs: HashSet<_> = expalpha_pos0_coeffs
             .into_iter()
-            .map(|c| Rational::from(c))
+            .map(Rational::from)
             .collect();
         assert_eq!(inst_data.expalpha[0].0.nonzero.len(), expalpha_pos0_size);
         assert_eq!(
@@ -438,7 +438,7 @@ mod tests {
         ];
         let expalpha_pos1_coeffs: HashSet<_> = expalpha_pos1_coeffs
             .into_iter()
-            .map(|c| Rational::from(c))
+            .map(Rational::from)
             .collect();
         assert_eq!(inst_data.expalpha[1].0.nonzero.len(), expalpha_pos1_size);
         assert_eq!(
@@ -457,7 +457,7 @@ mod tests {
         ];
         let expalpha_neg0_coeffs: HashSet<_> = expalpha_neg0_coeffs
             .into_iter()
-            .map(|c| Rational::from(c))
+            .map(Rational::from)
             .collect();
         assert_eq!(inst_data.expalpha[0].1.nonzero.len(), expalpha_neg0_size);
         assert_eq!(
@@ -476,7 +476,7 @@ mod tests {
         ];
         let expalpha_neg1_coeffs: HashSet<_> = expalpha_neg1_coeffs
             .into_iter()
-            .map(|c| Rational::from(c))
+            .map(Rational::from)
             .collect();
         assert_eq!(inst_data.expalpha[1].1.nonzero.len(), expalpha_neg1_size);
         assert_eq!(
