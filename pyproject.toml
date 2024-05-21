@@ -43,6 +43,9 @@ tests = [
     "pytest",
 ]
 
+[project.urls]
+Repository = "https://github.com/ariostas/cygv"
+
 [tool.maturin]
 python-source = "python"
 features = ["pyo3/extension-module"]
