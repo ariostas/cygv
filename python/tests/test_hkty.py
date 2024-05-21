@@ -12,6 +12,61 @@ def test_threefold():
     compute_gw(generators, grading_vector, q, intnums, min_points=100)
     compute_gw(generators, grading_vector, q, intnums, min_points=100, prec=200)
 
+    generators = [
+        [-1, 0, 0, 0, 0, 1, -1],
+        [0, 0, 0, 0, 0, -2, 1],
+        [0, 0, 0, 0, 0, -1, 1],
+        [0, 0, 0, 0, 0, 0, 1],
+        [0, 0, 0, 1, -1, 0, 0],
+        [0, 0, 1, -1, 1, 0, 0],
+        [0, 0, 1, 0, 0, 1, 0],
+        [1, 0, 0, 0, 1, 0, -1],
+        [1, 1, 0, 0, 0, -2, 0],
+    ]
+    grading_vector = [-2, 3, 2, 5, 4, 0, 1]
+    q = [
+        [-1, 1, 0, 0, -1, 0, 0, 0, -1, 0, 0],
+        [1, 0, 1, 0, 3, 0, -2, 0, -1, 0, 0],
+        [1, 0, 0, 1, -1, 0, 1, 0, 0, 0, 0],
+        [2, 0, 0, 0, 2, 1, -2, 0, 1, 0, 0],
+        [2, 0, 0, 0, 3, 0, -3, 1, 1, 0, 0],
+        [0, 0, 0, 0, 1, 0, -1, 0, -1, 1, 0],
+        [1, 0, 0, 0, 2, 0, -2, 0, 0, 0, 1],
+    ]
+    intnums = [
+        [0, 5, 6, 1],
+        [1, 2, 3, 2],
+        [1, 3, 4, 2],
+        [1, 4, 6, 1],
+        [1, 5, 6, 1],
+        [0, 0, 2, -2],
+        [0, 0, 6, -1],
+        [0, 5, 5, -2],
+        [0, 6, 6, -1],
+        [1, 2, 2, 4],
+        [1, 3, 3, -2],
+        [1, 4, 4, -2],
+        [1, 5, 5, -2],
+        [1, 6, 6, -2],
+        [2, 2, 2, 24],
+        [2, 2, 3, 8],
+        [2, 3, 3, 2],
+        [3, 3, 3, -12],
+        [3, 3, 4, 10],
+        [3, 4, 4, -8],
+        [4, 4, 4, 6],
+        [4, 4, 6, 1],
+        [4, 6, 6, -3],
+        [5, 5, 5, 8],
+        [5, 5, 6, -2],
+        [6, 6, 6, 7],
+    ]
+    # For now, these are just smoke tests
+    compute_gv(generators, grading_vector, q, intnums, min_points=100)
+    compute_gv(generators, grading_vector, q, intnums, min_points=100, prec=200)
+    compute_gw(generators, grading_vector, q, intnums, min_points=100)
+    compute_gw(generators, grading_vector, q, intnums, min_points=100, prec=200)
+
 
 def test_fourfold():
     generators = [
