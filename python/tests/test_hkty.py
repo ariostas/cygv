@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from cygv import compute_gv, compute_gw
 
 

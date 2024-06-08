@@ -1,9 +1,11 @@
-from cygv.cygv import _compute_gvgw
+from __future__ import annotations
 
 from fractions import Fraction
 
 import mpmath as mp
 import numpy as np
+
+from cygv.cygv import _compute_gvgw
 
 
 def _is_threefold(q, nefpart) -> bool:

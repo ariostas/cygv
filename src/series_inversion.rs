@@ -145,7 +145,7 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
     }
 }
 
-/// Find the coefficients of hte inverse series, i.e. the GV or GW invariants.
+/// Find the coefficients of the inverse series, i.e. the GV or GW invariants.
 pub fn invert_series<T, const FIND_GV: bool, const IS_THREEFOLD: bool>(
     inst_data: InstantonData<T>,
     poly_props: &PolynomialProperties<T>,
