@@ -368,10 +368,7 @@ mod tests {
             (-7042450329_i64, 4_i64),
             (33379857, 1),
         ];
-        let inst0_coeffs: HashSet<_> = inst0_coeffs
-            .into_iter()
-            .map(Rational::from)
-            .collect();
+        let inst0_coeffs: HashSet<_> = inst0_coeffs.into_iter().map(Rational::from).collect();
         assert_eq!(inst_data.inst[0].nonzero.len(), inst0_size);
         assert_eq!(
             inst_data.inst[0]
@@ -399,10 +396,7 @@ mod tests {
             (-3, 8),
             (32846391, 1),
         ];
-        let inst1_coeffs: HashSet<_> = inst1_coeffs
-            .into_iter()
-            .map(Rational::from)
-            .collect();
+        let inst1_coeffs: HashSet<_> = inst1_coeffs.into_iter().map(Rational::from).collect();
         assert_eq!(inst_data.inst[1].nonzero.len(), inst1_size);
         assert_eq!(
             inst_data.inst[1]
