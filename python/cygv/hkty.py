@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sized
 from fractions import Fraction
+from multiprocessing import Process, Queue
 from typing import Any
 
 import mpmath as mp
@@ -9,6 +10,77 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from cygv.cygv import _compute_gvgw
+
+
+def _compute_gvgw_queue(
+    queue: Queue[list[Any] | Exception],
+    generators: ArrayLike,
+    grading_vector: ArrayLike,
+    q: ArrayLike,
+    intnums: ArrayLike,
+    find_gv: bool,
+    is_threefold: bool,
+    max_deg: int | None = None,
+    min_points: int | None = None,
+    nefpart: Sized | None = None,
+    prec: int | None = None,
+) -> None:
+    result = None
+    try:
+        result = _compute_gvgw(
+            generators,
+            grading_vector,
+            q,
+            intnums,
+            find_gv,
+            is_threefold,
+            max_deg,
+            min_points,
+            nefpart,
+            prec,
+        )
+    except Exception as e:
+        result = e
+    queue.put(result)
+
+
+# We wrap the raw `_compute_gvgw` function so that we can use ctrl+c
+# to interrupt the computation without fully exiting the main python thread.
+def _wrapped_compute_gvgw(
+    generators: ArrayLike,
+    grading_vector: ArrayLike,
+    q: ArrayLike,
+    intnums: ArrayLike,
+    find_gv: bool,
+    is_threefold: bool,
+    max_deg: int | None = None,
+    min_points: int | None = None,
+    nefpart: Sized | None = None,
+    prec: int | None = None,
+) -> list[Any]:
+    queue: Queue[list[Any]] = Queue()
+    process = Process(
+        target=_compute_gvgw_queue,
+        args=(
+            queue,
+            generators,
+            grading_vector,
+            q,
+            intnums,
+            find_gv,
+            is_threefold,
+            max_deg,
+            min_points,
+            nefpart,
+            prec,
+        ),
+    )
+    process.start()
+    result = queue.get()
+    process.join()
+    if isinstance(result, Exception):
+        raise (result)
+    return result
 
 
 def _is_threefold(q: ArrayLike, nefpart: Sized | None) -> bool:
@@ -32,7 +104,7 @@ def compute_gv(
     q = np.array(q, dtype=int)
     intnums = np.array(intnums, dtype=int)
     is_threefold = _is_threefold(q, nefpart)
-    res_tmp = _compute_gvgw(
+    res_tmp = _wrapped_compute_gvgw(
         generators,
         grading_vector,
         q,
@@ -68,7 +140,7 @@ def compute_gw(
     q = np.array(q, dtype=int)
     intnums = np.array(intnums, dtype=int)
     is_threefold = _is_threefold(q, nefpart)
-    res_tmp = _compute_gvgw(
+    res_tmp = _wrapped_compute_gvgw(
         generators,
         grading_vector,
         q,

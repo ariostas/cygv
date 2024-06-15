@@ -1,4 +1,5 @@
 use crate::run_hkty;
+use ctrlc;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
 use rug::{ops::PowAssign, Float, Rational};
@@ -58,6 +59,7 @@ pub fn compute_gvgw(
     nefpart: Option<Vec<Vec<i32>>>,
     prec: Option<u32>,
 ) -> PyResult<Vec<((Vec<i32>, u32), String)>> {
+    ctrlc::set_handler(|| std::process::exit(1)).unwrap();
     let generators = to_matrix(generators);
     let grading_vector = to_rowvector(grading_vector);
     let q = to_matrix(q);

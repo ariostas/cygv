@@ -413,7 +413,7 @@ where
         poly_props: &PolynomialProperties<T>,
         coeff_pool: &mut NumberPool<T>,
     ) -> Result<(Self, Self), PolynomialError> {
-        if self.coeffs.get(&0).is_some() {
+        if self.coeffs.contains_key(&0) {
             return Err(PolynomialError::NonZeroConstantTermError);
         }
         let mut res_pos = Self::one(coeff_pool);
@@ -446,7 +446,7 @@ where
         poly_props: &PolynomialProperties<T>,
         coeff_pool: &mut NumberPool<T>,
     ) -> Result<Self, PolynomialError> {
-        if self.coeffs.get(&0).is_some() {
+        if self.coeffs.contains_key(&0) {
             return Err(PolynomialError::NonZeroConstantTermError);
         }
         let mut res = self.clone(coeff_pool);
