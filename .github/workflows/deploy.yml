@@ -28,34 +28,57 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-13, macos-14]
+        os: [ubuntu-latest, macos-13, macos-14, windows-latest]
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
     steps:
-    - name: Check out repo
-      uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
-    - name: Build wheels
-      run: |
-        python -m pip install pipx
-        pipx run cibuildwheel
-      env:
-        CIBW_ENVIRONMENT: 'PATH="$HOME/.cargo/bin:$PATH" CARGO_TERM_COLOR="always"'
-        CIBW_BEFORE_BUILD: rustup show
-        CIBW_BEFORE_BUILD_LINUX: >
-          curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain=stable --profile=minimal -y &&
-          rustup show
-        CIBW_TEST_COMMAND: 'pytest -vv {project}'
-        CIBW_TEST_REQUIRES: pytest
-        CIBW_SKIP: cp38-macosx_universal2 cp38-macosx_arm64 *-musllinux_i686
-        CIBW_BUILD_VERBOSITY: 1
-    - name: Upload wheels
-      uses: actions/upload-artifact@v4
-      with:
-        name: cibw-wheels-${{ github.event.release.tag_name }}-${{ matrix.os }}
-        retention-days: 1
-        path: wheelhouse/*.whl
+      - name: Set up MSYS2
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          update: true
+          install: >-
+            mingw-w64-x86_64-python-pip
+            mingw-w64-x86_64-python-build
+            mingw-w64-x86_64-python-maturin
+            mingw-w64-x86_64-rust
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            diffutils
+            m4
+            make
+            git
+            curl
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Build wheels
+        if: runner.os != 'Windows'
+        run: |
+          pipx run cibuildwheel
+        env:
+          CIBW_ENVIRONMENT: 'PATH="$HOME/.cargo/bin:$PATH" CARGO_TERM_COLOR="always"'
+          CIBW_BEFORE_BUILD: rustup show
+          CIBW_BEFORE_BUILD_LINUX: >
+            curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain=stable --profile=minimal -y &&
+            rustup show
+          CIBW_TEST_COMMAND: 'pytest -vv {project}'
+          CIBW_TEST_REQUIRES: pytest
+          CIBW_SKIP: cp38-macosx_universal2 cp38-macosx_arm64 pp38-* *-musllinux_i686
+          CIBW_BUILD_VERBOSITY: 1
+      # CIBW has some issues building wheels with MSYS2
+      - name: Build wheels (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python -m build --wheel --no-isolation --outdir wheelhouse
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-${{ github.event.release.tag_name }}-${{ matrix.os }}
+          retention-days: 1
+          path: wheelhouse/*.whl
 
   deploy-pypi:
     name: Publish to PyPI
@@ -82,6 +105,11 @@ jobs:
     runs-on: ubuntu-latest
     # just to make sure both get deployed together
     needs: [build-wheels, make-sdist]
+    environment:
+      name: crates.io
+      url: https://crates.io/crates/cygv
+    permissions:
+      id-token: write
     if: github.event_name == 'release' && github.event.action == 'published'
     steps:
       - name: Check out repo
