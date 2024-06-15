@@ -104,6 +104,11 @@ jobs:
     runs-on: ubuntu-latest
     # just to make sure both get deployed together
     needs: [build-wheels, make-sdist]
+    environment:
+      name: crates.io
+      url: https://crates.io/crates/cygv
+    permissions:
+      id-token: write
     if: github.event_name == 'release' && github.event.action == 'published'
     steps:
       - name: Check out repo
