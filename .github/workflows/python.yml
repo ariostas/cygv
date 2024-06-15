@@ -37,6 +37,7 @@ jobs:
           install: >-
             mingw-w64-x86_64-python
             mingw-w64-x86_64-python-pip
+            mingw-w64-x86_64-python-numpy
             mingw-w64-x86_64-rust
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
