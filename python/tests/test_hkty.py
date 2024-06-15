@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 from cygv import compute_gv, compute_gw
 
 
-def test_threefold():
+def test_threefold() -> None:
     generators = [[0, -1], [1, 2]]
     grading_vector = [3, -1]
     q = [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]
@@ -68,7 +70,7 @@ def test_threefold():
     compute_gw(generators, grading_vector, q, intnums, min_points=100, prec=200)
 
 
-def test_fourfold():
+def test_fourfold() -> None:
     generators = [
         [0, 0, 0, -2, 3, 0],
         [1, 0, -4, 0, 0, 0],

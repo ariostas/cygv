@@ -593,10 +593,7 @@ mod tests {
             (-18140848109_i64, 2_i64),
             (79322526, 1),
         ];
-        let c2_00_coeffs: HashSet<_> = c2_00_coeffs
-            .into_iter()
-            .map(Rational::from)
-            .collect();
+        let c2_00_coeffs: HashSet<_> = c2_00_coeffs.into_iter().map(Rational::from).collect();
         assert_eq!(fp.c2[&(0, 0)].nonzero.len(), c2_00_size);
         assert_eq!(
             fp.c2[&(0, 0)]
@@ -623,10 +620,7 @@ mod tests {
             (-57445875, 2),
             (23478658899_i64, 4_i64),
         ];
-        let c2_01_coeffs: HashSet<_> = c2_01_coeffs
-            .into_iter()
-            .map(Rational::from)
-            .collect();
+        let c2_01_coeffs: HashSet<_> = c2_01_coeffs.into_iter().map(Rational::from).collect();
         assert_eq!(fp.c2[&(0, 1)].nonzero.len(), c2_01_size);
         assert_eq!(
             fp.c2[&(0, 1)]
@@ -653,10 +647,7 @@ mod tests {
             (10308375, 1),
             (-2668905395_i64, 1_i64),
         ];
-        let c2_11_coeffs: HashSet<_> = c2_11_coeffs
-            .into_iter()
-            .map(Rational::from)
-            .collect();
+        let c2_11_coeffs: HashSet<_> = c2_11_coeffs.into_iter().map(Rational::from).collect();
         assert_eq!(fp.c2[&(1, 1)].nonzero.len(), c2_11_size);
         assert_eq!(
             fp.c2[&(1, 1)]
