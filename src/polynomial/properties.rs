@@ -11,7 +11,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug)]
 pub struct PolynomialProperties<'a, T> {
     pub semigroup: &'a Semigroup,
-    pub monomial_map: HashMap<DVectorView<'a, i32>, u32>,
+    pub monomial_map: HashMap<DVectorView<'a, i32>, usize>,
     pub zero_cutoff: T,
 }
 
@@ -25,7 +25,7 @@ impl<'a, T: Clone> PolynomialProperties<'a, T> {
         };
 
         for (i, c) in poly_props.semigroup.elements.column_iter().enumerate() {
-            poly_props.monomial_map.insert(c, i as u32);
+            poly_props.monomial_map.insert(c, i);
         }
 
         poly_props

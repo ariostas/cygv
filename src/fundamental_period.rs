@@ -41,7 +41,7 @@ fn group_by_neg_int(curves_dot_q: DMatrixView<i32>) -> (Vec<usize>, Vec<usize>, 
 #[allow(clippy::too_many_arguments)]
 fn compute_c_0neg<T>(
     tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(u32, Option<u32>, Option<u32>, T)>,
+    tx: Sender<(usize, Option<usize>, Option<usize>, T)>,
     template_var: &T,
     q: DMatrixView<i32>,
     q0: DMatrixView<i32>,
@@ -68,7 +68,7 @@ fn compute_c_0neg<T>(
         let n: Vec<_> = curves_dot_q0.column(t).iter().map(|&c| c as u32).collect();
         let d: Vec<_> = curves_dot_q.column(t).iter().map(|&c| c as u32).collect();
         factorial_prod(&n, &d, &mut c0fact);
-        tx.send((t as u32, None, None, c0fact.clone())).unwrap();
+        tx.send((t, None, None, c0fact.clone())).unwrap();
         // Compute A vector
         for (i, aa) in a.iter_mut().enumerate() {
             aa.assign(0);
@@ -84,8 +84,7 @@ fn compute_c_0neg<T>(
             }
             tmp_final.assign(&c0fact);
             tmp_final *= &*aa;
-            tx.send((t as u32, Some(i as u32), None, tmp_final.clone()))
-                .unwrap();
+            tx.send((t, Some(i), None, tmp_final.clone())).unwrap();
         }
         // Finally, compute B elements
         for &(aa, bb) in beta_pairs.iter() {
@@ -114,13 +113,7 @@ fn compute_c_0neg<T>(
             tmp_num0 *= &a[bb];
             tmp_final += &tmp_num0;
             tmp_final *= &c0fact;
-            tx.send((
-                t as u32,
-                Some(aa as u32),
-                Some(bb as u32),
-                tmp_final.clone(),
-            ))
-            .unwrap();
+            tx.send((t, Some(aa), Some(bb), tmp_final.clone())).unwrap();
         }
     }
 }
@@ -131,7 +124,7 @@ fn compute_c_0neg<T>(
 #[allow(clippy::too_many_arguments)]
 fn compute_c_1neg<T>(
     tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(u32, Option<u32>, Option<u32>, T)>,
+    tx: Sender<(usize, Option<usize>, Option<usize>, T)>,
     template_var: &T,
     q: DMatrixView<i32>,
     q0: DMatrixView<i32>,
@@ -206,8 +199,7 @@ fn compute_c_1neg<T>(
             tmp_final.assign(&tmp_fact);
             tmp_final *= sn;
             tmp_final *= q[(neg_idx, i)];
-            tx.send((t as u32, Some(i as u32), None, tmp_final.clone()))
-                .unwrap();
+            tx.send((t, Some(i), None, tmp_final.clone())).unwrap();
         }
         for &(aa, bb) in beta_pairs.iter() {
             tmp_final.assign(&tmp_fact);
@@ -218,13 +210,7 @@ fn compute_c_1neg<T>(
             tmp_num0 += &tmp_num1;
             tmp_num0 *= sn;
             tmp_final *= &tmp_num0;
-            tx.send((
-                t as u32,
-                Some(aa as u32),
-                Some(bb as u32),
-                tmp_final.clone(),
-            ))
-            .unwrap();
+            tx.send((t, Some(aa), Some(bb), tmp_final.clone())).unwrap();
         }
     }
 }
@@ -234,7 +220,7 @@ fn compute_c_1neg<T>(
 /// that the main thread assembles the polynomials.
 fn compute_c_2neg<T>(
     tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(u32, Option<u32>, Option<u32>, T)>,
+    tx: Sender<(usize, Option<usize>, Option<usize>, T)>,
     template_var: &T,
     q: DMatrixView<i32>,
     curves_dot_q: DMatrixView<i32>,
@@ -293,13 +279,7 @@ fn compute_c_2neg<T>(
             tmp_final.assign(&tmp_fact);
             tmp_final *=
                 q[(neg_idx1, aa)] * q[(neg_idx2, bb)] + q[(neg_idx1, bb)] * q[(neg_idx2, aa)];
-            tx.send((
-                t as u32,
-                Some(aa as u32),
-                Some(bb as u32),
-                tmp_final.clone(),
-            ))
-            .unwrap();
+            tx.send((t, Some(aa), Some(bb), tmp_final.clone())).unwrap();
         }
     }
 }
@@ -310,7 +290,7 @@ fn compute_c_2neg<T>(
 pub struct FundamentalPeriod<T> {
     pub c0: Polynomial<T>,
     pub c1: Vec<Polynomial<T>>,
-    pub c2: HashMap<(u32, u32), Polynomial<T>>,
+    pub c2: HashMap<(usize, usize), Polynomial<T>>,
     pub c0_inv: Polynomial<T>,
 }
 
@@ -374,7 +354,7 @@ where
     }
     let mut c2 = HashMap::new();
     for &(a, b) in beta_pairs.iter() {
-        c2.insert((a as u32, b as u32), Polynomial::new());
+        c2.insert((a, b), Polynomial::new());
     }
     let mut c0_inv = Polynomial::new();
 
@@ -408,7 +388,7 @@ where
                     c0.coeffs.insert(i, c);
                 }
                 (i, Some(a), None, c) => {
-                    c1[a as usize].coeffs.insert(i, c);
+                    c1[a].coeffs.insert(i, c);
                 }
                 (i, Some(a), Some(b), c) => {
                     c2.get_mut(&(a, b)).unwrap().coeffs.insert(i, c);
@@ -474,7 +454,7 @@ where
         while let Ok(msg) = rx.recv() {
             match msg {
                 (i, Some(a), None, c) => {
-                    c1[a as usize].coeffs.insert(i, c);
+                    c1[a].coeffs.insert(i, c);
                 }
                 (i, Some(a), Some(b), c) => {
                     c2.get_mut(&(a, b)).unwrap().coeffs.insert(i, c);

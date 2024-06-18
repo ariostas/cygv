@@ -57,7 +57,7 @@ pub fn compute_gvgw(
     min_points: Option<u32>,
     nefpart: Option<Vec<Vec<i32>>>,
     prec: Option<u32>,
-) -> PyResult<Vec<((Vec<i32>, u32), String)>> {
+) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
     let generators = to_matrix(generators);
     let grading_vector = to_rowvector(grading_vector);
     let q = to_matrix(q);

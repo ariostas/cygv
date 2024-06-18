@@ -18,7 +18,7 @@ pub fn run_hkty<T, const FIND_GV: bool, const IS_THREEFOLD: bool>(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: DMatrix<i32>,
-) -> Vec<((DVector<i32>, u32), T)>
+) -> Vec<((DVector<i32>, usize), T)>
 where
     T: PolynomialCoeff<T>,
 {
@@ -59,11 +59,7 @@ where
             (
                 (
                     DVector::from_column_slice(
-                        poly_props
-                            .semigroup
-                            .elements
-                            .column(k.0 as usize)
-                            .as_slice(),
+                        poly_props.semigroup.elements.column(k.0).as_slice(),
                     ),
                     k.1,
                 ),
@@ -187,7 +183,7 @@ pub fn compute_gv_rat_nfold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: DMatrix<i32>,
-) -> Vec<((DVector<i32>, u32), Integer)> {
+) -> Vec<((DVector<i32>, usize), Integer)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational, true, false>(
         generators,
@@ -214,7 +210,7 @@ pub fn compute_gv_float_nfold(
     nefpart: Vec<DVector<i32>>,
     intnums: DMatrix<i32>,
     precision: u32,
-) -> Vec<((DVector<i32>, u32), Integer)> {
+) -> Vec<((DVector<i32>, usize), Integer)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
     zero_cutoff.pow_assign(-(precision as i32) / 3);
     run_hkty::<Float, true, false>(
@@ -240,7 +236,7 @@ pub fn compute_gw_rat_nfold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: DMatrix<i32>,
-) -> Vec<((DVector<i32>, u32), Rational)> {
+) -> Vec<((DVector<i32>, usize), Rational)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational, false, false>(
         generators,
@@ -264,7 +260,7 @@ pub fn compute_gw_float_nfold(
     nefpart: Vec<DVector<i32>>,
     intnums: DMatrix<i32>,
     precision: u32,
-) -> Vec<((DVector<i32>, u32), Float)> {
+) -> Vec<((DVector<i32>, usize), Float)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
     zero_cutoff.pow_assign(-(precision as i32) / 3);
     run_hkty::<Float, false, false>(

@@ -41,7 +41,7 @@ fn compute_alpha_thread<T>(
 
 fn compute_beta_thread<T>(
     tasks: Arc<Mutex<std::collections::hash_set::Iter<(usize, usize)>>>,
-    tx: Sender<((u32, u32), Polynomial<T>)>,
+    tx: Sender<((usize, usize), Polynomial<T>)>,
     fp: &FundamentalPeriod<T>,
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
@@ -54,8 +54,8 @@ fn compute_beta_thread<T>(
             let Some(i) = tasks.lock().unwrap().next() else {
                 break;
             };
-            t0 = i.0 as u32;
-            t1 = i.1 as u32;
+            t0 = i.0;
+            t1 = i.1;
         }
         let mut a = fp.c0_inv.mul(&fp.c2[&(t0, t1)], poly_props, np);
         a.clean_up(poly_props, np);
@@ -65,9 +65,9 @@ fn compute_beta_thread<T>(
 
 fn compute_f_thread<T>(
     tasks: Arc<Mutex<std::collections::hash_set::Iter<(usize, usize)>>>,
-    tx: Sender<((u32, u32), Polynomial<T>)>,
+    tx: Sender<((usize, usize), Polynomial<T>)>,
     alpha: &[Polynomial<T>],
-    beta: &HashMap<(u32, u32), Polynomial<T>>,
+    beta: &HashMap<(usize, usize), Polynomial<T>>,
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
 ) where
@@ -79,10 +79,10 @@ fn compute_f_thread<T>(
             let Some(i) = tasks.lock().unwrap().next() else {
                 break;
             };
-            t0 = i.0 as u32;
-            t1 = i.1 as u32;
+            t0 = i.0;
+            t1 = i.1;
         }
-        let mut p = alpha[t0 as usize].mul(&alpha[t1 as usize], poly_props, np);
+        let mut p = alpha[t0].mul(&alpha[t1], poly_props, np);
         p.sub_assign(&beta[&(t0, t1)], np);
         p.mul_scalar_assign(-1);
         p.clean_up(poly_props, np);
@@ -93,7 +93,7 @@ fn compute_f_thread<T>(
 fn compute_inst_thread<T>(
     tasks: Arc<Mutex<core::slice::Iter<usize>>>,
     tx: Sender<(usize, Polynomial<T>)>,
-    f_poly: &HashMap<(u32, u32), Polynomial<T>>,
+    f_poly: &HashMap<(usize, usize), Polynomial<T>>,
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
@@ -125,7 +125,7 @@ fn compute_inst_thread<T>(
                 else {
                     continue;
                 };
-                let mut tmp_poly = f_poly[&(a as u32, b as u32)].clone(np);
+                let mut tmp_poly = f_poly[&(a, b)].clone(np);
                 if a != b {
                     tmp_poly.mul_scalar_assign(*x);
                 } else {

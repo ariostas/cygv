@@ -21,8 +21,8 @@ use std::collections::HashMap;
 /// useful to have this list to make some operations more efficient.
 #[derive(Debug, PartialEq)]
 pub struct Polynomial<T> {
-    pub coeffs: HashMap<u32, T>,
-    pub nonzero: Vec<u32>,
+    pub coeffs: HashMap<usize, T>,
+    pub nonzero: Vec<usize>,
 }
 
 impl<T> Default for Polynomial<T>
@@ -108,7 +108,7 @@ where
     /// Find the minimum degree of the polynomial.
     pub fn min_degree(&self, poly_props: &PolynomialProperties<T>) -> u32 {
         if let Some(idx) = self.nonzero.first() {
-            return poly_props.semigroup.degrees[*idx as usize];
+            return poly_props.semigroup.degrees[*idx];
         }
         poly_props.semigroup.max_degree + 1
     }
@@ -122,7 +122,7 @@ where
     ) -> Self {
         let mut res = Self::new();
         for &i in self.nonzero.iter() {
-            if poly_props.semigroup.degrees[i as usize] > max_deg {
+            if poly_props.semigroup.degrees[i] > max_deg {
                 break;
             }
             res.nonzero.push(i);
@@ -210,18 +210,18 @@ where
         };
         let mut tmp_var = coeff_pool.pop();
         for &i in pshort.nonzero.iter() {
-            deg1 = poly_props.semigroup.degrees[i as usize];
+            deg1 = poly_props.semigroup.degrees[i];
             for &j in plong.nonzero.iter() {
-                deg2 = poly_props.semigroup.degrees[j as usize];
+                deg2 = poly_props.semigroup.degrees[j];
                 if deg1 + deg2 > max_deg {
                     continue;
                 }
                 poly_props
                     .semigroup
                     .elements
-                    .column(i as usize)
+                    .column(i)
                     .iter()
-                    .zip(poly_props.semigroup.elements.column(j as usize).iter())
+                    .zip(poly_props.semigroup.elements.column(j).iter())
                     .zip(tmp_vec.iter_mut())
                     .for_each(|((x, y), z)| *z = *x + *y);
                 let Some(mon) = poly_props.monomial_map.get(&tmp_vec.as_view()) else {
