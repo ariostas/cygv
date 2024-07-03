@@ -12,6 +12,7 @@ name = "cygv"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
+boomphf = "0.6.0"
 ctrlc = "3.4.4"
 itertools = "0.13.0"
 nalgebra = "0.33.0"
