@@ -65,6 +65,9 @@ impl Semigroup {
         // Make sure that the input elements are valid.
         check_degrees(&elements, &grading_vector)?;
 
+        // Remove elements that exceed the maximum degree from the start.
+        let elements = trim_by_max_deg(&elements, &grading_vector, max_degree);
+
         let generators = find_generators(&elements);
 
         let mut elements_set = HashSet::new();
@@ -121,11 +124,6 @@ impl Semigroup {
         let generators = find_generators(&elements);
 
         let mut elements_set = HashSet::new();
-        for c in elements.column_iter() {
-            let tmp_vec = DVector::from_column_slice(c.as_slice());
-            elements_set.insert(tmp_vec);
-        }
-        // Make sure that the zero vector is in the set of elements.
         elements_set.insert(DVector::zeros(grading_vector.len()));
 
         drop(elements);
@@ -225,6 +223,26 @@ fn check_degrees(
         }
     }
     Ok(())
+}
+
+/// Returns only the elements with degree up to the specified maximum degree.
+fn trim_by_max_deg(
+    elements: &DMatrix<i32>,
+    grading_vector: &RowDVector<i32>,
+    max_degree: u32,
+) -> DMatrix<i32> {
+    let selected: Vec<_> = elements
+        .column_iter()
+        .enumerate()
+        .filter(|(_, c)| (grading_vector * c)[(0, 0)] as u32 <= max_degree)
+        .map(|(i, _)| i)
+        .collect();
+    let mut trimmed = DMatrix::<i32>::zeros(elements.nrows(), selected.len());
+    trimmed
+        .column_iter_mut()
+        .zip(selected)
+        .for_each(|(mut c, i)| c.copy_from(&elements.column(i)));
+    trimmed
 }
 
 /// Tries to find a smaller subset of elements that generates the semigroup. It
@@ -335,7 +353,7 @@ mod tests {
     fn test_semigroup_with_max_degree() {
         let (elements, grading_vector) = example_elements_and_grading_vector();
 
-        let sg_result = Semigroup::with_max_degree(elements, grading_vector, 3);
+        let sg_result = Semigroup::with_max_degree(elements.clone(), grading_vector.clone(), 3);
         assert!(sg_result.is_ok());
         let sg = sg_result.unwrap();
         assert_eq!(sg.degrees.len(), 10);
@@ -343,13 +361,19 @@ mod tests {
             sg.degrees,
             RowDVector::from_row_slice(&[0, 1, 1, 2, 2, 2, 3, 3, 3, 3])
         );
+
+        let sg_result = Semigroup::with_max_degree(elements, grading_vector, 1);
+        assert!(sg_result.is_ok());
+        let sg = sg_result.unwrap();
+        assert_eq!(sg.degrees.len(), 3);
+        assert_eq!(sg.degrees, RowDVector::from_row_slice(&[0, 1, 1]));
     }
 
     #[test]
     fn test_semigroup_with_min_elements() {
         let (elements, grading_vector) = example_elements_and_grading_vector();
 
-        let sg_result = Semigroup::with_min_elements(elements, grading_vector, 11);
+        let sg_result = Semigroup::with_min_elements(elements.clone(), grading_vector.clone(), 11);
         assert!(sg_result.is_ok());
         let sg = sg_result.unwrap();
         assert_eq!(sg.degrees.len(), 15);
@@ -357,6 +381,12 @@ mod tests {
             sg.degrees,
             RowDVector::from_row_slice(&[0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4])
         );
+
+        let sg_result = Semigroup::with_min_elements(elements, grading_vector, 3);
+        assert!(sg_result.is_ok());
+        let sg = sg_result.unwrap();
+        assert_eq!(sg.degrees.len(), 3);
+        assert_eq!(sg.degrees, RowDVector::from_row_slice(&[0, 1, 1]));
     }
 
     #[test]

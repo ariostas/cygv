@@ -1,4 +1,5 @@
 use crate::run_hkty;
+use ctrlc;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
 use rug::{ops::PowAssign, Float, Rational};
@@ -45,6 +46,7 @@ fn to_vec(v: DVector<i32>) -> Vec<i32> {
 /// Compute GV or GW invariants
 #[pyfunction]
 #[pyo3(name = "_compute_gvgw")]
+#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, nefpart=None, prec=None))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
@@ -58,6 +60,7 @@ pub fn compute_gvgw(
     nefpart: Option<Vec<Vec<i32>>>,
     prec: Option<u32>,
 ) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
+    ctrlc::set_handler(|| std::process::exit(1)).unwrap();
     let generators = to_matrix(generators);
     let grading_vector = to_rowvector(grading_vector);
     let q = to_matrix(q);

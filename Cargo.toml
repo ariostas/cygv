@@ -12,12 +12,13 @@ name = "cygv"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
+ctrlc = "3.4.4"
 itertools = "0.13.0"
-nalgebra = "0.32.3"
+nalgebra = "0.33.0"
 rug = "1.24.0"
 
 [dependencies.pyo3]
-version = "0.21.1"
+version = "0.22.0"
 features = ["abi3-py38"]
 
 [package.metadata.docs.rs]
