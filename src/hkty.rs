@@ -6,6 +6,7 @@ use crate::{
 };
 use nalgebra::{DMatrix, DVector, RowDVector};
 use rug::{ops::PowAssign, Float, Integer, Rational};
+use std::collections::HashMap;
 
 // TODO: Need to handle errors properly
 #[allow(clippy::too_many_arguments)]
@@ -17,7 +18,7 @@ pub fn run_hkty<T, const FIND_GV: bool, const IS_THREEFOLD: bool>(
     min_points: Option<u32>,
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
-    intnums: DMatrix<i32>,
+    intnums: HashMap<(usize, usize, usize), i32>,
 ) -> Vec<((DVector<i32>, usize), T)>
 where
     T: PolynomialCoeff<T>,
@@ -76,7 +77,7 @@ pub fn compute_gv_rat_threefold(
     min_points: Option<u32>,
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
-    intnums: DMatrix<i32>,
+    intnums: HashMap<(usize, usize, usize), i32>,
 ) -> Vec<(DVector<i32>, Integer)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational, true, true>(
@@ -102,7 +103,7 @@ pub fn compute_gv_float_threefold(
     min_points: Option<u32>,
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
-    intnums: DMatrix<i32>,
+    intnums: HashMap<(usize, usize, usize), i32>,
     precision: u32,
 ) -> Vec<(DVector<i32>, Integer)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -129,7 +130,7 @@ pub fn compute_gw_rat_threefold(
     min_points: Option<u32>,
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
-    intnums: DMatrix<i32>,
+    intnums: HashMap<(usize, usize, usize), i32>,
 ) -> Vec<(DVector<i32>, Rational)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational, false, true>(
@@ -155,7 +156,7 @@ pub fn compute_gw_float_threefold(
     min_points: Option<u32>,
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
-    intnums: DMatrix<i32>,
+    intnums: HashMap<(usize, usize, usize), i32>,
     precision: u32,
 ) -> Vec<(DVector<i32>, Float)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -182,7 +183,7 @@ pub fn compute_gv_rat_nfold(
     min_points: Option<u32>,
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
-    intnums: DMatrix<i32>,
+    intnums: HashMap<(usize, usize, usize), i32>,
 ) -> Vec<((DVector<i32>, usize), Integer)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational, true, false>(
@@ -208,7 +209,7 @@ pub fn compute_gv_float_nfold(
     min_points: Option<u32>,
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
-    intnums: DMatrix<i32>,
+    intnums: HashMap<(usize, usize, usize), i32>,
     precision: u32,
 ) -> Vec<((DVector<i32>, usize), Integer)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -235,7 +236,7 @@ pub fn compute_gw_rat_nfold(
     min_points: Option<u32>,
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
-    intnums: DMatrix<i32>,
+    intnums: HashMap<(usize, usize, usize), i32>,
 ) -> Vec<((DVector<i32>, usize), Rational)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational, false, false>(
@@ -258,7 +259,7 @@ pub fn compute_gw_float_nfold(
     min_points: Option<u32>,
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
-    intnums: DMatrix<i32>,
+    intnums: HashMap<(usize, usize, usize), i32>,
     precision: u32,
 ) -> Vec<((DVector<i32>, usize), Float)> {
     let mut zero_cutoff = Float::with_val(precision, 10);

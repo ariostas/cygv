@@ -3,6 +3,7 @@ use ctrlc;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
 use rug::{ops::PowAssign, Float, Rational};
+use std::collections::HashMap;
 
 fn to_matrix(m: Vec<Vec<i32>>) -> DMatrix<i32> {
     let n_cols = m.len();
@@ -52,7 +53,7 @@ pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
     grading_vector: Vec<i32>,
     q: Vec<Vec<i32>>,
-    intnums: Vec<Vec<i32>>,
+    intnums: HashMap<(usize, usize, usize), i32>,
     find_gv: bool,
     is_threefold: bool,
     max_deg: Option<u32>,
@@ -64,7 +65,6 @@ pub fn compute_gvgw(
     let generators = to_matrix(generators);
     let grading_vector = to_rowvector(grading_vector);
     let q = to_matrix(q);
-    let intnums = to_matrix(intnums);
     let nefpart = nefpart.unwrap_or_default();
     let nefpart: Vec<_> = nefpart.into_iter().map(to_vector).collect();
 

@@ -319,7 +319,7 @@ where
 mod tests {
     use super::*;
     use crate::{fundamental_period::compute_omega, misc::process_int_nums, Semigroup};
-    use nalgebra::{dmatrix, DMatrix, RowDVector};
+    use nalgebra::{DMatrix, RowDVector};
     use rug::Rational;
 
     #[test]
@@ -338,10 +338,12 @@ mod tests {
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 
-        let intnums = dmatrix![ 0, 0, 0, 1;
-                                0, 0,  1,  1;
-                                0, 1,  1,  1;
-                                2, 1, -1, -5;];
+        let intnums = HashMap::from([
+            ((0, 0, 0), 2),
+            ((0, 0, 1), 1),
+            ((0, 1, 1), -1),
+            ((1, 1, 1), -5),
+        ]);
         let result = process_int_nums(intnums.clone(), true);
         assert!(result.is_ok());
         let (intnum_dict, intnum_idxpairs, n_indices) = result.unwrap();
