@@ -9,7 +9,6 @@ use crate::pool::NumberPool;
 use coefficient::PolynomialCoeff;
 use core::ops::{DivAssign, MulAssign};
 use error::PolynomialError;
-use nalgebra::DVector;
 use properties::PolynomialProperties;
 use std::collections::HashMap;
 
@@ -202,7 +201,7 @@ where
         let mut deg1;
         let mut deg2;
         let max_deg = poly_props.semigroup.max_degree;
-        let mut tmp_vec = DVector::zeros(poly_props.semigroup.elements.nrows());
+        let mut tmp_vec;
         let (pshort, plong) = if self.nonzero.len() < rhs.nonzero.len() {
             (self, rhs)
         } else {
@@ -216,14 +215,8 @@ where
                 if deg1 + deg2 > max_deg {
                     continue;
                 }
-                poly_props
-                    .semigroup
-                    .elements
-                    .column(i)
-                    .iter()
-                    .zip(poly_props.semigroup.elements.column(j).iter())
-                    .zip(tmp_vec.iter_mut())
-                    .for_each(|((x, y), z)| *z = *x + *y);
+                tmp_vec = poly_props.semigroup.elements.column(i)
+                    + poly_props.semigroup.elements.column(j);
                 let Some(mon) = poly_props.monomial_map.get(&tmp_vec.as_view()) else {
                     continue;
                 };
