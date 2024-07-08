@@ -185,6 +185,7 @@ pub fn compute_instanton_data<T>(
     n_indices: usize,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
     is_threefold: bool,
+    pool_size: usize,
 ) -> Result<InstantonData<T>, PolynomialError>
 where
     T: PolynomialCoeff<T>,
@@ -195,7 +196,7 @@ where
         .get();
 
     let mut pools: Vec<_> = (0..n_threads)
-        .map(|_| NumberPool::new(poly_props.zero_cutoff.clone(), 1000))
+        .map(|_| NumberPool::new(poly_props.zero_cutoff.clone(), pool_size))
         .collect();
 
     // Compute alpha polynomials
@@ -334,7 +335,7 @@ mod tests {
         let nefpart = Vec::new();
         let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
-        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs);
+        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs, 100);
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 
@@ -355,6 +356,7 @@ mod tests {
             n_indices,
             &intnum_dict,
             true,
+            100,
         );
         assert!(inst_data.is_ok());
         let inst_data = inst_data.unwrap();
