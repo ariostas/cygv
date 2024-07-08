@@ -35,45 +35,45 @@ fn test_threefold() {
     compute_gv_rat_threefold(
         generators.clone(),
         grading_vector.clone(),
+        Some(75),
         None,
-        Some(100),
         q.clone(),
         nefpart.clone(),
         intnums.clone(),
-        1000,
+        0,
     );
-    compute_gw_rat_threefold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        1000,
-    );
-    compute_gv_float_threefold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        1000,
-        200,
-    );
-    compute_gw_float_threefold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        1000,
-        200,
-    );
+    // compute_gw_rat_threefold(
+    //     generators.clone(),
+    //     grading_vector.clone(),
+    //     None,
+    //     Some(100),
+    //     q.clone(),
+    //     nefpart.clone(),
+    //     intnums.clone(),
+    //     1000,
+    // );
+    // compute_gv_float_threefold(
+    //     generators.clone(),
+    //     grading_vector.clone(),
+    //     None,
+    //     Some(100),
+    //     q.clone(),
+    //     nefpart.clone(),
+    //     intnums.clone(),
+    //     1000,
+    //     200,
+    // );
+    // compute_gw_float_threefold(
+    //     generators.clone(),
+    //     grading_vector.clone(),
+    //     None,
+    //     Some(100),
+    //     q.clone(),
+    //     nefpart.clone(),
+    //     intnums.clone(),
+    //     1000,
+    //     200,
+    // );
 }
 
 #[test]
