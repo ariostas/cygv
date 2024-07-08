@@ -19,6 +19,7 @@ pub fn run_hkty<T, const FIND_GV: bool, const IS_THREEFOLD: bool>(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    pool_size: usize,
 ) -> Vec<((DVector<i32>, usize), T)>
 where
     T: PolynomialCoeff<T>,
@@ -36,8 +37,15 @@ where
     let (intnum_dict, intnum_idxpairs, n_indices) =
         misc::process_int_nums(intnums, IS_THREEFOLD).unwrap();
 
-    let fp = fundamental_period::compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs)
-        .unwrap();
+    let fp = fundamental_period::compute_omega(
+        &poly_props,
+        &sg,
+        &q,
+        &nefpart,
+        &intnum_idxpairs,
+        pool_size,
+    )
+    .unwrap();
 
     let inst_data = instanton::compute_instanton_data(
         fp,
@@ -46,11 +54,16 @@ where
         n_indices,
         &intnum_dict,
         IS_THREEFOLD,
+        pool_size,
     )
     .unwrap();
 
-    let gv = series_inversion::invert_series::<T, FIND_GV, IS_THREEFOLD>(inst_data, &poly_props)
-        .unwrap();
+    let gv = series_inversion::invert_series::<T, FIND_GV, IS_THREEFOLD>(
+        inst_data,
+        &poly_props,
+        pool_size,
+    )
+    .unwrap();
 
     let mut gv_sorted: Vec<_> = gv.into_iter().collect();
     gv_sorted.sort_unstable_by_key(|c| c.0 .0);
@@ -70,6 +83,7 @@ where
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compute_gv_rat_threefold(
     generators: DMatrix<i32>,
     grading_vector: RowDVector<i32>,
@@ -78,6 +92,7 @@ pub fn compute_gv_rat_threefold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    pool_size: usize,
 ) -> Vec<(DVector<i32>, Integer)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational, true, true>(
@@ -89,6 +104,7 @@ pub fn compute_gv_rat_threefold(
         q,
         nefpart,
         intnums,
+        pool_size,
     )
     .into_iter()
     .map(|((v, _), gv)| (v, gv.into_numer_denom().0))
@@ -104,6 +120,7 @@ pub fn compute_gv_float_threefold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    pool_size: usize,
     precision: u32,
 ) -> Vec<(DVector<i32>, Integer)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -117,12 +134,14 @@ pub fn compute_gv_float_threefold(
         q,
         nefpart,
         intnums,
+        pool_size,
     )
     .into_iter()
     .map(|((v, _), gv)| (v, gv.to_integer().unwrap()))
     .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compute_gw_rat_threefold(
     generators: DMatrix<i32>,
     grading_vector: RowDVector<i32>,
@@ -131,6 +150,7 @@ pub fn compute_gw_rat_threefold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    pool_size: usize,
 ) -> Vec<(DVector<i32>, Rational)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational, false, true>(
@@ -142,6 +162,7 @@ pub fn compute_gw_rat_threefold(
         q,
         nefpart,
         intnums,
+        pool_size,
     )
     .into_iter()
     .map(|((v, _), gv)| (v, gv))
@@ -157,6 +178,7 @@ pub fn compute_gw_float_threefold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    pool_size: usize,
     precision: u32,
 ) -> Vec<(DVector<i32>, Float)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -170,12 +192,14 @@ pub fn compute_gw_float_threefold(
         q,
         nefpart,
         intnums,
+        pool_size,
     )
     .into_iter()
     .map(|((v, _), gv)| (v, gv))
     .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compute_gv_rat_nfold(
     generators: DMatrix<i32>,
     grading_vector: RowDVector<i32>,
@@ -184,6 +208,7 @@ pub fn compute_gv_rat_nfold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    pool_size: usize,
 ) -> Vec<((DVector<i32>, usize), Integer)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational, true, false>(
@@ -195,6 +220,7 @@ pub fn compute_gv_rat_nfold(
         q,
         nefpart,
         intnums,
+        pool_size,
     )
     .into_iter()
     .map(|((v, c), gv)| ((v, c), gv.into_numer_denom().0))
@@ -210,6 +236,7 @@ pub fn compute_gv_float_nfold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    pool_size: usize,
     precision: u32,
 ) -> Vec<((DVector<i32>, usize), Integer)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -223,12 +250,14 @@ pub fn compute_gv_float_nfold(
         q,
         nefpart,
         intnums,
+        pool_size,
     )
     .into_iter()
     .map(|((v, c), gv)| ((v, c), gv.to_integer().unwrap()))
     .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compute_gw_rat_nfold(
     generators: DMatrix<i32>,
     grading_vector: RowDVector<i32>,
@@ -237,6 +266,7 @@ pub fn compute_gw_rat_nfold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    pool_size: usize,
 ) -> Vec<((DVector<i32>, usize), Rational)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational, false, false>(
@@ -248,6 +278,7 @@ pub fn compute_gw_rat_nfold(
         q,
         nefpart,
         intnums,
+        pool_size,
     )
 }
 
@@ -260,6 +291,7 @@ pub fn compute_gw_float_nfold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    pool_size: usize,
     precision: u32,
 ) -> Vec<((DVector<i32>, usize), Float)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -273,5 +305,6 @@ pub fn compute_gw_float_nfold(
         q,
         nefpart,
         intnums,
+        pool_size,
     )
 }

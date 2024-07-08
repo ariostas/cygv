@@ -149,6 +149,7 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
 pub fn invert_series<T, const FIND_GV: bool, const IS_THREEFOLD: bool>(
     inst_data: InstantonData<T>,
     poly_props: &PolynomialProperties<T>,
+    pool_size: usize,
 ) -> Result<HashMap<(usize, usize), T>, SeriesInversionError>
 where
     T: PolynomialCoeff<T>,
@@ -172,9 +173,9 @@ where
         .unwrap_or(std::num::NonZeroUsize::new(1).unwrap())
         .get();
     let mut pools: Vec<_> = (0..n_threads)
-        .map(|_| NumberPool::new(poly_props.zero_cutoff.clone(), 1000))
+        .map(|_| NumberPool::new(poly_props.zero_cutoff.clone(), pool_size))
         .collect();
-    let mut main_pool = NumberPool::new(poly_props.zero_cutoff.clone(), 1000);
+    let mut main_pool = NumberPool::new(poly_props.zero_cutoff.clone(), pool_size);
 
     let InstantonData { mut inst, expalpha } = inst_data;
 

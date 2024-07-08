@@ -40,6 +40,7 @@ fn test_threefold() {
         q.clone(),
         nefpart.clone(),
         intnums.clone(),
+        1000,
     );
     compute_gw_rat_threefold(
         generators.clone(),
@@ -49,6 +50,7 @@ fn test_threefold() {
         q.clone(),
         nefpart.clone(),
         intnums.clone(),
+        1000,
     );
     compute_gv_float_threefold(
         generators.clone(),
@@ -58,6 +60,7 @@ fn test_threefold() {
         q.clone(),
         nefpart.clone(),
         intnums.clone(),
+        1000,
         200,
     );
     compute_gw_float_threefold(
@@ -68,6 +71,7 @@ fn test_threefold() {
         q.clone(),
         nefpart.clone(),
         intnums.clone(),
+        1000,
         200,
     );
 }
@@ -188,6 +192,7 @@ fn test_fourfold() {
         q.clone(),
         nefpart.clone(),
         intnums.clone(),
+        1000,
     );
     compute_gw_rat_nfold(
         generators.clone(),
@@ -197,6 +202,7 @@ fn test_fourfold() {
         q.clone(),
         nefpart.clone(),
         intnums.clone(),
+        1000,
     );
     compute_gv_float_nfold(
         generators.clone(),
@@ -206,6 +212,7 @@ fn test_fourfold() {
         q.clone(),
         nefpart.clone(),
         intnums.clone(),
+        1000,
         200,
     );
     compute_gw_float_nfold(
@@ -216,6 +223,7 @@ fn test_fourfold() {
         q.clone(),
         nefpart.clone(),
         intnums.clone(),
+        1000,
         200,
     );
 }

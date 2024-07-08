@@ -303,6 +303,7 @@ pub fn compute_omega<T>(
     q: &DMatrix<i32>,
     nefpart: &[DVector<i32>],
     intnum_idxpairs: &HashSet<(usize, usize)>,
+    pool_size: usize,
 ) -> Result<FundamentalPeriod<T>, FundamentalPeriodError>
 where
     T: PolynomialCoeff<T>,
@@ -313,7 +314,7 @@ where
     let ambient_dim = (h11pd as i32) - (h11 as i32);
     let cy_codim = if nefpart.is_empty() { 1 } else { nefpart.len() };
     let cy_dim = ambient_dim - (cy_codim as i32);
-    let mut coeff_pool = NumberPool::new(poly_props.zero_cutoff.clone(), 1000);
+    let mut coeff_pool = NumberPool::new(poly_props.zero_cutoff.clone(), pool_size);
 
     // Run some basic checks on the input data
     if cy_dim < 3 {
@@ -519,7 +520,7 @@ mod tests {
         let nefpart = Vec::new();
         let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
-        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs);
+        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs, 100);
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 
