@@ -303,7 +303,7 @@ pub fn compute_omega<T>(
     q: &DMatrix<i32>,
     nefpart: &[DVector<i32>],
     intnum_idxpairs: &HashSet<(usize, usize)>,
-    pool_size: usize,
+    all_pools: &mut (NumberPool<T>, Vec<NumberPool<T>>),
 ) -> Result<FundamentalPeriod<T>, FundamentalPeriodError>
 where
     T: PolynomialCoeff<T>,
@@ -314,7 +314,7 @@ where
     let ambient_dim = (h11pd as i32) - (h11 as i32);
     let cy_codim = if nefpart.is_empty() { 1 } else { nefpart.len() };
     let cy_dim = ambient_dim - (cy_codim as i32);
-    let mut coeff_pool = NumberPool::new(poly_props.zero_cutoff.clone(), pool_size);
+    let coeff_pool = &mut all_pools.0;
 
     // Run some basic checks on the input data
     if cy_dim < 3 {
@@ -345,9 +345,7 @@ where
     let beta_pairs: Vec<_> = intnum_idxpairs.iter().cloned().collect();
     let (neg0, neg1, neg2) = group_by_neg_int(curves_dot_q.as_view());
 
-    let n_threads = thread::available_parallelism()
-        .unwrap_or(std::num::NonZeroUsize::new(1).unwrap())
-        .get();
+    let n_threads = all_pools.1.len();
     let mut c0 = Polynomial::new();
     let mut c1 = Vec::new();
     for _ in 0..h11 {
@@ -400,7 +398,7 @@ where
     });
     c0.nonzero = c0.coeffs.keys().cloned().collect();
     c0.nonzero.sort_unstable();
-    c0.clean_up(poly_props, &mut coeff_pool);
+    c0.clean_up(poly_props, coeff_pool);
 
     // Now compute the inverse and derivatives in parallel
     let tasks_c1 = Arc::new(Mutex::new(neg1.iter()));
@@ -409,8 +407,8 @@ where
     thread::scope(|s| {
         // Compute inverse of fundamental period
         s.spawn(|| {
-            let tmp_poly = c0.recipr(poly_props, &mut coeff_pool).unwrap();
-            tmp_poly.move_into(&mut c0_inv, &mut coeff_pool);
+            let tmp_poly = c0.recipr(poly_props, coeff_pool).unwrap();
+            tmp_poly.move_into(&mut c0_inv, coeff_pool);
         });
 
         let (tx, rx) = channel();
@@ -467,12 +465,12 @@ where
     for p in c1.iter_mut() {
         p.nonzero = p.coeffs.keys().cloned().collect();
         p.nonzero.sort_unstable();
-        p.clean_up(poly_props, &mut coeff_pool);
+        p.clean_up(poly_props, coeff_pool);
     }
     for p in c2.values_mut() {
         p.nonzero = p.coeffs.keys().cloned().collect();
         p.nonzero.sort_unstable();
-        p.clean_up(poly_props, &mut coeff_pool);
+        p.clean_up(poly_props, coeff_pool);
     }
 
     for p in c1.iter_mut() {
@@ -484,12 +482,12 @@ where
         p.nonzero.sort_unstable();
     }
 
-    c0_inv.clean_up(poly_props, &mut coeff_pool);
+    c0_inv.clean_up(poly_props, coeff_pool);
     for p in c1.iter_mut() {
-        p.clean_up(poly_props, &mut coeff_pool);
+        p.clean_up(poly_props, coeff_pool);
     }
     for p in c2.values_mut() {
-        p.clean_up(poly_props, &mut coeff_pool);
+        p.clean_up(poly_props, coeff_pool);
     }
 
     Ok(FundamentalPeriod { c0, c1, c2, c0_inv })
@@ -520,7 +518,19 @@ mod tests {
         let nefpart = Vec::new();
         let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
-        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs, 100);
+        let mut all_pools = (
+            NumberPool::new(zero_rat.clone(), 100),
+            vec![NumberPool::new(zero_rat.clone(), 100)],
+        );
+
+        let fp = compute_omega(
+            &poly_props,
+            &sg,
+            &q,
+            &nefpart,
+            &intnum_idxpairs,
+            &mut all_pools,
+        );
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 

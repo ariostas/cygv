@@ -47,7 +47,7 @@ fn to_vec(v: DVector<i32>) -> Vec<i32> {
 /// Compute GV or GW invariants
 #[pyfunction]
 #[pyo3(name = "_compute_gvgw")]
-#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, nefpart=None, pool_size=1000, prec=None))]
+#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, nefpart=None, n_threads=None, pool_size=1000, prec=None))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
@@ -59,6 +59,7 @@ pub fn compute_gvgw(
     max_deg: Option<u32>,
     min_points: Option<u32>,
     nefpart: Option<Vec<Vec<i32>>>,
+    n_threads: Option<u32>,
     pool_size: usize,
     prec: Option<u32>,
 ) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
@@ -83,6 +84,7 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
                 pool_size,
             ),
             (false, true) => run_hkty::<Float, false, true>(
@@ -94,6 +96,7 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
                 pool_size,
             ),
             (true, false) => run_hkty::<Float, true, false>(
@@ -105,6 +108,7 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
                 pool_size,
             ),
             (false, false) => run_hkty::<Float, false, false>(
@@ -116,6 +120,7 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
                 pool_size,
             ),
         };
@@ -144,6 +149,7 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
                 pool_size,
             ),
             (false, true) => run_hkty::<Rational, false, true>(
@@ -155,6 +161,7 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
                 pool_size,
             ),
             (true, false) => run_hkty::<Rational, true, false>(
@@ -166,6 +173,7 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
                 pool_size,
             ),
             (false, false) => run_hkty::<Rational, false, false>(
@@ -177,6 +185,7 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
                 pool_size,
             ),
         };

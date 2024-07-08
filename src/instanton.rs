@@ -185,19 +185,14 @@ pub fn compute_instanton_data<T>(
     n_indices: usize,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
     is_threefold: bool,
-    pool_size: usize,
+    all_pools: &mut (NumberPool<T>, Vec<NumberPool<T>>),
 ) -> Result<InstantonData<T>, PolynomialError>
 where
     T: PolynomialCoeff<T>,
 {
     let h11 = poly_props.semigroup.elements.nrows();
-    let n_threads = thread::available_parallelism()
-        .unwrap_or(std::num::NonZeroUsize::new(1).unwrap())
-        .get();
 
-    let mut pools: Vec<_> = (0..n_threads)
-        .map(|_| NumberPool::new(poly_props.zero_cutoff.clone(), pool_size))
-        .collect();
+    let pools = &mut all_pools.1;
 
     // Compute alpha polynomials
     let mut alpha: Vec<_> = (0..h11).map(|_| Polynomial::<T>::new()).collect();
@@ -335,7 +330,19 @@ mod tests {
         let nefpart = Vec::new();
         let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
-        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs, 100);
+        let mut all_pools = (
+            NumberPool::new(zero_rat.clone(), 100),
+            vec![NumberPool::new(zero_rat.clone(), 100)],
+        );
+
+        let fp = compute_omega(
+            &poly_props,
+            &sg,
+            &q,
+            &nefpart,
+            &intnum_idxpairs,
+            &mut all_pools,
+        );
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 
@@ -356,7 +363,7 @@ mod tests {
             n_indices,
             &intnum_dict,
             true,
-            100,
+            &mut all_pools,
         );
         assert!(inst_data.is_ok());
         let inst_data = inst_data.unwrap();

@@ -149,7 +149,7 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
 pub fn invert_series<T, const FIND_GV: bool, const IS_THREEFOLD: bool>(
     inst_data: InstantonData<T>,
     poly_props: &PolynomialProperties<T>,
-    pool_size: usize,
+    all_pools: &mut (NumberPool<T>, Vec<NumberPool<T>>),
 ) -> Result<HashMap<(usize, usize), T>, SeriesInversionError>
 where
     T: PolynomialCoeff<T>,
@@ -169,13 +169,7 @@ where
     let mut previous_qn: VecDeque<_> = (1..=n_previous_levels).map(|_| HashMap::new()).collect();
     let mut previous_qn_ind: VecDeque<_> = (1..=n_previous_levels).map(|_| Vec::new()).collect();
 
-    let n_threads = thread::available_parallelism()
-        .unwrap_or(std::num::NonZeroUsize::new(1).unwrap())
-        .get();
-    let mut pools: Vec<_> = (0..n_threads)
-        .map(|_| NumberPool::new(poly_props.zero_cutoff.clone(), pool_size))
-        .collect();
-    let mut main_pool = NumberPool::new(poly_props.zero_cutoff.clone(), pool_size);
+    let (main_pool, pools) = all_pools;
 
     let InstantonData { mut inst, expalpha } = inst_data;
 
@@ -318,25 +312,25 @@ where
                     error = li2qn_r.err();
                     break;
                 };
-                computed_qn.insert(j, qn.clone(&mut main_pool));
+                computed_qn.insert(j, qn.clone(main_pool));
                 if IS_THREEFOLD {
                     for (k, inst_k) in inst.iter_mut().enumerate() {
                         if poly_props.semigroup.elements[(k, j)] == 0 {
                             continue;
                         }
-                        let mut tmp_poly = li2qn.clone(&mut main_pool);
+                        let mut tmp_poly = li2qn.clone(main_pool);
                         tmp_gv.assign(&gv_qn_to_compute[&j]);
                         tmp_gv *= poly_props.semigroup.elements[(k, j)];
                         tmp_poly.mul_scalar_assign(&tmp_gv);
-                        inst_k.sub_assign(&tmp_poly, &mut main_pool);
-                        tmp_poly.drop(&mut main_pool);
+                        inst_k.sub_assign(&tmp_poly, main_pool);
+                        tmp_poly.drop(main_pool);
                     }
                 } else {
                     for kk in h22gv_qn_to_compute[&j].iter() {
-                        let mut tmp_poly = li2qn.clone(&mut main_pool);
+                        let mut tmp_poly = li2qn.clone(main_pool);
                         tmp_poly.mul_scalar_assign(&kk.1);
-                        inst[kk.0].sub_assign(&tmp_poly, &mut main_pool);
-                        tmp_poly.drop(&mut main_pool);
+                        inst[kk.0].sub_assign(&tmp_poly, main_pool);
+                        tmp_poly.drop(main_pool);
                     }
                 }
             }
