@@ -88,16 +88,16 @@ where
         pos_cutoff.assign(&poly_props.zero_cutoff);
         neg_cutoff.assign(&poly_props.zero_cutoff);
         neg_cutoff *= -1;
-        for i in self.nonzero.iter() {
-            let c = self.coeffs.get(i).unwrap();
+        for i in self.nonzero.drain(..) {
+            let c = self.coeffs.get(&i).unwrap();
             if *c <= pos_cutoff && *c >= neg_cutoff {
-                to_delete.push(*i);
+                to_delete.push(i);
             } else {
-                new_nonzero.push(*i);
+                new_nonzero.push(i);
             }
         }
         for i in to_delete.iter() {
-            self.coeffs.remove(i);
+            coeff_pool.push(self.coeffs.remove(i).unwrap());
         }
         self.nonzero = new_nonzero;
         coeff_pool.push(pos_cutoff);
@@ -106,10 +106,10 @@ where
 
     /// Find the minimum degree of the polynomial.
     pub fn min_degree(&self, poly_props: &PolynomialProperties<T>) -> u32 {
-        if let Some(idx) = self.nonzero.first() {
-            return poly_props.semigroup.degrees[*idx];
-        }
-        poly_props.semigroup.max_degree + 1
+        let Some(idx) = self.nonzero.first() else {
+            return poly_props.semigroup.max_degree + 1;
+        };
+        poly_props.semigroup.degrees[*idx]
     }
 
     /// Clone the polynomial, but truncated to a given degree.
@@ -248,15 +248,12 @@ where
         let mut tmp_var = coeff_pool.pop();
         let mut resort = false;
         for (k, v) in rhs.coeffs.iter() {
-            let Some(c) = self.coeffs.get_mut(k) else {
+            let c = self.coeffs.entry(*k).or_insert_with(|| {
                 let mut new_var = coeff_pool.pop();
-                new_var.assign(v);
-                new_var *= scalar;
-                self.nonzero.push(*k);
-                self.coeffs.insert(*k, new_var);
+                new_var.assign(0);
                 resort = true;
-                continue;
-            };
+                new_var
+            });
             tmp_var.assign(v);
             tmp_var *= scalar;
             *c += &tmp_var;
@@ -281,15 +278,12 @@ where
         let mut tmp_var = coeff_pool.pop();
         let mut resort = false;
         for (k, v) in rhs.coeffs.iter() {
-            let Some(c) = self.coeffs.get_mut(k) else {
+            let c = self.coeffs.entry(*k).or_insert_with(|| {
                 let mut new_var = coeff_pool.pop();
-                new_var.assign(v);
-                new_var /= scalar;
-                self.nonzero.push(*k);
-                self.coeffs.insert(*k, new_var);
+                new_var.assign(0);
                 resort = true;
-                continue;
-            };
+                new_var
+            });
             tmp_var.assign(v);
             tmp_var /= scalar;
             *c += &tmp_var;
