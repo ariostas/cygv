@@ -6,7 +6,6 @@ pub mod hkty;
 pub mod instanton;
 pub mod misc;
 pub mod polynomial;
-pub mod pool;
 pub mod python;
 pub mod semigroup;
 pub mod series_inversion;
@@ -16,8 +15,6 @@ pub mod series_inversion;
 pub use polynomial::{
     prettyprint::PrettyPrintPolynomial, properties::PolynomialProperties, Polynomial,
 };
-#[doc(inline)]
-pub use pool::NumberPool;
 #[doc(inline)]
 pub use semigroup::Semigroup;
 

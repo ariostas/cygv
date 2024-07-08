@@ -5,7 +5,6 @@ pub mod error;
 pub mod prettyprint;
 pub mod properties;
 
-use crate::pool::NumberPool;
 use coefficient::PolynomialCoeff;
 use core::ops::{DivAssign, MulAssign};
 use error::PolynomialError;
@@ -33,6 +32,18 @@ where
     }
 }
 
+impl<T> Clone for Polynomial<T>
+where
+    T: PolynomialCoeff<T>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            coeffs: self.coeffs.clone(),
+            nonzero: self.nonzero.clone(),
+        }
+    }
+}
+
 impl<T> Polynomial<T>
 where
     T: PolynomialCoeff<T>,
@@ -45,11 +56,15 @@ where
         }
     }
 
+    /// Create a new polynomial equal to zero.
+    pub fn zero() -> Self {
+        Self::new()
+    }
+
     /// Create a new polynomial with one as its constant term.
-    pub fn one(coeff_pool: &mut NumberPool<T>) -> Self {
+    pub fn one(poly_props: &PolynomialProperties<T>) -> Self {
         let mut coeffs = HashMap::new();
-        let mut one = coeff_pool.pop();
-        one.assign(1i32);
+        let one = poly_props.one();
         coeffs.insert(0, one);
         Self {
             coeffs,
@@ -57,90 +72,63 @@ where
         }
     }
 
-    /// Drop the polynomial, while moving the allocated coefficients to the
-    /// pool.
-    pub fn drop(self, coeff_pool: &mut NumberPool<T>) {
-        for c in self.coeffs.into_values() {
-            coeff_pool.push(c);
-        }
-    }
-
     /// Clear the polynomial, while moving the allocated coefficients to the
     /// pool.
-    pub fn clear(&mut self, coeff_pool: &mut NumberPool<T>) {
-        for (_, c) in self.coeffs.drain() {
-            coeff_pool.push(c);
-        }
+    pub fn clear(&mut self) {
+        self.coeffs.clear();
         self.nonzero.clear();
     }
 
     /// Clean up the polynomial, removing monomials whose coefficient are
     /// below a given cutoff.
-    pub fn clean_up(
-        &mut self,
-        poly_props: &PolynomialProperties<T>,
-        coeff_pool: &mut NumberPool<T>,
-    ) {
+    pub fn clean_up(&mut self, poly_props: &PolynomialProperties<T>) {
         let mut new_nonzero = Vec::new();
         let mut to_delete = Vec::new();
-        let mut pos_cutoff = coeff_pool.pop();
-        let mut neg_cutoff = coeff_pool.pop();
-        pos_cutoff.assign(&poly_props.zero_cutoff);
-        neg_cutoff.assign(&poly_props.zero_cutoff);
-        neg_cutoff *= -1;
-        for i in self.nonzero.iter() {
-            let c = self.coeffs.get(i).unwrap();
+        let pos_cutoff = poly_props.zero_cutoff.clone();
+        let neg_cutoff = -poly_props.zero_cutoff.clone();
+        for i in self.nonzero.drain(..) {
+            let c = self.coeffs.get(&i).unwrap();
             if *c <= pos_cutoff && *c >= neg_cutoff {
-                to_delete.push(*i);
+                to_delete.push(i);
             } else {
-                new_nonzero.push(*i);
+                new_nonzero.push(i);
             }
         }
         for i in to_delete.iter() {
             self.coeffs.remove(i);
         }
         self.nonzero = new_nonzero;
-        coeff_pool.push(pos_cutoff);
-        coeff_pool.push(neg_cutoff);
     }
 
     /// Find the minimum degree of the polynomial.
     pub fn min_degree(&self, poly_props: &PolynomialProperties<T>) -> u32 {
-        if let Some(idx) = self.nonzero.first() {
-            return poly_props.semigroup.degrees[*idx];
-        }
-        poly_props.semigroup.max_degree + 1
+        let Some(idx) = self.nonzero.first() else {
+            return poly_props.semigroup.max_degree + 1;
+        };
+        poly_props.semigroup.degrees[*idx]
     }
 
     /// Clone the polynomial, but truncated to a given degree.
-    pub fn truncated(
-        &self,
-        max_deg: u32,
-        poly_props: &PolynomialProperties<T>,
-        coeff_pool: &mut NumberPool<T>,
-    ) -> Self {
+    pub fn truncated(&self, max_deg: u32, poly_props: &PolynomialProperties<T>) -> Self {
         let mut res = Self::new();
         for &i in self.nonzero.iter() {
             if poly_props.semigroup.degrees[i] > max_deg {
                 break;
             }
             res.nonzero.push(i);
-            let mut coeff = coeff_pool.pop();
-            coeff.assign(self.coeffs.get(&i).unwrap());
+            let coeff = self.coeffs.get(&i).unwrap().clone();
             res.coeffs.insert(i, coeff);
         }
         res
     }
 
     /// Add polynomials in place.
-    pub fn add_assign(&mut self, rhs: &Self, coeff_pool: &mut NumberPool<T>) {
+    pub fn add_assign(&mut self, rhs: &Self, poly_props: &PolynomialProperties<T>) {
         let mut resort = false;
         for (k, v) in rhs.coeffs.iter() {
             let c = self.coeffs.entry(*k).or_insert_with(|| {
                 resort = true;
-                let mut new_coeff = coeff_pool.pop();
-                new_coeff.assign(0i32);
-                new_coeff
+                poly_props.zero()
             });
             *c += v;
         }
@@ -151,14 +139,12 @@ where
     }
 
     /// Subtract polynomials in place.
-    pub fn sub_assign(&mut self, rhs: &Self, coeff_pool: &mut NumberPool<T>) {
+    pub fn sub_assign(&mut self, rhs: &Self, poly_props: &PolynomialProperties<T>) {
         let mut resort = false;
         for (k, v) in rhs.coeffs.iter() {
             let c = self.coeffs.entry(*k).or_insert_with(|| {
                 resort = true;
-                let mut new_coeff = coeff_pool.pop();
-                new_coeff.assign(0i32);
-                new_coeff
+                poly_props.zero()
             });
             *c -= v;
         }
@@ -191,47 +177,36 @@ where
     }
 
     /// Multiply polynomials.
-    pub fn mul(
-        &self,
-        rhs: &Self,
-        poly_props: &PolynomialProperties<T>,
-        coeff_pool: &mut NumberPool<T>,
-    ) -> Self {
+    pub fn mul(&self, rhs: &Self, poly_props: &PolynomialProperties<T>) -> Self {
         let mut res = Self::new();
-        let mut deg1;
-        let mut deg2;
         let max_deg = poly_props.semigroup.max_degree;
-        let mut tmp_vec;
         let (pshort, plong) = if self.nonzero.len() < rhs.nonzero.len() {
             (self, rhs)
         } else {
             (rhs, self)
         };
-        let mut tmp_var = coeff_pool.pop();
         for &i in pshort.nonzero.iter() {
-            deg1 = poly_props.semigroup.degrees[i];
+            let deg1 = poly_props.semigroup.degrees[i];
             for &j in plong.nonzero.iter() {
-                deg2 = poly_props.semigroup.degrees[j];
+                let deg2 = poly_props.semigroup.degrees[j];
                 if deg1 + deg2 > max_deg {
-                    continue;
+                    break;
                 }
-                tmp_vec = poly_props.semigroup.elements.column(i)
+                let tmp_vec = poly_props.semigroup.elements.column(i)
                     + poly_props.semigroup.elements.column(j);
                 let Some(mon) = poly_props.monomial_map.get(&tmp_vec.as_view()) else {
                     continue;
                 };
                 let c = res.coeffs.entry(*mon).or_insert_with(|| {
                     res.nonzero.push(*mon);
-                    let mut coeff = coeff_pool.pop();
-                    coeff.assign(0i32);
-                    coeff
+                    poly_props.zero()
                 });
-                tmp_var.assign(pshort.coeffs.get(&i).unwrap());
+                let mut tmp_var = pshort.coeffs.get(&i).unwrap().clone();
                 tmp_var *= plong.coeffs.get(&j).unwrap();
                 *c += &tmp_var;
             }
         }
-        coeff_pool.push(tmp_var);
+        res.nonzero.sort_unstable();
         res
     }
 
@@ -240,24 +215,18 @@ where
         &mut self,
         scalar: U,
         rhs: &Self,
-        coeff_pool: &mut NumberPool<T>,
+        poly_props: &PolynomialProperties<T>,
     ) where
         T: MulAssign<U>,
         U: Copy,
     {
-        let mut tmp_var = coeff_pool.pop();
         let mut resort = false;
         for (k, v) in rhs.coeffs.iter() {
-            let Some(c) = self.coeffs.get_mut(k) else {
-                let mut new_var = coeff_pool.pop();
-                new_var.assign(v);
-                new_var *= scalar;
-                self.nonzero.push(*k);
-                self.coeffs.insert(*k, new_var);
+            let c = self.coeffs.entry(*k).or_insert_with(|| {
                 resort = true;
-                continue;
-            };
-            tmp_var.assign(v);
+                poly_props.zero()
+            });
+            let mut tmp_var = v.clone();
             tmp_var *= scalar;
             *c += &tmp_var;
         }
@@ -265,7 +234,6 @@ where
             self.nonzero = self.coeffs.keys().cloned().collect();
             self.nonzero.sort_unstable();
         }
-        coeff_pool.push(tmp_var);
     }
 
     /// Divide polynomial by a scalar, and then add in place.
@@ -273,24 +241,18 @@ where
         &mut self,
         scalar: U,
         rhs: &Self,
-        coeff_pool: &mut NumberPool<T>,
+        poly_props: &PolynomialProperties<T>,
     ) where
         T: DivAssign<U>,
         U: Copy,
     {
-        let mut tmp_var = coeff_pool.pop();
         let mut resort = false;
         for (k, v) in rhs.coeffs.iter() {
-            let Some(c) = self.coeffs.get_mut(k) else {
-                let mut new_var = coeff_pool.pop();
-                new_var.assign(v);
-                new_var /= scalar;
-                self.nonzero.push(*k);
-                self.coeffs.insert(*k, new_var);
+            let c = self.coeffs.entry(*k).or_insert_with(|| {
                 resort = true;
-                continue;
-            };
-            tmp_var.assign(v);
+                poly_props.zero()
+            });
+            let mut tmp_var = v.clone();
             tmp_var /= scalar;
             *c += &tmp_var;
         }
@@ -298,63 +260,35 @@ where
             self.nonzero = self.coeffs.keys().cloned().collect();
             self.nonzero.sort_unstable();
         }
-        coeff_pool.push(tmp_var);
-    }
-
-    /// Clone the polynomial.
-    pub fn clone(&self, coeff_pool: &mut NumberPool<T>) -> Self {
-        let mut res = Self::new();
-        for (i, c) in self.coeffs.iter() {
-            let mut coeff = coeff_pool.pop();
-            coeff.assign(c);
-            res.coeffs.insert(*i, coeff);
-        }
-        res.nonzero.clone_from(&self.nonzero);
-        res
-    }
-
-    /// Move all data into another polynomial.
-    pub fn move_into(self, other: &mut Self, coeff_pool: &mut NumberPool<T>) {
-        for (_, c) in other.coeffs.drain() {
-            coeff_pool.push(c);
-        }
-        other.coeffs = self.coeffs;
-        other.nonzero = self.nonzero;
     }
 
     /// Compute the reciprocal of the polynomial.
     ///
     /// Only works for polynomials with a nonzero constant term.
-    pub fn recipr(
-        &self,
-        poly_props: &PolynomialProperties<T>,
-        coeff_pool: &mut NumberPool<T>,
-    ) -> Result<Self, PolynomialError> {
+    pub fn recipr(&self, poly_props: &PolynomialProperties<T>) -> Result<Self, PolynomialError> {
         let Some(c) = self.coeffs.get(&0) else {
             return Err(PolynomialError::ZeroConstantTermError);
         };
         if *c == 0 {
             return Err(PolynomialError::ZeroConstantTermError);
         }
-        let mut res = Self::one(coeff_pool);
+        let mut res = Self::one(poly_props);
         let max_deg = poly_props.semigroup.max_degree;
-        let mut p0 = self.clone(coeff_pool);
+        let mut p0 = self.clone();
         p0.nonzero.remove(0);
         let const_term = p0.coeffs.remove(&0).unwrap();
         p0.div_scalar_assign(&const_term);
-        let mut tmp_poly = Self::one(coeff_pool);
+        let mut tmp_poly = Self::one(poly_props);
         let min_deg = p0.min_degree(poly_props);
         for i in 1..=max_deg / min_deg {
-            let tmp_poly2 = tmp_poly.mul(&p0, poly_props, coeff_pool);
-            tmp_poly2.move_into(&mut tmp_poly, coeff_pool);
+            tmp_poly = tmp_poly.mul(&p0, poly_props);
             if i % 2 == 0 {
-                res.add_assign(&tmp_poly, coeff_pool)
+                res.add_assign(&tmp_poly, poly_props)
             } else {
-                res.mul_scalar_add_assign(-1, &tmp_poly, coeff_pool);
+                res.mul_scalar_add_assign(-1, &tmp_poly, poly_props);
             }
         }
         res.div_scalar_assign(&const_term);
-        tmp_poly.drop(coeff_pool);
         Ok(res)
     }
 
@@ -363,40 +297,33 @@ where
         &self,
         n: i32,
         poly_props: &PolynomialProperties<T>,
-        coeff_pool: &mut NumberPool<T>,
     ) -> Result<Self, PolynomialError> {
         if n == 0 {
-            return Ok(Self::one(coeff_pool));
+            return Ok(Self::one(poly_props));
         } else if n == 1 {
-            return Ok(self.clone(coeff_pool));
+            return Ok(self.clone());
         }
-        let mut res = Self::one(coeff_pool);
+        let mut res = Self::one(poly_props);
         let max_deg = poly_props.semigroup.max_degree;
         let min_deg = self.min_degree(poly_props);
         let invert = n < 0;
         let mut n = n.unsigned_abs();
         let mut tmp_poly = if invert {
-            let tmp_poly2 = self.recipr(poly_props, coeff_pool)?;
-            let tmp_poly3 =
-                tmp_poly2.truncated(max_deg - (n - 1) * min_deg, poly_props, coeff_pool);
-            tmp_poly2.drop(coeff_pool);
-            tmp_poly3
+            let tmp_poly2 = self.recipr(poly_props)?;
+            tmp_poly2.truncated(max_deg - (n - 1) * min_deg, poly_props)
         } else {
-            self.truncated(max_deg - (n - 1) * min_deg, poly_props, coeff_pool)
+            self.truncated(max_deg - (n - 1) * min_deg, poly_props)
         };
         loop {
             if n % 2 != 0 {
-                let tmp_poly2 = res.mul(&tmp_poly, poly_props, coeff_pool);
-                tmp_poly2.move_into(&mut res, coeff_pool);
+                res = res.mul(&tmp_poly, poly_props);
             }
             n >>= 1;
             if n == 0 {
                 break;
             }
-            let tmp_poly2 = tmp_poly.mul(&tmp_poly, poly_props, coeff_pool);
-            tmp_poly2.move_into(&mut tmp_poly, coeff_pool);
+            tmp_poly = tmp_poly.mul(&tmp_poly, poly_props);
         }
-        tmp_poly.drop(coeff_pool);
         Ok(res)
     }
 
@@ -404,54 +331,44 @@ where
     pub fn exp_pos_neg(
         &self,
         poly_props: &PolynomialProperties<T>,
-        coeff_pool: &mut NumberPool<T>,
     ) -> Result<(Self, Self), PolynomialError> {
         if self.coeffs.contains_key(&0) {
             return Err(PolynomialError::NonZeroConstantTermError);
         }
-        let mut res_pos = Self::one(coeff_pool);
-        let mut res_neg = Self::one(coeff_pool);
-        let mut tmp_poly = Self::one(coeff_pool);
+        let mut res_pos = Self::one(poly_props);
+        let mut res_neg = Self::one(poly_props);
+        let mut tmp_poly = Self::one(poly_props);
         let min_deg = self.min_degree(poly_props);
         let max_deg = poly_props.semigroup.max_degree;
-        let mut tmp_var = coeff_pool.pop();
-        tmp_var.assign(1);
+        let mut tmp_var = poly_props.one();
         for i in 1..=max_deg / min_deg {
-            let tmp_poly2 = self.mul(&tmp_poly, poly_props, coeff_pool);
-            tmp_poly2.move_into(&mut tmp_poly, coeff_pool);
+            tmp_poly = self.mul(&tmp_poly, poly_props);
             tmp_var *= i;
-            res_pos.div_scalar_add_assign(&tmp_var, &tmp_poly, coeff_pool);
+            res_pos.div_scalar_add_assign(&tmp_var, &tmp_poly, poly_props);
             if i % 2 != 0 {
                 tmp_var *= -1;
             }
-            res_neg.div_scalar_add_assign(&tmp_var, &tmp_poly, coeff_pool);
+            res_neg.div_scalar_add_assign(&tmp_var, &tmp_poly, poly_props);
             if i % 2 != 0 {
                 tmp_var *= -1;
             }
         }
-        tmp_poly.drop(coeff_pool);
         Ok((res_pos, res_neg))
     }
 
     /// Compute the dilogarithm of a polynomial.
-    pub fn li_2(
-        &self,
-        poly_props: &PolynomialProperties<T>,
-        coeff_pool: &mut NumberPool<T>,
-    ) -> Result<Self, PolynomialError> {
+    pub fn li_2(&self, poly_props: &PolynomialProperties<T>) -> Result<Self, PolynomialError> {
         if self.coeffs.contains_key(&0) {
             return Err(PolynomialError::NonZeroConstantTermError);
         }
-        let mut res = self.clone(coeff_pool);
-        let mut tmp_poly = self.clone(coeff_pool);
+        let mut res = self.clone();
+        let mut tmp_poly = self.clone();
         let min_deg = self.min_degree(poly_props);
         let max_deg = poly_props.semigroup.max_degree;
         for i in 2..=max_deg / min_deg {
-            let tmp_poly2 = self.mul(&tmp_poly, poly_props, coeff_pool);
-            tmp_poly2.move_into(&mut tmp_poly, coeff_pool);
-            res.div_scalar_add_assign(i * i, &tmp_poly, coeff_pool);
+            tmp_poly = self.mul(&tmp_poly, poly_props);
+            res.div_scalar_add_assign(i * i, &tmp_poly, poly_props);
         }
-        tmp_poly.drop(coeff_pool);
         Ok(res)
     }
 }
@@ -502,9 +419,10 @@ mod tests {
     #[test]
     fn test_identity() {
         let tmp_rational = Rational::new();
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
 
-        let p = Polynomial::one(&mut coeff_pool);
+        let p = Polynomial::one(&poly_props);
         let p_res = polynomial!(
             tmp_rational,
             (0, 1) // 1
@@ -517,7 +435,6 @@ mod tests {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
         let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
 
         let mut p = polynomial!(
             tmp_rational,
@@ -534,7 +451,7 @@ mod tests {
             (2, 1), // 1*y
             (4, 1)  // 1*x*y
         );
-        p.clean_up(&poly_props, &mut coeff_pool);
+        p.clean_up(&poly_props);
         assert_eq!(p, p_res);
     }
 
@@ -543,9 +460,8 @@ mod tests {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
         let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
 
-        let p0 = Polynomial::one(&mut coeff_pool);
+        let p0 = Polynomial::one(&poly_props);
         let p1 = polynomial!(
             tmp_rational,
             (2, 3), // 3*y
@@ -570,7 +486,6 @@ mod tests {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
         let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
 
         let p = polynomial!(
             tmp_rational,
@@ -587,14 +502,15 @@ mod tests {
             (1, 0), // 0*x
             (2, 1)  // 1*y
         );
-        let p = p.truncated(1, &poly_props, &mut coeff_pool);
+        let p = p.truncated(1, &poly_props);
         assert_eq!(p, p_res);
     }
 
     #[test]
     fn test_add_assign() {
         let tmp_rational = Rational::new();
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
 
         let mut p = polynomial!(
             tmp_rational,
@@ -605,8 +521,8 @@ mod tests {
             (4, 5), // 5*x*y
             (5, 6)  // 6*y^2
         );
-        let p1 = p.clone(&mut coeff_pool);
-        p.add_assign(&p1, &mut coeff_pool);
+        let p1 = p.clone();
+        p.add_assign(&p1, &poly_props);
         let p_res = polynomial!(
             tmp_rational,
             (0, 2),  // 2
@@ -622,7 +538,8 @@ mod tests {
     #[test]
     fn test_sub_assign() {
         let tmp_rational = Rational::new();
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
 
         let mut p = polynomial!(
             tmp_rational,
@@ -642,7 +559,7 @@ mod tests {
             (4, 10), // 10*x*y
             (5, 12)  // 12*y^2
         );
-        p.sub_assign(&p1, &mut coeff_pool);
+        p.sub_assign(&p1, &poly_props);
         let p_res = polynomial!(
             tmp_rational,
             (0, -1), // -1
@@ -712,7 +629,6 @@ mod tests {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
         let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
 
         let p1 = polynomial!(
             tmp_rational,
@@ -723,7 +639,7 @@ mod tests {
             (4, 5), // 5*x*y
             (5, 6)  // 6*y^2
         );
-        let p = p1.mul(&p1, &poly_props, &mut coeff_pool);
+        let p = p1.mul(&p1, &poly_props);
         let p_res = polynomial!(
             tmp_rational,
             (0, 1),  // 1
@@ -739,7 +655,8 @@ mod tests {
     #[test]
     fn test_mul_scalar_add_assign() {
         let mut tmp_rational = Rational::new();
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
         tmp_rational.assign(2);
 
         let mut p = polynomial!(
@@ -751,8 +668,8 @@ mod tests {
             (4, 5), // 5*x*y
             (5, 6)  // 6*y^2
         );
-        let p1 = p.clone(&mut coeff_pool);
-        p.mul_scalar_add_assign(&tmp_rational, &p1, &mut coeff_pool);
+        let p1 = p.clone();
+        p.mul_scalar_add_assign(&tmp_rational, &p1, &poly_props);
         let p_res = polynomial!(
             tmp_rational,
             (0, 3),  // 3
@@ -768,7 +685,8 @@ mod tests {
     #[test]
     fn test_div_scalar_add_assign() {
         let mut tmp_rational = Rational::new();
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
         tmp_rational.assign((1, 2));
 
         let mut p = polynomial!(
@@ -780,8 +698,8 @@ mod tests {
             (4, 5), // 5*x*y
             (5, 6)  // 6*y^2
         );
-        let p1 = p.clone(&mut coeff_pool);
-        p.div_scalar_add_assign(&tmp_rational, &p1, &mut coeff_pool);
+        let p1 = p.clone();
+        p.div_scalar_add_assign(&tmp_rational, &p1, &poly_props);
         let p_res = polynomial!(
             tmp_rational,
             (0, 3),  // 3
@@ -795,49 +713,10 @@ mod tests {
     }
 
     #[test]
-    fn test_clone() {
-        let tmp_rational = Rational::new();
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
-
-        let p = polynomial!(
-            tmp_rational,
-            (0, 1), // 1
-            (1, 2), // 2*x
-            (2, 3), // 3*y
-            (3, 4), // 4*x^2
-            (4, 5), // 5*x*y
-            (5, 6)  // 6*y^2
-        );
-        let p_clone = p.clone(&mut coeff_pool);
-        assert_eq!(p, p_clone);
-    }
-
-    #[test]
-    fn test_move_into() {
-        let tmp_rational = Rational::new();
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
-
-        let p = polynomial!(
-            tmp_rational,
-            (0, 1), // 1
-            (1, 2), // 2*x
-            (2, 3), // 3*y
-            (3, 4), // 4*x^2
-            (4, 5), // 5*x*y
-            (5, 6)  // 6*y^2
-        );
-        let p_clone = p.clone(&mut coeff_pool);
-        let mut p_res = Polynomial::new();
-        p_clone.move_into(&mut p_res, &mut coeff_pool);
-        assert_eq!(p, p_res);
-    }
-
-    #[test]
     fn test_recipr() {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
         let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
 
         let p1 = polynomial!(
             tmp_rational,
@@ -848,8 +727,8 @@ mod tests {
             (4, 5), // 5*x*y
             (5, 6)  // 6*y^2
         );
-        let mut p = p1.recipr(&poly_props, &mut coeff_pool).unwrap();
-        p.clean_up(&poly_props, &mut coeff_pool);
+        let mut p = p1.recipr(&poly_props).unwrap();
+        p.clean_up(&poly_props);
         let p_res = polynomial!(
             tmp_rational,
             (0, 1),  // 1
@@ -866,7 +745,6 @@ mod tests {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
         let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
 
         let p = polynomial!(
             tmp_rational,
@@ -878,23 +756,23 @@ mod tests {
             (5, 6)  // 6*y^2
         );
 
-        let p_0 = p.pow(0, &poly_props, &mut coeff_pool).unwrap();
-        let p_0_res = Polynomial::one(&mut coeff_pool);
+        let p_0 = p.pow(0, &poly_props).unwrap();
+        let p_0_res = Polynomial::one(&poly_props);
         assert_eq!(p_0, p_0_res);
 
-        let p_m1 = p.pow(-1, &poly_props, &mut coeff_pool).unwrap();
-        let p_m1_res = p.recipr(&poly_props, &mut coeff_pool).unwrap();
+        let p_m1 = p.pow(-1, &poly_props).unwrap();
+        let p_m1_res = p.recipr(&poly_props).unwrap();
         assert_eq!(p_m1, p_m1_res);
 
-        let p_1 = p.pow(1, &poly_props, &mut coeff_pool).unwrap();
+        let p_1 = p.pow(1, &poly_props).unwrap();
         assert_eq!(p, p_1);
 
-        let p_2 = p.pow(2, &poly_props, &mut coeff_pool).unwrap();
-        let p_2_res = p.mul(&p, &poly_props, &mut coeff_pool);
+        let p_2 = p.pow(2, &poly_props).unwrap();
+        let p_2_res = p.mul(&p, &poly_props);
         assert_eq!(p_2, p_2_res);
 
-        let p_3 = p.pow(3, &poly_props, &mut coeff_pool).unwrap();
-        let p_3_res = p.mul(&p_2, &poly_props, &mut coeff_pool);
+        let p_3 = p.pow(3, &poly_props).unwrap();
+        let p_3_res = p.mul(&p_2, &poly_props);
         assert_eq!(p_3, p_3_res);
     }
 
@@ -903,7 +781,6 @@ mod tests {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
         let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
 
         let p = polynomial!(
             tmp_rational,
@@ -914,7 +791,7 @@ mod tests {
             (5, 6)  // 6*y^2
         );
 
-        let (p_exp_pos, p_exp_neg) = p.exp_pos_neg(&poly_props, &mut coeff_pool).unwrap();
+        let (p_exp_pos, p_exp_neg) = p.exp_pos_neg(&poly_props).unwrap();
         let p_exp_pos_res = polynomial!(
             tmp_rational,
             (0, 1),       // 1
@@ -942,7 +819,6 @@ mod tests {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
         let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
 
         let p = polynomial!(
             tmp_rational,
@@ -953,7 +829,7 @@ mod tests {
             (5, 6)  // 6*y^2
         );
 
-        let p_li_2 = p.li_2(&poly_props, &mut coeff_pool).unwrap();
+        let p_li_2 = p.li_2(&poly_props).unwrap();
         let p_li_2_res = polynomial!(
             tmp_rational,
             (1, 2),       // 2*x

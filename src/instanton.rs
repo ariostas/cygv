@@ -5,7 +5,6 @@ use crate::polynomial::{
     coefficient::PolynomialCoeff, error::PolynomialError, properties::PolynomialProperties,
     Polynomial,
 };
-use crate::NumberPool;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -21,7 +20,6 @@ fn compute_alpha_thread<T>(
     tx: Sender<(usize, Polynomial<T>)>,
     fp: &FundamentalPeriod<T>,
     poly_props: &PolynomialProperties<T>,
-    np: &mut NumberPool<T>,
 ) where
     T: PolynomialCoeff<T>,
 {
@@ -33,8 +31,8 @@ fn compute_alpha_thread<T>(
             };
             t = *i;
         }
-        let mut a = fp.c0_inv.mul(&fp.c1[t], poly_props, np);
-        a.clean_up(poly_props, np);
+        let mut a = fp.c0_inv.mul(&fp.c1[t], poly_props);
+        a.clean_up(poly_props);
         tx.send((t, a)).unwrap();
     }
 }
@@ -44,7 +42,6 @@ fn compute_beta_thread<T>(
     tx: Sender<((usize, usize), Polynomial<T>)>,
     fp: &FundamentalPeriod<T>,
     poly_props: &PolynomialProperties<T>,
-    np: &mut NumberPool<T>,
 ) where
     T: PolynomialCoeff<T>,
 {
@@ -57,8 +54,8 @@ fn compute_beta_thread<T>(
             t0 = i.0;
             t1 = i.1;
         }
-        let mut a = fp.c0_inv.mul(&fp.c2[&(t0, t1)], poly_props, np);
-        a.clean_up(poly_props, np);
+        let mut a = fp.c0_inv.mul(&fp.c2[&(t0, t1)], poly_props);
+        a.clean_up(poly_props);
         tx.send(((t0, t1), a)).unwrap();
     }
 }
@@ -69,7 +66,6 @@ fn compute_f_thread<T>(
     alpha: &[Polynomial<T>],
     beta: &HashMap<(usize, usize), Polynomial<T>>,
     poly_props: &PolynomialProperties<T>,
-    np: &mut NumberPool<T>,
 ) where
     T: PolynomialCoeff<T>,
 {
@@ -82,10 +78,10 @@ fn compute_f_thread<T>(
             t0 = i.0;
             t1 = i.1;
         }
-        let mut p = alpha[t0].mul(&alpha[t1], poly_props, np);
-        p.sub_assign(&beta[&(t0, t1)], np);
+        let mut p = alpha[t0].mul(&alpha[t1], poly_props);
+        p.sub_assign(&beta[&(t0, t1)], poly_props);
         p.mul_scalar_assign(-1);
-        p.clean_up(poly_props, np);
+        p.clean_up(poly_props);
         tx.send(((t0, t1), p)).unwrap();
     }
 }
@@ -95,7 +91,6 @@ fn compute_inst_thread<T>(
     tx: Sender<(usize, Polynomial<T>)>,
     f_poly: &HashMap<(usize, usize), Polynomial<T>>,
     poly_props: &PolynomialProperties<T>,
-    np: &mut NumberPool<T>,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
     is_threefold: bool,
 ) where
@@ -103,7 +98,7 @@ fn compute_inst_thread<T>(
 {
     let h11 = poly_props.semigroup.elements.nrows();
     let mut intnum_ind = [0_usize; 3];
-    let mut tmp_num = np.pop();
+    let mut tmp_num = poly_props.new_variable();
     loop {
         let t;
         {
@@ -125,7 +120,7 @@ fn compute_inst_thread<T>(
                 else {
                     continue;
                 };
-                let mut tmp_poly = f_poly[&(a, b)].clone(np);
+                let mut tmp_poly = f_poly[&(a, b)].clone();
                 if a != b {
                     tmp_poly.mul_scalar_assign(*x);
                 } else {
@@ -133,14 +128,12 @@ fn compute_inst_thread<T>(
                     tmp_num /= 2;
                     tmp_poly.mul_scalar_assign(&tmp_num);
                 }
-                p.add_assign(&tmp_poly, np);
-                tmp_poly.drop(np);
+                p.add_assign(&tmp_poly, poly_props);
             }
         }
-        p.clean_up(poly_props, np);
+        p.clean_up(poly_props);
         tx.send((t, p)).unwrap();
     }
-    np.push(tmp_num);
 }
 
 #[allow(clippy::type_complexity)]
@@ -152,7 +145,6 @@ fn compute_expalpha_thread<T>(
     )>,
     alpha: &[Polynomial<T>],
     poly_props: &PolynomialProperties<T>,
-    np: &mut NumberPool<T>,
 ) where
     T: PolynomialCoeff<T>,
 {
@@ -164,11 +156,11 @@ fn compute_expalpha_thread<T>(
             };
             t = *i;
         }
-        let p = alpha[t].exp_pos_neg(poly_props, np);
+        let p = alpha[t].exp_pos_neg(poly_props);
         let p = match p {
             Ok(mut pp) => {
-                pp.0.clean_up(poly_props, np);
-                pp.1.clean_up(poly_props, np);
+                pp.0.clean_up(poly_props);
+                pp.1.clean_up(poly_props);
                 Ok(pp)
             }
             Err(e) => Err(e),
@@ -194,21 +186,17 @@ where
         .unwrap_or(std::num::NonZeroUsize::new(1).unwrap())
         .get();
 
-    let mut pools: Vec<_> = (0..n_threads)
-        .map(|_| NumberPool::new(poly_props.zero_cutoff.clone(), 1000))
-        .collect();
-
     // Compute alpha polynomials
     let mut alpha: Vec<_> = (0..h11).map(|_| Polynomial::<T>::new()).collect();
     let tasks_alpha: Vec<_> = (0..h11).collect();
     let tasks_alpha_iter = Arc::new(Mutex::new(tasks_alpha.iter()));
     thread::scope(|s| {
         let (tx, rx) = channel();
-        for np in pools.iter_mut() {
+        for _ in 0..n_threads {
             let tx = tx.clone();
             let tasks = Arc::clone(&tasks_alpha_iter);
             s.spawn(|| {
-                compute_alpha_thread(tasks, tx, &fp, poly_props, np);
+                compute_alpha_thread(tasks, tx, &fp, poly_props);
             });
         }
         drop(tx);
@@ -222,11 +210,11 @@ where
     let tasks_beta_iter = Arc::new(Mutex::new(intnum_idxpairs.iter()));
     thread::scope(|s| {
         let (tx, rx) = channel();
-        for np in pools.iter_mut() {
+        for _ in 0..n_threads {
             let tx = tx.clone();
             let tasks = Arc::clone(&tasks_beta_iter);
             s.spawn(|| {
-                compute_beta_thread(tasks, tx, &fp, poly_props, np);
+                compute_beta_thread(tasks, tx, &fp, poly_props);
             });
         }
         drop(tx);
@@ -240,11 +228,11 @@ where
     let tasks_f_iter = Arc::new(Mutex::new(intnum_idxpairs.iter()));
     thread::scope(|s| {
         let (tx, rx) = channel();
-        for np in pools.iter_mut() {
+        for _ in 0..n_threads {
             let tx = tx.clone();
             let tasks = Arc::clone(&tasks_f_iter);
             s.spawn(|| {
-                compute_f_thread(tasks, tx, &alpha, &beta, poly_props, np);
+                compute_f_thread(tasks, tx, &alpha, &beta, poly_props);
             });
         }
         drop(tx);
@@ -259,19 +247,11 @@ where
     let tasks_inst_iter = Arc::new(Mutex::new(tasks_inst.iter()));
     thread::scope(|s| {
         let (tx, rx) = channel();
-        for np in pools.iter_mut() {
+        for _ in 0..n_threads {
             let tx = tx.clone();
             let tasks = Arc::clone(&tasks_inst_iter);
             s.spawn(|| {
-                compute_inst_thread(
-                    tasks,
-                    tx,
-                    &f_poly,
-                    poly_props,
-                    np,
-                    intnum_dict,
-                    is_threefold,
-                );
+                compute_inst_thread(tasks, tx, &f_poly, poly_props, intnum_dict, is_threefold);
             });
         }
         drop(tx);
@@ -289,11 +269,11 @@ where
     let mut error = None;
     thread::scope(|s| {
         let (tx, rx) = channel();
-        for np in pools.iter_mut() {
+        for _ in 0..n_threads {
             let tx = tx.clone();
             let tasks = Arc::clone(&tasks_expalpha_iter);
             s.spawn(|| {
-                compute_expalpha_thread(tasks, tx, &alpha, poly_props, np);
+                compute_expalpha_thread(tasks, tx, &alpha, poly_props);
             });
         }
         drop(tx);

@@ -1,7 +1,7 @@
 //! Polynomial coefficients
 
 use crate::factorial::RecipMut;
-use core::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
+use core::ops::{AddAssign, DivAssign, Mul, MulAssign, Neg, SubAssign};
 use rug::{Assign, Float, Rational};
 use std::fmt::Display;
 
@@ -62,6 +62,7 @@ pub trait PolynomialCoeff<T>:
     + SubAssign<i64>
     + SubAssign<u32>
     + SubAssign<u64>
+    + Mul<T, Output = T>
     + MulAssign<i32>
     + MulAssign<i64>
     + MulAssign<u32>
@@ -70,6 +71,7 @@ pub trait PolynomialCoeff<T>:
     + DivAssign<i64>
     + DivAssign<u32>
     + DivAssign<u64>
+    + Neg<Output = T>
     + PartialEq<i32>
     + PartialOrd<T>
     + PartialOrd<i32>
