@@ -213,7 +213,7 @@ where
             for &j in plong.nonzero.iter() {
                 deg2 = poly_props.semigroup.degrees[j];
                 if deg1 + deg2 > max_deg {
-                    continue;
+                    break;
                 }
                 tmp_vec = poly_props.semigroup.elements.column(i)
                     + poly_props.semigroup.elements.column(j);
@@ -232,6 +232,7 @@ where
             }
         }
         coeff_pool.push(tmp_var);
+        res.nonzero.sort_unstable();
         res
     }
 
