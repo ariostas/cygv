@@ -1,6 +1,6 @@
 [package]
 name = "cygv"
-version = "0.0.2"
+version = "0.1.0"
 description = "Compute GV and GW invariants of CY manifolds."
 authors = ["Andres Rios Tascon"]
 edition = "2021"
