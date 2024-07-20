@@ -143,7 +143,7 @@ mod tests {
             true_float.assign(&true_rat);
 
             assert_eq!(res_rat, true_rat);
-            assert!((&res_float - &true_float).complete(prec).abs() < 1e-100);
+            assert!((&res_float - &true_float).complete(prec.into()).abs() < 1e-100);
         }
     }
 
@@ -179,7 +179,7 @@ mod tests {
             true_float.assign(&true_rat);
 
             assert_eq!(res_rat, true_rat);
-            assert!((&res_float - &true_float).complete(prec).abs() < 1e-100);
+            assert!((&res_float - &true_float).complete(prec.into()).abs() < 1e-100);
         }
     }
 }
