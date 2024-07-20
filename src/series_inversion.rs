@@ -45,8 +45,8 @@ where
 #[allow(clippy::type_complexity)]
 fn compute_li2qn_thread<T, const FIND_GV: bool>(
     tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(u32, Polynomial<T>, Result<Polynomial<T>, PolynomialError>)>,
-    previous_qn: &VecDeque<HashMap<u32, Polynomial<T>>>,
+    tx: Sender<(usize, Polynomial<T>, Result<Polynomial<T>, PolynomialError>)>,
+    previous_qn: &VecDeque<HashMap<usize, Polynomial<T>>>,
     previous_qn_ind: &VecDeque<Vec<usize>>,
     expalpha: &[(Polynomial<T>, Polynomial<T>)],
     poly_props: &PolynomialProperties<T>,
@@ -71,8 +71,8 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
         closest_curve.clear(np);
         let mut tmp_num = np.pop();
         tmp_num.assign(1);
-        closest_curve.coeffs.insert(t as u32, tmp_num);
-        closest_curve.nonzero.push(t as u32);
+        closest_curve.coeffs.insert(t, tmp_num);
+        closest_curve.nonzero.push(t);
         closest_curve_diff
             .iter_mut()
             .zip(poly_props.semigroup.elements.column(t).iter())
@@ -118,7 +118,7 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
                     tmp_poly.coeffs.insert(*ind, tmp_num);
                     tmp_poly.nonzero.push(*ind);
                     closest_curve.clear(np);
-                    closest_curve = prev_qns[&(*i as u32)].mul(&tmp_poly, poly_props, np);
+                    closest_curve = prev_qns[i].mul(&tmp_poly, poly_props, np);
                     tmp_poly.drop(np);
                     closest_dist = tmp_dist;
                     closest_curve_diff
@@ -141,7 +141,7 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
         } else {
             Ok(tmp_qn.clone(np))
         };
-        tx.send((t as u32, tmp_qn, tmp_li2qn)).unwrap();
+        tx.send((t, tmp_qn, tmp_li2qn)).unwrap();
     }
 }
 
@@ -149,7 +149,8 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
 pub fn invert_series<T, const FIND_GV: bool, const IS_THREEFOLD: bool>(
     inst_data: InstantonData<T>,
     poly_props: &PolynomialProperties<T>,
-) -> Result<HashMap<(u32, u32), T>, SeriesInversionError>
+    all_pools: &mut (NumberPool<T>, Vec<NumberPool<T>>),
+) -> Result<HashMap<(usize, usize), T>, SeriesInversionError>
 where
     T: PolynomialCoeff<T>,
 {
@@ -168,13 +169,7 @@ where
     let mut previous_qn: VecDeque<_> = (1..=n_previous_levels).map(|_| HashMap::new()).collect();
     let mut previous_qn_ind: VecDeque<_> = (1..=n_previous_levels).map(|_| Vec::new()).collect();
 
-    let n_threads = thread::available_parallelism()
-        .unwrap_or(std::num::NonZeroUsize::new(1).unwrap())
-        .get();
-    let mut pools: Vec<_> = (0..n_threads)
-        .map(|_| NumberPool::new(poly_props.zero_cutoff.clone(), 1000))
-        .collect();
-    let mut main_pool = NumberPool::new(poly_props.zero_cutoff.clone(), 1000);
+    let (main_pool, pools) = all_pools;
 
     let InstantonData { mut inst, expalpha } = inst_data;
 
@@ -216,7 +211,7 @@ where
                     .enumerate()
                     .find(|(_, c)| *c != 0)
                     .unwrap();
-                let Some(gv_ref) = inst[kk.0].coeffs.get(&(j as u32)) else {
+                let Some(gv_ref) = inst[kk.0].coeffs.get(&(j)) else {
                     continue;
                 };
                 tmp_gv.assign(gv_ref);
@@ -234,7 +229,7 @@ where
                     if tmp_gv < 0.5 {
                         continue;
                     }
-                    final_gv.insert((j as u32, 0), tmp_gv_rounded.clone());
+                    final_gv.insert((j, 0), tmp_gv_rounded.clone());
                     qn_to_compute.push(j);
                     gv_qn_to_compute.insert(j, tmp_gv_rounded.clone());
                 } else {
@@ -243,7 +238,7 @@ where
                     if tmp_gv_rounded <= poly_props.zero_cutoff {
                         continue;
                     }
-                    final_gv.insert((j as u32, 0), tmp_gv.clone());
+                    final_gv.insert((j, 0), tmp_gv.clone());
                     qn_to_compute.push(j);
                     gv_qn_to_compute.insert(j, tmp_gv.clone());
                 }
@@ -251,7 +246,7 @@ where
         } else {
             for j in vec_deg {
                 for (k, inst_k) in inst.iter().enumerate() {
-                    let Some(gv_ref) = inst_k.coeffs.get(&(j as u32)) else {
+                    let Some(gv_ref) = inst_k.coeffs.get(&(j)) else {
                         continue;
                     };
                     tmp_gv.assign(gv_ref);
@@ -268,7 +263,7 @@ where
                         if tmp_gv < 0.5 {
                             continue;
                         }
-                        final_gv.insert((j as u32, k as u32), tmp_gv_rounded.clone());
+                        final_gv.insert((j, k), tmp_gv_rounded.clone());
                         let h22list = h22gv_qn_to_compute.entry(j).or_insert_with(|| {
                             qn_to_compute.push(j);
                             Vec::new()
@@ -280,7 +275,7 @@ where
                         if tmp_gv_rounded <= poly_props.zero_cutoff {
                             continue;
                         }
-                        final_gv.insert((j as u32, k as u32), tmp_gv.clone());
+                        final_gv.insert((j, k), tmp_gv.clone());
                         let h22list = h22gv_qn_to_compute.entry(j).or_insert_with(|| {
                             qn_to_compute.push(j);
                             Vec::new()
@@ -317,25 +312,25 @@ where
                     error = li2qn_r.err();
                     break;
                 };
-                computed_qn.insert(j, qn.clone(&mut main_pool));
+                computed_qn.insert(j, qn.clone(main_pool));
                 if IS_THREEFOLD {
                     for (k, inst_k) in inst.iter_mut().enumerate() {
-                        if poly_props.semigroup.elements[(k, j as usize)] == 0 {
+                        if poly_props.semigroup.elements[(k, j)] == 0 {
                             continue;
                         }
-                        let mut tmp_poly = li2qn.clone(&mut main_pool);
-                        tmp_gv.assign(&gv_qn_to_compute[&(j as usize)]);
-                        tmp_gv *= poly_props.semigroup.elements[(k, j as usize)];
+                        let mut tmp_poly = li2qn.clone(main_pool);
+                        tmp_gv.assign(&gv_qn_to_compute[&j]);
+                        tmp_gv *= poly_props.semigroup.elements[(k, j)];
                         tmp_poly.mul_scalar_assign(&tmp_gv);
-                        inst_k.sub_assign(&tmp_poly, &mut main_pool);
-                        tmp_poly.drop(&mut main_pool);
+                        inst_k.sub_assign(&tmp_poly, main_pool);
+                        tmp_poly.drop(main_pool);
                     }
                 } else {
-                    for kk in h22gv_qn_to_compute[&(j as usize)].iter() {
-                        let mut tmp_poly = li2qn.clone(&mut main_pool);
+                    for kk in h22gv_qn_to_compute[&j].iter() {
+                        let mut tmp_poly = li2qn.clone(main_pool);
                         tmp_poly.mul_scalar_assign(&kk.1);
-                        inst[kk.0].sub_assign(&tmp_poly, &mut main_pool);
-                        tmp_poly.drop(&mut main_pool);
+                        inst[kk.0].sub_assign(&tmp_poly, main_pool);
+                        tmp_poly.drop(main_pool);
                     }
                 }
             }

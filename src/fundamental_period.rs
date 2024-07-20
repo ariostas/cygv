@@ -41,7 +41,7 @@ fn group_by_neg_int(curves_dot_q: DMatrixView<i32>) -> (Vec<usize>, Vec<usize>, 
 #[allow(clippy::too_many_arguments)]
 fn compute_c_0neg<T>(
     tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(u32, Option<u32>, Option<u32>, T)>,
+    tx: Sender<(usize, Option<usize>, Option<usize>, T)>,
     template_var: &T,
     q: DMatrixView<i32>,
     q0: DMatrixView<i32>,
@@ -68,7 +68,7 @@ fn compute_c_0neg<T>(
         let n: Vec<_> = curves_dot_q0.column(t).iter().map(|&c| c as u32).collect();
         let d: Vec<_> = curves_dot_q.column(t).iter().map(|&c| c as u32).collect();
         factorial_prod(&n, &d, &mut c0fact);
-        tx.send((t as u32, None, None, c0fact.clone())).unwrap();
+        tx.send((t, None, None, c0fact.clone())).unwrap();
         // Compute A vector
         for (i, aa) in a.iter_mut().enumerate() {
             aa.assign(0);
@@ -84,8 +84,7 @@ fn compute_c_0neg<T>(
             }
             tmp_final.assign(&c0fact);
             tmp_final *= &*aa;
-            tx.send((t as u32, Some(i as u32), None, tmp_final.clone()))
-                .unwrap();
+            tx.send((t, Some(i), None, tmp_final.clone())).unwrap();
         }
         // Finally, compute B elements
         for &(aa, bb) in beta_pairs.iter() {
@@ -114,13 +113,7 @@ fn compute_c_0neg<T>(
             tmp_num0 *= &a[bb];
             tmp_final += &tmp_num0;
             tmp_final *= &c0fact;
-            tx.send((
-                t as u32,
-                Some(aa as u32),
-                Some(bb as u32),
-                tmp_final.clone(),
-            ))
-            .unwrap();
+            tx.send((t, Some(aa), Some(bb), tmp_final.clone())).unwrap();
         }
     }
 }
@@ -131,7 +124,7 @@ fn compute_c_0neg<T>(
 #[allow(clippy::too_many_arguments)]
 fn compute_c_1neg<T>(
     tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(u32, Option<u32>, Option<u32>, T)>,
+    tx: Sender<(usize, Option<usize>, Option<usize>, T)>,
     template_var: &T,
     q: DMatrixView<i32>,
     q0: DMatrixView<i32>,
@@ -206,8 +199,7 @@ fn compute_c_1neg<T>(
             tmp_final.assign(&tmp_fact);
             tmp_final *= sn;
             tmp_final *= q[(neg_idx, i)];
-            tx.send((t as u32, Some(i as u32), None, tmp_final.clone()))
-                .unwrap();
+            tx.send((t, Some(i), None, tmp_final.clone())).unwrap();
         }
         for &(aa, bb) in beta_pairs.iter() {
             tmp_final.assign(&tmp_fact);
@@ -218,13 +210,7 @@ fn compute_c_1neg<T>(
             tmp_num0 += &tmp_num1;
             tmp_num0 *= sn;
             tmp_final *= &tmp_num0;
-            tx.send((
-                t as u32,
-                Some(aa as u32),
-                Some(bb as u32),
-                tmp_final.clone(),
-            ))
-            .unwrap();
+            tx.send((t, Some(aa), Some(bb), tmp_final.clone())).unwrap();
         }
     }
 }
@@ -234,7 +220,7 @@ fn compute_c_1neg<T>(
 /// that the main thread assembles the polynomials.
 fn compute_c_2neg<T>(
     tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(u32, Option<u32>, Option<u32>, T)>,
+    tx: Sender<(usize, Option<usize>, Option<usize>, T)>,
     template_var: &T,
     q: DMatrixView<i32>,
     curves_dot_q: DMatrixView<i32>,
@@ -293,13 +279,7 @@ fn compute_c_2neg<T>(
             tmp_final.assign(&tmp_fact);
             tmp_final *=
                 q[(neg_idx1, aa)] * q[(neg_idx2, bb)] + q[(neg_idx1, bb)] * q[(neg_idx2, aa)];
-            tx.send((
-                t as u32,
-                Some(aa as u32),
-                Some(bb as u32),
-                tmp_final.clone(),
-            ))
-            .unwrap();
+            tx.send((t, Some(aa), Some(bb), tmp_final.clone())).unwrap();
         }
     }
 }
@@ -310,7 +290,7 @@ fn compute_c_2neg<T>(
 pub struct FundamentalPeriod<T> {
     pub c0: Polynomial<T>,
     pub c1: Vec<Polynomial<T>>,
-    pub c2: HashMap<(u32, u32), Polynomial<T>>,
+    pub c2: HashMap<(usize, usize), Polynomial<T>>,
     pub c0_inv: Polynomial<T>,
 }
 
@@ -323,6 +303,7 @@ pub fn compute_omega<T>(
     q: &DMatrix<i32>,
     nefpart: &[DVector<i32>],
     intnum_idxpairs: &HashSet<(usize, usize)>,
+    all_pools: &mut (NumberPool<T>, Vec<NumberPool<T>>),
 ) -> Result<FundamentalPeriod<T>, FundamentalPeriodError>
 where
     T: PolynomialCoeff<T>,
@@ -333,7 +314,7 @@ where
     let ambient_dim = (h11pd as i32) - (h11 as i32);
     let cy_codim = if nefpart.is_empty() { 1 } else { nefpart.len() };
     let cy_dim = ambient_dim - (cy_codim as i32);
-    let mut coeff_pool = NumberPool::new(poly_props.zero_cutoff.clone(), 1000);
+    let coeff_pool = &mut all_pools.0;
 
     // Run some basic checks on the input data
     if cy_dim < 3 {
@@ -364,9 +345,7 @@ where
     let beta_pairs: Vec<_> = intnum_idxpairs.iter().cloned().collect();
     let (neg0, neg1, neg2) = group_by_neg_int(curves_dot_q.as_view());
 
-    let n_threads = thread::available_parallelism()
-        .unwrap_or(std::num::NonZeroUsize::new(1).unwrap())
-        .get();
+    let n_threads = all_pools.1.len();
     let mut c0 = Polynomial::new();
     let mut c1 = Vec::new();
     for _ in 0..h11 {
@@ -374,7 +353,7 @@ where
     }
     let mut c2 = HashMap::new();
     for &(a, b) in beta_pairs.iter() {
-        c2.insert((a as u32, b as u32), Polynomial::new());
+        c2.insert((a, b), Polynomial::new());
     }
     let mut c0_inv = Polynomial::new();
 
@@ -408,7 +387,7 @@ where
                     c0.coeffs.insert(i, c);
                 }
                 (i, Some(a), None, c) => {
-                    c1[a as usize].coeffs.insert(i, c);
+                    c1[a].coeffs.insert(i, c);
                 }
                 (i, Some(a), Some(b), c) => {
                     c2.get_mut(&(a, b)).unwrap().coeffs.insert(i, c);
@@ -419,7 +398,7 @@ where
     });
     c0.nonzero = c0.coeffs.keys().cloned().collect();
     c0.nonzero.sort_unstable();
-    c0.clean_up(poly_props, &mut coeff_pool);
+    c0.clean_up(poly_props, coeff_pool);
 
     // Now compute the inverse and derivatives in parallel
     let tasks_c1 = Arc::new(Mutex::new(neg1.iter()));
@@ -428,8 +407,8 @@ where
     thread::scope(|s| {
         // Compute inverse of fundamental period
         s.spawn(|| {
-            let tmp_poly = c0.recipr(poly_props, &mut coeff_pool).unwrap();
-            tmp_poly.move_into(&mut c0_inv, &mut coeff_pool);
+            let tmp_poly = c0.recipr(poly_props, coeff_pool).unwrap();
+            tmp_poly.move_into(&mut c0_inv, coeff_pool);
         });
 
         let (tx, rx) = channel();
@@ -474,7 +453,7 @@ where
         while let Ok(msg) = rx.recv() {
             match msg {
                 (i, Some(a), None, c) => {
-                    c1[a as usize].coeffs.insert(i, c);
+                    c1[a].coeffs.insert(i, c);
                 }
                 (i, Some(a), Some(b), c) => {
                     c2.get_mut(&(a, b)).unwrap().coeffs.insert(i, c);
@@ -486,12 +465,12 @@ where
     for p in c1.iter_mut() {
         p.nonzero = p.coeffs.keys().cloned().collect();
         p.nonzero.sort_unstable();
-        p.clean_up(poly_props, &mut coeff_pool);
+        p.clean_up(poly_props, coeff_pool);
     }
     for p in c2.values_mut() {
         p.nonzero = p.coeffs.keys().cloned().collect();
         p.nonzero.sort_unstable();
-        p.clean_up(poly_props, &mut coeff_pool);
+        p.clean_up(poly_props, coeff_pool);
     }
 
     for p in c1.iter_mut() {
@@ -503,12 +482,12 @@ where
         p.nonzero.sort_unstable();
     }
 
-    c0_inv.clean_up(poly_props, &mut coeff_pool);
+    c0_inv.clean_up(poly_props, coeff_pool);
     for p in c1.iter_mut() {
-        p.clean_up(poly_props, &mut coeff_pool);
+        p.clean_up(poly_props, coeff_pool);
     }
     for p in c2.values_mut() {
-        p.clean_up(poly_props, &mut coeff_pool);
+        p.clean_up(poly_props, coeff_pool);
     }
 
     Ok(FundamentalPeriod { c0, c1, c2, c0_inv })
@@ -539,7 +518,19 @@ mod tests {
         let nefpart = Vec::new();
         let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
-        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs);
+        let mut all_pools = (
+            NumberPool::new(zero_rat.clone(), 100),
+            vec![NumberPool::new(zero_rat.clone(), 100)],
+        );
+
+        let fp = compute_omega(
+            &poly_props,
+            &sg,
+            &q,
+            &nefpart,
+            &intnum_idxpairs,
+            &mut all_pools,
+        );
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 

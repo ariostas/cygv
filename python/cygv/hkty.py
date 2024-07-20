@@ -17,7 +17,7 @@ def _compute_gvgw_queue(
     generators: ArrayLike,
     grading_vector: ArrayLike,
     q: ArrayLike,
-    intnums: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
     find_gv: bool,
     is_threefold: bool,
     max_deg: int | None = None,
@@ -50,7 +50,7 @@ def _wrapped_compute_gvgw(
     generators: ArrayLike,
     grading_vector: ArrayLike,
     q: ArrayLike,
-    intnums: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
     find_gv: bool,
     is_threefold: bool,
     max_deg: int | None = None,
@@ -93,7 +93,7 @@ def compute_gv(
     generators: ArrayLike,
     grading_vector: ArrayLike,
     q: ArrayLike,
-    intnums: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
     max_deg: int | None = None,
     min_points: int | None = None,
     nefpart: Sized | None = None,
@@ -102,7 +102,6 @@ def compute_gv(
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
-    intnums = np.array(intnums, dtype=int)
     is_threefold = _is_threefold(q, nefpart)
     res_tmp = _wrapped_compute_gvgw(
         generators,
@@ -127,7 +126,7 @@ def compute_gw(
     generators: ArrayLike,
     grading_vector: ArrayLike,
     q: ArrayLike,
-    intnums: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
     max_deg: int | None = None,
     min_points: int | None = None,
     nefpart: Sized | None = None,
@@ -138,7 +137,6 @@ def compute_gw(
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
-    intnums = np.array(intnums, dtype=int)
     is_threefold = _is_threefold(q, nefpart)
     res_tmp = _wrapped_compute_gvgw(
         generators,

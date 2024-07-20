@@ -6,8 +6,6 @@ use core::fmt;
 #[derive(Debug, Clone)]
 pub enum MiscError {
     EmptyIntNums,
-    WrongDimIntNums,
-    NegativeIndex,
     RepeatedIdxIntNums,
 }
 
@@ -15,15 +13,7 @@ pub enum MiscError {
 impl fmt::Display for MiscError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let message = match self {
-            MiscError::EmptyIntNums => {
-                "there must be at least one nonzero intersection number"
-            }
-            MiscError::WrongDimIntNums => {
-                "the intersection number must be given as a triplet of indices followed by the intersection number"
-            }
-            MiscError::NegativeIndex => {
-                "indices of intersection numbers must be positive"
-            }
+            MiscError::EmptyIntNums => "there must be at least one nonzero intersection number",
             MiscError::RepeatedIdxIntNums => {
                 "the input intersection numbers must be uniquely specified"
             }

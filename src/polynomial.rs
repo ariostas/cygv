@@ -9,7 +9,6 @@ use crate::pool::NumberPool;
 use coefficient::PolynomialCoeff;
 use core::ops::{DivAssign, MulAssign};
 use error::PolynomialError;
-use nalgebra::DVector;
 use properties::PolynomialProperties;
 use std::collections::HashMap;
 
@@ -21,8 +20,8 @@ use std::collections::HashMap;
 /// useful to have this list to make some operations more efficient.
 #[derive(Debug, PartialEq)]
 pub struct Polynomial<T> {
-    pub coeffs: HashMap<u32, T>,
-    pub nonzero: Vec<u32>,
+    pub coeffs: HashMap<usize, T>,
+    pub nonzero: Vec<usize>,
 }
 
 impl<T> Default for Polynomial<T>
@@ -89,16 +88,16 @@ where
         pos_cutoff.assign(&poly_props.zero_cutoff);
         neg_cutoff.assign(&poly_props.zero_cutoff);
         neg_cutoff *= -1;
-        for i in self.nonzero.iter() {
-            let c = self.coeffs.get(i).unwrap();
+        for i in self.nonzero.drain(..) {
+            let c = self.coeffs.get(&i).unwrap();
             if *c <= pos_cutoff && *c >= neg_cutoff {
-                to_delete.push(*i);
+                to_delete.push(i);
             } else {
-                new_nonzero.push(*i);
+                new_nonzero.push(i);
             }
         }
         for i in to_delete.iter() {
-            self.coeffs.remove(i);
+            coeff_pool.push(self.coeffs.remove(i).unwrap());
         }
         self.nonzero = new_nonzero;
         coeff_pool.push(pos_cutoff);
@@ -107,10 +106,10 @@ where
 
     /// Find the minimum degree of the polynomial.
     pub fn min_degree(&self, poly_props: &PolynomialProperties<T>) -> u32 {
-        if let Some(idx) = self.nonzero.first() {
-            return poly_props.semigroup.degrees[*idx as usize];
-        }
-        poly_props.semigroup.max_degree + 1
+        let Some(idx) = self.nonzero.first() else {
+            return poly_props.semigroup.max_degree + 1;
+        };
+        poly_props.semigroup.degrees[*idx]
     }
 
     /// Clone the polynomial, but truncated to a given degree.
@@ -122,7 +121,7 @@ where
     ) -> Self {
         let mut res = Self::new();
         for &i in self.nonzero.iter() {
-            if poly_props.semigroup.degrees[i as usize] > max_deg {
+            if poly_props.semigroup.degrees[i] > max_deg {
                 break;
             }
             res.nonzero.push(i);
@@ -202,7 +201,7 @@ where
         let mut deg1;
         let mut deg2;
         let max_deg = poly_props.semigroup.max_degree;
-        let mut tmp_vec = DVector::zeros(poly_props.semigroup.elements.nrows());
+        let mut tmp_vec;
         let (pshort, plong) = if self.nonzero.len() < rhs.nonzero.len() {
             (self, rhs)
         } else {
@@ -210,20 +209,14 @@ where
         };
         let mut tmp_var = coeff_pool.pop();
         for &i in pshort.nonzero.iter() {
-            deg1 = poly_props.semigroup.degrees[i as usize];
+            deg1 = poly_props.semigroup.degrees[i];
             for &j in plong.nonzero.iter() {
-                deg2 = poly_props.semigroup.degrees[j as usize];
+                deg2 = poly_props.semigroup.degrees[j];
                 if deg1 + deg2 > max_deg {
                     break;
                 }
-                poly_props
-                    .semigroup
-                    .elements
-                    .column(i as usize)
-                    .iter()
-                    .zip(poly_props.semigroup.elements.column(j as usize).iter())
-                    .zip(tmp_vec.iter_mut())
-                    .for_each(|((x, y), z)| *z = *x + *y);
+                tmp_vec = poly_props.semigroup.elements.column(i)
+                    + poly_props.semigroup.elements.column(j);
                 let Some(mon) = poly_props.monomial_map.get(&tmp_vec.as_view()) else {
                     continue;
                 };
@@ -256,15 +249,12 @@ where
         let mut tmp_var = coeff_pool.pop();
         let mut resort = false;
         for (k, v) in rhs.coeffs.iter() {
-            let Some(c) = self.coeffs.get_mut(k) else {
+            let c = self.coeffs.entry(*k).or_insert_with(|| {
                 let mut new_var = coeff_pool.pop();
-                new_var.assign(v);
-                new_var *= scalar;
-                self.nonzero.push(*k);
-                self.coeffs.insert(*k, new_var);
+                new_var.assign(0);
                 resort = true;
-                continue;
-            };
+                new_var
+            });
             tmp_var.assign(v);
             tmp_var *= scalar;
             *c += &tmp_var;
@@ -289,15 +279,12 @@ where
         let mut tmp_var = coeff_pool.pop();
         let mut resort = false;
         for (k, v) in rhs.coeffs.iter() {
-            let Some(c) = self.coeffs.get_mut(k) else {
+            let c = self.coeffs.entry(*k).or_insert_with(|| {
                 let mut new_var = coeff_pool.pop();
-                new_var.assign(v);
-                new_var /= scalar;
-                self.nonzero.push(*k);
-                self.coeffs.insert(*k, new_var);
+                new_var.assign(0);
                 resort = true;
-                continue;
-            };
+                new_var
+            });
             tmp_var.assign(v);
             tmp_var /= scalar;
             *c += &tmp_var;

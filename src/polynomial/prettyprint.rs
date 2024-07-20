@@ -27,7 +27,7 @@ impl<'a, T: fmt::Display> fmt::Display for PrettyPrintPolynomial<'a, T> {
                 .properties
                 .semigroup
                 .elements
-                .column(*i as usize)
+                .column(*i)
                 .iter()
                 .enumerate()
             {

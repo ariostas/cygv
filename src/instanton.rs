@@ -41,7 +41,7 @@ fn compute_alpha_thread<T>(
 
 fn compute_beta_thread<T>(
     tasks: Arc<Mutex<std::collections::hash_set::Iter<(usize, usize)>>>,
-    tx: Sender<((u32, u32), Polynomial<T>)>,
+    tx: Sender<((usize, usize), Polynomial<T>)>,
     fp: &FundamentalPeriod<T>,
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
@@ -54,8 +54,8 @@ fn compute_beta_thread<T>(
             let Some(i) = tasks.lock().unwrap().next() else {
                 break;
             };
-            t0 = i.0 as u32;
-            t1 = i.1 as u32;
+            t0 = i.0;
+            t1 = i.1;
         }
         let mut a = fp.c0_inv.mul(&fp.c2[&(t0, t1)], poly_props, np);
         a.clean_up(poly_props, np);
@@ -65,9 +65,9 @@ fn compute_beta_thread<T>(
 
 fn compute_f_thread<T>(
     tasks: Arc<Mutex<std::collections::hash_set::Iter<(usize, usize)>>>,
-    tx: Sender<((u32, u32), Polynomial<T>)>,
+    tx: Sender<((usize, usize), Polynomial<T>)>,
     alpha: &[Polynomial<T>],
-    beta: &HashMap<(u32, u32), Polynomial<T>>,
+    beta: &HashMap<(usize, usize), Polynomial<T>>,
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
 ) where
@@ -79,10 +79,10 @@ fn compute_f_thread<T>(
             let Some(i) = tasks.lock().unwrap().next() else {
                 break;
             };
-            t0 = i.0 as u32;
-            t1 = i.1 as u32;
+            t0 = i.0;
+            t1 = i.1;
         }
-        let mut p = alpha[t0 as usize].mul(&alpha[t1 as usize], poly_props, np);
+        let mut p = alpha[t0].mul(&alpha[t1], poly_props, np);
         p.sub_assign(&beta[&(t0, t1)], np);
         p.mul_scalar_assign(-1);
         p.clean_up(poly_props, np);
@@ -93,7 +93,7 @@ fn compute_f_thread<T>(
 fn compute_inst_thread<T>(
     tasks: Arc<Mutex<core::slice::Iter<usize>>>,
     tx: Sender<(usize, Polynomial<T>)>,
-    f_poly: &HashMap<(u32, u32), Polynomial<T>>,
+    f_poly: &HashMap<(usize, usize), Polynomial<T>>,
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
@@ -125,7 +125,7 @@ fn compute_inst_thread<T>(
                 else {
                     continue;
                 };
-                let mut tmp_poly = f_poly[&(a as u32, b as u32)].clone(np);
+                let mut tmp_poly = f_poly[&(a, b)].clone(np);
                 if a != b {
                     tmp_poly.mul_scalar_assign(*x);
                 } else {
@@ -185,18 +185,14 @@ pub fn compute_instanton_data<T>(
     n_indices: usize,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
     is_threefold: bool,
+    all_pools: &mut (NumberPool<T>, Vec<NumberPool<T>>),
 ) -> Result<InstantonData<T>, PolynomialError>
 where
     T: PolynomialCoeff<T>,
 {
     let h11 = poly_props.semigroup.elements.nrows();
-    let n_threads = thread::available_parallelism()
-        .unwrap_or(std::num::NonZeroUsize::new(1).unwrap())
-        .get();
 
-    let mut pools: Vec<_> = (0..n_threads)
-        .map(|_| NumberPool::new(poly_props.zero_cutoff.clone(), 1000))
-        .collect();
+    let pools = &mut all_pools.1;
 
     // Compute alpha polynomials
     let mut alpha: Vec<_> = (0..h11).map(|_| Polynomial::<T>::new()).collect();
@@ -319,7 +315,7 @@ where
 mod tests {
     use super::*;
     use crate::{fundamental_period::compute_omega, misc::process_int_nums, Semigroup};
-    use nalgebra::{dmatrix, DMatrix, RowDVector};
+    use nalgebra::{DMatrix, RowDVector};
     use rug::Rational;
 
     #[test]
@@ -334,14 +330,28 @@ mod tests {
         let nefpart = Vec::new();
         let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
-        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs);
+        let mut all_pools = (
+            NumberPool::new(zero_rat.clone(), 100),
+            vec![NumberPool::new(zero_rat.clone(), 100)],
+        );
+
+        let fp = compute_omega(
+            &poly_props,
+            &sg,
+            &q,
+            &nefpart,
+            &intnum_idxpairs,
+            &mut all_pools,
+        );
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 
-        let intnums = dmatrix![ 0, 0, 0, 1;
-                                0, 0,  1,  1;
-                                0, 1,  1,  1;
-                                2, 1, -1, -5;];
+        let intnums = HashMap::from([
+            ((0, 0, 0), 2),
+            ((0, 0, 1), 1),
+            ((0, 1, 1), -1),
+            ((1, 1, 1), -5),
+        ]);
         let result = process_int_nums(intnums.clone(), true);
         assert!(result.is_ok());
         let (intnum_dict, intnum_idxpairs, n_indices) = result.unwrap();
@@ -353,6 +363,7 @@ mod tests {
             n_indices,
             &intnum_dict,
             true,
+            &mut all_pools,
         );
         assert!(inst_data.is_ok());
         let inst_data = inst_data.unwrap();

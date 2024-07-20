@@ -3,6 +3,7 @@ use ctrlc;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
 use rug::{ops::PowAssign, Float, Rational};
+use std::collections::HashMap;
 
 fn to_matrix(m: Vec<Vec<i32>>) -> DMatrix<i32> {
     let n_cols = m.len();
@@ -46,25 +47,26 @@ fn to_vec(v: DVector<i32>) -> Vec<i32> {
 /// Compute GV or GW invariants
 #[pyfunction]
 #[pyo3(name = "_compute_gvgw")]
-#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, nefpart=None, prec=None))]
+#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, nefpart=None, n_threads=None, pool_size=1000, prec=None))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
     grading_vector: Vec<i32>,
     q: Vec<Vec<i32>>,
-    intnums: Vec<Vec<i32>>,
+    intnums: HashMap<(usize, usize, usize), i32>,
     find_gv: bool,
     is_threefold: bool,
     max_deg: Option<u32>,
     min_points: Option<u32>,
     nefpart: Option<Vec<Vec<i32>>>,
+    n_threads: Option<u32>,
+    pool_size: usize,
     prec: Option<u32>,
-) -> PyResult<Vec<((Vec<i32>, u32), String)>> {
+) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
     ctrlc::set_handler(|| std::process::exit(1)).unwrap();
     let generators = to_matrix(generators);
     let grading_vector = to_rowvector(grading_vector);
     let q = to_matrix(q);
-    let intnums = to_matrix(intnums);
     let nefpart = nefpart.unwrap_or_default();
     let nefpart: Vec<_> = nefpart.into_iter().map(to_vector).collect();
 
@@ -82,6 +84,8 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
+                pool_size,
             ),
             (false, true) => run_hkty::<Float, false, true>(
                 generators,
@@ -92,6 +96,8 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
+                pool_size,
             ),
             (true, false) => run_hkty::<Float, true, false>(
                 generators,
@@ -102,6 +108,8 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
+                pool_size,
             ),
             (false, false) => run_hkty::<Float, false, false>(
                 generators,
@@ -112,6 +120,8 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
+                pool_size,
             ),
         };
         final_res = res
@@ -139,6 +149,8 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
+                pool_size,
             ),
             (false, true) => run_hkty::<Rational, false, true>(
                 generators,
@@ -149,6 +161,8 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
+                pool_size,
             ),
             (true, false) => run_hkty::<Rational, true, false>(
                 generators,
@@ -159,6 +173,8 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
+                pool_size,
             ),
             (false, false) => run_hkty::<Rational, false, false>(
                 generators,
@@ -169,6 +185,8 @@ pub fn compute_gvgw(
                 q,
                 nefpart,
                 intnums,
+                n_threads,
+                pool_size,
             ),
         };
         final_res = res
