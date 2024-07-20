@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.0] - 2024-07-20
+
+### 🐛 Bug Fixes
+
+- Fix bugs in semigroup constructors (#11)
+- Allow interrupting computation from Python with ctrl+c (#9)
+
+### ⚙️ Miscellaneous Tasks
+
+- Added cliff.toml
+- Repo-review fixes (#6)
+- Build and test on Windows (#7)
+- Update pre-commit hooks (#10)
+- Update pre-commit hooks (#13)
+- Update pre-commit hooks (#15)
+- Update pre-commit hooks (#19)
+- Update pre-commit hooks (#20)
+- [**breaking**] Miscellaneous cleanup (#16)
+- Fixed failing tests due to rug bug (#22)
+
 ## [0.0.2] - 2024-05-22
 
 ### 🐛 Bug Fixes
