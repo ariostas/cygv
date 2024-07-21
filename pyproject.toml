@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cygv"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 readme = "README.md"
 authors = [
     {name = "Andres Rios Tascon"}
@@ -21,7 +21,6 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -102,7 +101,7 @@ isort.required-imports = ["from __future__ import annotations"]
 
 [tool.mypy]
 files = "python"
-python_version = "3.8"
+python_version = "3.9"
 strict = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 warn_unreachable = true

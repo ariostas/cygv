@@ -15,11 +15,11 @@ crate-type = ["lib", "cdylib"]
 ctrlc = "3.4.4"
 itertools = "0.13.0"
 nalgebra = "0.33.0"
-rug = "1.24.0"
+rug = "1.25.0"
 
 [dependencies.pyo3]
-version = "0.22.0"
-features = ["abi3-py38"]
+version = "0.22.2"
+features = ["abi3-py39"]
 
 [package.metadata.docs.rs]
 rustdoc-args = [ "--html-in-header", "./docs-header.html" ]
