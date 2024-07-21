@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2024-07-21
+
+### ⚙️ Miscellaneous Tasks
+
+- Drop support for python 3.8 and x86 (32-bit) (#24)
+
 ## [0.1.0] - 2024-07-20
 
 ### 🐛 Bug Fixes
