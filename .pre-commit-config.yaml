@@ -41,3 +41,4 @@ repos:
 ci:
   autoupdate_commit_msg: "chore: update pre-commit hooks"
   skip: [fmt, cargo-check, clippy]
+  autoupdate_schedule: monthly
