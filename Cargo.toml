@@ -12,10 +12,12 @@ name = "cygv"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
+clap = { version = "4.5.16", features = ["derive"] }
 ctrlc = "3.4.4"
 itertools = "0.13.0"
 nalgebra = "0.33.0"
 rug = "1.25.0"
+yaml-rust2 = "0.8"
 
 [dependencies.pyo3]
 version = "0.22.2"
