@@ -30,7 +30,7 @@ repos:
     rev: "v2.3.0"
     hooks:
       - id: codespell
-        args: ["-L", "crate"]
+        args: ["-L", "crate,socio-economic"]
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: "v1.11.2"
     hooks:
