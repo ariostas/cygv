@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-13, macos-14]
-        python-version: ['3.9', '3.12']
+        python-version: ['3.9', '3.13']
         include:
           - os: windows-latest
             python-version: ""
@@ -60,3 +60,15 @@ jobs:
       - name: Run pytest
         run: |
           pytest -vv
+
+  check-python:
+    name: Check Python
+    if: always()
+    needs: [build-and-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Decide whether the needed jobs succeeded or failed
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
