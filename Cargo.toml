@@ -18,7 +18,7 @@ nalgebra = "0.33.0"
 rug = "1.25.0"
 
 [dependencies.pyo3]
-version = "0.22.2"
+version = "0.23.2"
 features = ["abi3-py39"]
 
 [package.metadata.docs.rs]
