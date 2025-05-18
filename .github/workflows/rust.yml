@@ -31,13 +31,13 @@ jobs:
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: UCRT64
+          msystem: MINGW64
           update: true
-          path-type: inherit
           install: >-
-            mingw-w64-ucrt-x86_64-python
-            mingw-w64-ucrt-x86_64-rust
-            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-rust
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-clang
             diffutils
             m4
             make
@@ -46,7 +46,7 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v4
       - name: Build
-        run: cargo build --verbose
+        run: CC=clang cargo build --verbose
       - name: Run tests
         run: cargo test --verbose
 
