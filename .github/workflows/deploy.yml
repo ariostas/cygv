@@ -46,6 +46,7 @@ jobs:
             mingw-w64-x86_64-python-maturin
             mingw-w64-x86_64-rust
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-clang
             mingw-w64-x86_64-cmake
             diffutils
             m4
@@ -72,7 +73,7 @@ jobs:
       - name: Build wheels (Windows)
         if: runner.os == 'Windows'
         run: |
-          python -m build --wheel --no-isolation --outdir wheelhouse
+          CC=clang python -m build --wheel --no-isolation --outdir wheelhouse
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
