@@ -46,6 +46,7 @@ jobs:
             mingw-w64-x86_64-python-maturin
             mingw-w64-x86_64-rust
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-clang
             mingw-w64-x86_64-cmake
             diffutils
             m4
@@ -66,13 +67,13 @@ jobs:
             rustup show
           CIBW_TEST_COMMAND: 'pytest -vv {project}'
           CIBW_TEST_REQUIRES: pytest
-          CIBW_SKIP: cp38-* pp38-* *_i686
+          CIBW_SKIP: cp38-* pp38-* *_i686 pp* cp39-macosx_x86_64 cp310-macosx_x86_64 cp311-macosx_x86_64
           CIBW_BUILD_VERBOSITY: 1
       # CIBW has some issues building wheels with MSYS2
       - name: Build wheels (Windows)
         if: runner.os == 'Windows'
         run: |
-          python -m build --wheel --no-isolation --outdir wheelhouse
+          CC=clang python -m build --wheel --no-isolation --outdir wheelhouse
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
