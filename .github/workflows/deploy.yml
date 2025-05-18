@@ -67,7 +67,7 @@ jobs:
             rustup show
           CIBW_TEST_COMMAND: 'pytest -vv {project}'
           CIBW_TEST_REQUIRES: pytest
-          CIBW_SKIP: cp38-* pp38-* *_i686
+          CIBW_SKIP: cp38-* pp38-* *_i686 pp* cp39-macosx_x86_64 cp310-macosx_x86_64 cp311-macosx_x86_64
           CIBW_BUILD_VERBOSITY: 1
       # CIBW has some issues building wheels with MSYS2
       - name: Build wheels (Windows)
