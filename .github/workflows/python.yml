@@ -19,14 +19,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-13, macos-14]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14]
         python-version: ['3.9', '3.13']
         include:
-          - os: windows-latest
+          - os: windows-2022
             python-version: ""
     defaults:
       run:
-        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
+        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
     steps:
       - name: Set up MSYS2
         if: runner.os == 'Windows'
