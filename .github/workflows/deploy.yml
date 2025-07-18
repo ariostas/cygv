@@ -31,7 +31,7 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14, windows-2022]
     defaults:
       run:
-        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+        shell: ${{ matrix.os == 'windows-2022' && 'msys2 {0}' || 'bash' }}
     steps:
       - name: Set up MSYS2
         if: runner.os == 'Windows'

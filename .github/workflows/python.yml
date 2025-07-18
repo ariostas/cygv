@@ -26,7 +26,7 @@ jobs:
             python-version: ""
     defaults:
       run:
-        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+        shell: ${{ matrix.os == 'windows-2022' && 'msys2 {0}' || 'bash' }}
     steps:
       - name: Set up MSYS2
         if: runner.os == 'Windows'
