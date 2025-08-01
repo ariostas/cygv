@@ -14,7 +14,7 @@ crate-type = ["lib", "cdylib"]
 [dependencies]
 ctrlc = "3.4.4"
 itertools = "0.14.0"
-nalgebra = "0.33.0"
+nalgebra = "0.34.0"
 rug = "1.25.0"
 
 [dependencies.pyo3]
