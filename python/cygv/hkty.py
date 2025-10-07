@@ -58,7 +58,7 @@ def _wrapped_compute_gvgw(
     nefpart: Sized | None = None,
     prec: int | None = None,
 ) -> list[Any]:
-    queue: Queue[list[Any]] = Queue()
+    queue: Queue[list[Any] | Exception] = Queue()
     process = Process(
         target=_compute_gvgw_queue,
         args=(
