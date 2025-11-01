@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Build SDist
         run: pipx run build --sdist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: cibw-sdist
           path: dist/*.tar.gz
@@ -75,7 +75,7 @@ jobs:
         run: |
           CC=clang python -m build --wheel --no-isolation --outdir wheelhouse
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: cibw-wheels-${{ github.event.release.tag_name }}-${{ matrix.os }}
           retention-days: 1
@@ -93,7 +93,7 @@ jobs:
     if: github.event_name == 'release' && github.event.action == 'published'
     steps:
       - name: Download wheels
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: cibw-*
           path: dist
