@@ -380,7 +380,7 @@ where
             self.truncated(max_deg - (n - 1) * min_deg, poly_props, coeff_pool)
         };
         loop {
-            if n % 2 != 0 {
+            if !n.is_multiple_of(2) {
                 let tmp_poly2 = res.mul(&tmp_poly, poly_props, coeff_pool);
                 tmp_poly2.move_into(&mut res, coeff_pool);
             }

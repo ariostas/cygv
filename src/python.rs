@@ -208,7 +208,7 @@ pub fn compute_gvgw(
 }
 
 /// A Python module implemented in Rust.
-#[pymodule]
+#[pymodule(gil_used = false)]
 pub fn cygv(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_gvgw, m)?)?;
     Ok(())

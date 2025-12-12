@@ -28,7 +28,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14, windows-2022]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, windows-2022]
     defaults:
       run:
         shell: ${{ matrix.os == 'windows-2022' && 'msys2 {0}' || 'bash' }}
@@ -65,7 +65,7 @@ jobs:
           CIBW_BEFORE_BUILD_LINUX: >
             curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain=stable --profile=minimal -y &&
             rustup show
-          CIBW_TEST_COMMAND: 'pytest -vv {project}'
+          CIBW_TEST_COMMAND: "pytest -vv {project}"
           CIBW_TEST_REQUIRES: pytest
           CIBW_SKIP: "*_i686 cp39-macosx_x86_64 cp310-macosx_x86_64 cp311-macosx_x86_64"
           CIBW_BUILD_VERBOSITY: 1
