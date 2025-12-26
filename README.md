@@ -15,7 +15,7 @@ Licensed under the GNU General Public License v3 or later (GPLv3+)
 
 Any contribution submitted for inclusion in the work by you, shall be
 licensed as under the GPLv3+, without any additional terms or conditions.
-See [CONTRIBUTING.md](https://github.com/ariostas/cygv/blob/main/CONTRIBUTING.md) for more guidelines.
+See [CONTRIBUTING.md](https://github.com/ariostas/cygv/blob/main/CONTRIBUTING.md) for guidelines.
 
 [1]: https://arxiv.org/abs/hep-th/9308122
 [2]: https://arxiv.org/abs/hep-th/9406055
