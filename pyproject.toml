@@ -9,11 +9,11 @@ readme = "README.md"
 authors = [
     {name = "Andres Rios Tascon"}
 ]
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
