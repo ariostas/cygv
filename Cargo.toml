@@ -21,5 +21,12 @@ rug = "1.25.0"
 version = "0.27.1"
 features = ["abi3-py310"]
 
+[dev-dependencies]
+criterion = { version = "0.8.1", features = ["html_reports"] }
+
+[[bench]]
+name = "bench"
+harness = false
+
 [package.metadata.docs.rs]
 rustdoc-args = [ "--html-in-header", "./docs-header.html" ]
