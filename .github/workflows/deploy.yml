@@ -15,10 +15,10 @@ jobs:
     name: Make SDist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Build SDist
         run: pipx run build --sdist
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: cibw-sdist
           path: dist/*.tar.gz
@@ -54,7 +54,7 @@ jobs:
             git
             curl
       - name: Check out repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Build wheels
         if: runner.os != 'Windows'
         run: |
@@ -75,7 +75,7 @@ jobs:
         run: |
           CC=clang python -m build --wheel --no-isolation --outdir wheelhouse
       - name: Upload wheels
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: cibw-wheels-${{ github.event.release.tag_name }}-${{ matrix.os }}
           retention-days: 1
@@ -93,7 +93,7 @@ jobs:
     if: github.event_name == 'release' && github.event.action == 'published'
     steps:
       - name: Download wheels
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: cibw-*
           path: dist
@@ -114,7 +114,7 @@ jobs:
     if: github.event_name == 'release' && github.event.action == 'published'
     steps:
       - name: Check out repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Publish to Crates.io
         run: |
           cargo login ${{ secrets.CARGO_REGISTRY_TOKEN }}
