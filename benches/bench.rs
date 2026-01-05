@@ -31,10 +31,10 @@ fn benchmark_threefolds(c: &mut Criterion) {
         ((1, 1, 1), -5),
     ]);
 
-    let mut low_deg = c.benchmark_group("low degree");
+    let mut low_deg = c.benchmark_group("Threefold low-degree");
     low_deg.sample_size(100);
 
-    low_deg.bench_function("threefold GV Rational", |b| {
+    low_deg.bench_function("GV Rational", |b| {
         b.iter(|| {
             compute_gv_rat_threefold(
                 generators.clone(),
@@ -49,7 +49,7 @@ fn benchmark_threefolds(c: &mut Criterion) {
             )
         })
     });
-    low_deg.bench_function("threefold GW Rational", |b| {
+    low_deg.bench_function("GW Rational", |b| {
         b.iter(|| {
             compute_gw_rat_threefold(
                 generators.clone(),
@@ -64,7 +64,7 @@ fn benchmark_threefolds(c: &mut Criterion) {
             )
         })
     });
-    low_deg.bench_function("threefold GV Float", |b| {
+    low_deg.bench_function("GV Float", |b| {
         b.iter(|| {
             compute_gv_float_threefold(
                 generators.clone(),
@@ -80,7 +80,7 @@ fn benchmark_threefolds(c: &mut Criterion) {
             )
         })
     });
-    low_deg.bench_function("threefold GW Float", |b| {
+    low_deg.bench_function("GW Float", |b| {
         b.iter(|| {
             compute_gw_float_threefold(
                 generators.clone(),
@@ -99,10 +99,10 @@ fn benchmark_threefolds(c: &mut Criterion) {
 
     low_deg.finish();
 
-    let mut high_deg = c.benchmark_group("high degree");
+    let mut high_deg = c.benchmark_group("Threefold highdegree");
     high_deg.sample_size(10);
 
-    high_deg.bench_function("threefold GV Rational", |b| {
+    high_deg.bench_function("GV Rational", |b| {
         b.iter(|| {
             compute_gv_rat_threefold(
                 generators.clone(),
@@ -117,7 +117,7 @@ fn benchmark_threefolds(c: &mut Criterion) {
             )
         })
     });
-    high_deg.bench_function("threefold GW Rational", |b| {
+    high_deg.bench_function("GW Rational", |b| {
         b.iter(|| {
             compute_gw_rat_threefold(
                 generators.clone(),
@@ -132,7 +132,7 @@ fn benchmark_threefolds(c: &mut Criterion) {
             )
         })
     });
-    high_deg.bench_function("threefold GV Float", |b| {
+    high_deg.bench_function("GV Float", |b| {
         b.iter(|| {
             compute_gv_float_threefold(
                 generators.clone(),
@@ -148,7 +148,7 @@ fn benchmark_threefolds(c: &mut Criterion) {
             )
         })
     });
-    high_deg.bench_function("threefold GW Float", |b| {
+    high_deg.bench_function("GW Float", |b| {
         b.iter(|| {
             compute_gw_float_threefold(
                 generators.clone(),
@@ -274,10 +274,10 @@ fn benchmark_fourfolds(c: &mut Criterion) {
         ((13, 5, 5), -1024),
     ]);
 
-    let mut low_deg = c.benchmark_group("low degree");
+    let mut low_deg = c.benchmark_group("Fourfold low-degree");
     low_deg.sample_size(100);
 
-    low_deg.bench_function("fourfold GV Rational", |b| {
+    low_deg.bench_function("GV Rational", |b| {
         b.iter(|| {
             compute_gv_rat_nfold(
                 generators.clone(),
@@ -292,7 +292,7 @@ fn benchmark_fourfolds(c: &mut Criterion) {
             )
         })
     });
-    low_deg.bench_function("fourfold GW Rational", |b| {
+    low_deg.bench_function("GW Rational", |b| {
         b.iter(|| {
             compute_gw_rat_nfold(
                 generators.clone(),
@@ -307,7 +307,7 @@ fn benchmark_fourfolds(c: &mut Criterion) {
             )
         })
     });
-    low_deg.bench_function("fourfold GV Float", |b| {
+    low_deg.bench_function("GV Float", |b| {
         b.iter(|| {
             compute_gv_float_nfold(
                 generators.clone(),
@@ -323,7 +323,7 @@ fn benchmark_fourfolds(c: &mut Criterion) {
             )
         })
     });
-    low_deg.bench_function("fourfold GW Float", |b| {
+    low_deg.bench_function("GW Float", |b| {
         b.iter(|| {
             compute_gw_float_nfold(
                 generators.clone(),
@@ -342,10 +342,10 @@ fn benchmark_fourfolds(c: &mut Criterion) {
 
     low_deg.finish();
 
-    let mut high_deg = c.benchmark_group("high degree");
+    let mut high_deg = c.benchmark_group("Fourfold high-degree");
     high_deg.sample_size(10);
 
-    high_deg.bench_function("fourfold GV Rational", |b| {
+    high_deg.bench_function("GV Rational", |b| {
         b.iter(|| {
             compute_gv_rat_nfold(
                 generators.clone(),
@@ -360,7 +360,7 @@ fn benchmark_fourfolds(c: &mut Criterion) {
             )
         })
     });
-    high_deg.bench_function("fourfold GW Rational", |b| {
+    high_deg.bench_function("GW Rational", |b| {
         b.iter(|| {
             compute_gw_rat_nfold(
                 generators.clone(),
@@ -375,7 +375,7 @@ fn benchmark_fourfolds(c: &mut Criterion) {
             )
         })
     });
-    high_deg.bench_function("fourfold GV Float", |b| {
+    high_deg.bench_function("GV Float", |b| {
         b.iter(|| {
             compute_gv_float_nfold(
                 generators.clone(),
@@ -391,7 +391,7 @@ fn benchmark_fourfolds(c: &mut Criterion) {
             )
         })
     });
-    high_deg.bench_function("fourfold GW Float", |b| {
+    high_deg.bench_function("GW Float", |b| {
         b.iter(|| {
             compute_gw_float_nfold(
                 generators.clone(),
