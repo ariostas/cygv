@@ -133,7 +133,7 @@ def compute_gw(
     prec: int | None = None,
 ) -> list[Any]:
     if prec is not None:
-        mp.prec = prec
+        mp.mp.prec = prec
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
