@@ -76,10 +76,13 @@ def _wrapped_compute_gvgw(
         ),
     )
     process.start()
-    result = queue.get()
     process.join()
+    if process.exitcode != 0:
+        msg = f"Computation failed (subprocess exited with code {process.exitcode})"
+        raise RuntimeError(msg)
+    result = queue.get()
     if isinstance(result, Exception):
-        raise (result)
+        raise result
     return result
 
 
