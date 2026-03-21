@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import Sized
 from fractions import Fraction
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection, wait
+from pathlib import Path
 from typing import Any
 
 import mpmath as mp
@@ -16,7 +18,7 @@ from cygv.cygv import _compute_gvgw
 
 def _compute_gvgw_subprocess(
     conn: Connection,
-    stderr_conn: Connection,
+    stderr_path: Path,
     generators: ArrayLike,
     grading_vector: ArrayLike,
     q: ArrayLike,
@@ -28,8 +30,8 @@ def _compute_gvgw_subprocess(
     nefpart: Sized | None = None,
     prec: int | None = None,
 ) -> None:
-    os.dup2(stderr_conn.fileno(), 2)
-    stderr_conn.close()
+    with stderr_path.open("wb") as f:
+        os.dup2(f.fileno(), 2)
     try:
         conn.send(
             _compute_gvgw(
@@ -65,12 +67,13 @@ def _wrapped_compute_gvgw(
     prec: int | None = None,
 ) -> Any:
     parent_conn, child_conn = Pipe(duplex=False)
-    stderr_recv, stderr_send = Pipe(duplex=False)
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        stderr_path = Path(f.name)
     process = Process(
         target=_compute_gvgw_subprocess,
         args=(
             child_conn,
-            stderr_send,
+            stderr_path,
             generators,
             grading_vector,
             q,
@@ -85,26 +88,20 @@ def _wrapped_compute_gvgw(
     )
     process.start()
     child_conn.close()
-    stderr_send.close()
 
     ready = wait([parent_conn, process.sentinel])
     if parent_conn in ready:
         result = parent_conn.recv()
         process.join()
-        stderr_recv.close()
+        stderr_path.unlink()
         if isinstance(result, BaseException):
             raise result
         return result
 
     process.join()
-    chunks = []
-    while True:
-        chunk = os.read(stderr_recv.fileno(), 4096)
-        if not chunk:
-            break
-        chunks.append(chunk)
-    stderr_recv.close()
-    stderr_msg = b"".join(chunks).decode(errors="replace").strip()
+    with stderr_path.open("rb") as f:
+        stderr_msg = f.read().decode(errors="replace").strip()
+    stderr_path.unlink()
     msg = f"Computation failed (exit code {process.exitcode})"
     if stderr_msg:
         msg += f":\n{stderr_msg}"
