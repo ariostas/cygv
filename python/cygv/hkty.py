@@ -16,7 +16,7 @@ from cygv.cygv import _compute_gvgw
 
 def _compute_gvgw_subprocess(
     conn: Connection,
-    stderr_fd: int,
+    stderr_conn: Connection,
     generators: ArrayLike,
     grading_vector: ArrayLike,
     q: ArrayLike,
@@ -28,8 +28,8 @@ def _compute_gvgw_subprocess(
     nefpart: Sized | None = None,
     prec: int | None = None,
 ) -> None:
-    os.dup2(stderr_fd, 2)
-    os.close(stderr_fd)
+    os.dup2(stderr_conn.fileno(), 2)
+    stderr_conn.close()
     try:
         conn.send(
             _compute_gvgw(
@@ -65,12 +65,12 @@ def _wrapped_compute_gvgw(
     prec: int | None = None,
 ) -> Any:
     parent_conn, child_conn = Pipe(duplex=False)
-    stderr_r_fd, stderr_w_fd = os.pipe()
+    stderr_recv, stderr_send = Pipe(duplex=False)
     process = Process(
         target=_compute_gvgw_subprocess,
         args=(
             child_conn,
-            stderr_w_fd,
+            stderr_send,
             generators,
             grading_vector,
             q,
@@ -85,20 +85,26 @@ def _wrapped_compute_gvgw(
     )
     process.start()
     child_conn.close()
-    os.close(stderr_w_fd)
+    stderr_send.close()
 
     ready = wait([parent_conn, process.sentinel])
     if parent_conn in ready:
         result = parent_conn.recv()
         process.join()
-        os.close(stderr_r_fd)
+        stderr_recv.close()
         if isinstance(result, BaseException):
             raise result
         return result
 
     process.join()
-    stderr_msg = os.read(stderr_r_fd, 65536).decode(errors="replace").strip()
-    os.close(stderr_r_fd)
+    chunks = []
+    while True:
+        chunk = os.read(stderr_recv.fileno(), 4096)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    stderr_recv.close()
+    stderr_msg = b"".join(chunks).decode(errors="replace").strip()
     msg = f"Computation failed (exit code {process.exitcode})"
     if stderr_msg:
         msg += f":\n{stderr_msg}"
