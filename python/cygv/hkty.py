@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Sized
 from fractions import Fraction
-from multiprocessing import Process, Queue
+from multiprocessing import Pipe, Process
+from multiprocessing.connection import Connection, wait
 from typing import Any
 
 import mpmath as mp
@@ -12,8 +14,9 @@ from numpy.typing import ArrayLike
 from cygv.cygv import _compute_gvgw
 
 
-def _compute_gvgw_queue(
-    queue: Queue[list[Any] | Exception],
+def _compute_gvgw_subprocess(
+    conn: Connection,
+    stderr_fd: int,
     generators: ArrayLike,
     grading_vector: ArrayLike,
     q: ArrayLike,
@@ -25,27 +28,30 @@ def _compute_gvgw_queue(
     nefpart: Sized | None = None,
     prec: int | None = None,
 ) -> None:
-    result = None
+    os.dup2(stderr_fd, 2)
+    os.close(stderr_fd)
     try:
-        result = _compute_gvgw(
-            generators,
-            grading_vector,
-            q,
-            intnums,
-            find_gv,
-            is_threefold,
-            max_deg,
-            min_points,
-            nefpart,
-            prec,
+        conn.send(
+            _compute_gvgw(
+                generators,
+                grading_vector,
+                q,
+                intnums,
+                find_gv,
+                is_threefold,
+                max_deg,
+                min_points,
+                nefpart,
+                prec,
+            )
         )
-    except Exception as e:
-        result = e
-    queue.put(result)
+    except BaseException as e:
+        conn.send(RuntimeError(str(e)))
+    conn.close()
 
 
 # We wrap the raw `_compute_gvgw` function so that we can use ctrl+c
-# to interrupt the computation without fully exiting the main python thread.
+# to interrupt the computation without fully exiting the main python process.
 def _wrapped_compute_gvgw(
     generators: ArrayLike,
     grading_vector: ArrayLike,
@@ -57,12 +63,14 @@ def _wrapped_compute_gvgw(
     min_points: int | None = None,
     nefpart: Sized | None = None,
     prec: int | None = None,
-) -> list[Any]:
-    queue: Queue[list[Any] | Exception] = Queue()
+) -> Any:
+    parent_conn, child_conn = Pipe(duplex=False)
+    stderr_r_fd, stderr_w_fd = os.pipe()
     process = Process(
-        target=_compute_gvgw_queue,
+        target=_compute_gvgw_subprocess,
         args=(
-            queue,
+            child_conn,
+            stderr_w_fd,
             generators,
             grading_vector,
             q,
@@ -76,14 +84,25 @@ def _wrapped_compute_gvgw(
         ),
     )
     process.start()
+    child_conn.close()
+    os.close(stderr_w_fd)
+
+    ready = wait([parent_conn, process.sentinel])
+    if parent_conn in ready:
+        result = parent_conn.recv()
+        process.join()
+        os.close(stderr_r_fd)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
     process.join()
-    if process.exitcode != 0:
-        msg = f"Computation failed (subprocess exited with code {process.exitcode})"
-        raise RuntimeError(msg)
-    result = queue.get()
-    if isinstance(result, Exception):
-        raise result
-    return result
+    stderr_msg = os.read(stderr_r_fd, 65536).decode(errors="replace").strip()
+    os.close(stderr_r_fd)
+    msg = f"Computation failed (exit code {process.exitcode})"
+    if stderr_msg:
+        msg += f":\n{stderr_msg}"
+    raise RuntimeError(msg)
 
 
 def _is_threefold(q: ArrayLike, nefpart: Sized | None) -> bool:
