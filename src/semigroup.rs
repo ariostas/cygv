@@ -494,7 +494,12 @@ mod tests {
         let grading_vector = RowDVector::from_row_slice(&[1, 1]);
         let target_points = DMatrix::from_column_slice(2, 1, &[2, 1]);
 
-        let sg = Semigroup::with_target_points(generators, grading_vector, target_points).unwrap();
+        let sg = Semigroup::with_target_points(
+            generators.clone(),
+            grading_vector.clone(),
+            target_points,
+        )
+        .unwrap();
         let elements = matrix_columns_to_set(&sg.elements);
         let expected = HashSet::from([
             DVector::from_column_slice(&[0, 0]),
@@ -506,6 +511,28 @@ mod tests {
         ]);
 
         assert_eq!(elements, expected);
+
+        let target_points = DMatrix::from_column_slice(2, 1, &[10, 10]);
+        let sg = Semigroup::with_target_points(
+            generators.clone(),
+            grading_vector.clone(),
+            target_points,
+        )
+        .unwrap();
+        let elements = matrix_columns_to_set(&sg.elements);
+
+        assert_eq!(elements.len(), 121);
+
+        let target_points = DMatrix::from_column_slice(2, 1, &[0, 10]);
+        let sg = Semigroup::with_target_points(
+            generators.clone(),
+            grading_vector.clone(),
+            target_points,
+        )
+        .unwrap();
+        let elements = matrix_columns_to_set(&sg.elements);
+
+        assert_eq!(elements.len(), 11);
     }
 
     #[test]
