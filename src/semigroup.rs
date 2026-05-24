@@ -70,17 +70,8 @@ impl Semigroup {
 
         let generators = find_generators(&elements);
 
-        let mut elements_set = HashSet::new();
-        for c in elements.column_iter() {
-            let tmp_vec = DVector::from_column_slice(c.as_slice());
-            elements_set.insert(tmp_vec);
-        }
-
-        let mut starting_elements = HashSet::new();
-        for c in elements.column_iter() {
-            let tmp_vec = DVector::from_column_slice(c.as_slice());
-            starting_elements.insert(tmp_vec);
-        }
+        let mut elements_set = matrix_columns_to_set(&elements);
+        let mut starting_elements = elements_set.clone();
         drop(elements);
 
         // TODO: This part might be easy to parallelize, so it's worth checking out.
