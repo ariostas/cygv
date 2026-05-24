@@ -120,6 +120,17 @@ def _is_threefold(q: ArrayLike, nefpart: Sized | None) -> bool:
     return (ambient_dim - cy_codim) == 3
 
 
+def _regularize_target_points(
+    target_points: ArrayLike | None,
+) -> np.ndarray[Any, Any] | None:
+    if target_points is None:
+        return None
+    target_points = np.array(target_points, dtype=int)
+    if target_points.ndim == 1:
+        target_points = target_points.reshape(1, -1)
+    return target_points
+
+
 def compute_gv(
     generators: ArrayLike,
     grading_vector: ArrayLike,
@@ -134,8 +145,7 @@ def compute_gv(
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
-    if target_points is not None:
-        target_points = np.array(target_points, dtype=int)
+    target_points = _regularize_target_points(target_points)
     is_threefold = _is_threefold(q, nefpart)
     res_tmp = _wrapped_compute_gvgw(
         generators,
@@ -173,8 +183,7 @@ def compute_gw(
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
-    if target_points is not None:
-        target_points = np.array(target_points, dtype=int)
+    target_points = _regularize_target_points(target_points)
     is_threefold = _is_threefold(q, nefpart)
     res_tmp = _wrapped_compute_gvgw(
         generators,
