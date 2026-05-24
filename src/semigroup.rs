@@ -156,6 +156,83 @@ impl Semigroup {
 
         Self::from_data(elements, grading_vector)
     }
+
+    /// Constructs the part of the semigroup needed to compute invariants at
+    /// the requested target points.
+    pub fn with_target_points(
+        elements: DMatrix<i32>,
+        grading_vector: RowDVector<i32>,
+        target_points: DMatrix<i32>,
+    ) -> Result<Self, SemigroupError> {
+        if target_points.ncols() == 0 {
+            return Self::from_data(elements, grading_vector);
+        }
+        if elements.nrows() != target_points.nrows()
+            || grading_vector.len() != target_points.nrows()
+        {
+            return Err(SemigroupError::DimensionMismatchError);
+        }
+
+        check_degrees(&elements, &grading_vector)?;
+        check_degrees(&target_points, &grading_vector)?;
+
+        let target_max_degree = (&grading_vector * &target_points)
+            .iter()
+            .map(|d| *d as u32)
+            .max()
+            .unwrap_or(0);
+        let generation_bound = target_max_degree;
+        let base_bound = target_max_degree.div_ceil(2);
+
+        let generators = find_generators(&elements);
+        let base_semigroup = Self::with_max_degree(elements, grading_vector.clone(), base_bound)?;
+
+        let mut elements_set = matrix_columns_to_set(&base_semigroup.elements);
+        let mut reflected_set = HashSet::new();
+        for target in target_points.column_iter() {
+            for element in elements_set.iter() {
+                reflected_set.insert(target - element);
+            }
+        }
+
+        let mut starting_elements = elements_set.clone();
+        loop {
+            let new_elements = find_new_elements_in_reflected_targets(
+                &generators,
+                &starting_elements,
+                &elements_set,
+                &reflected_set,
+                &grading_vector,
+                generation_bound,
+            );
+            if new_elements.is_empty() {
+                break;
+            }
+            for c in new_elements.iter() {
+                elements_set.insert(c.clone());
+            }
+            starting_elements = new_elements;
+        }
+
+        let mut final_elements = HashSet::new();
+        for target in target_points.column_iter() {
+            for element in elements_set.iter() {
+                let reflected = target - element;
+                if elements_set.contains(&reflected) {
+                    final_elements.insert(element.clone());
+                }
+            }
+        }
+        final_elements.insert(DVector::zeros(grading_vector.len()));
+
+        let mut elements = DMatrix::zeros(grading_vector.len(), final_elements.len());
+        elements
+            .column_iter_mut()
+            .zip(final_elements)
+            .for_each(|(mut d, s)| d.copy_from(&s));
+
+        Self::from_data(elements, grading_vector)
+    }
 }
 
 /// Sort the elements by degree and make sure that only the identity has degree
@@ -223,6 +300,14 @@ fn check_degrees(
         }
     }
     Ok(())
+}
+
+fn matrix_columns_to_set(elements: &DMatrix<i32>) -> HashSet<DVector<i32>> {
+    let mut elements_set = HashSet::new();
+    for c in elements.column_iter() {
+        elements_set.insert(DVector::from_column_slice(c.as_slice()));
+    }
+    elements_set
 }
 
 /// Returns only the elements with degree up to the specified maximum degree.
@@ -312,6 +397,33 @@ fn find_new_elements_until_max_deg(
     new_elements
 }
 
+/// Find new elements that lie in the reflected target regions.
+fn find_new_elements_in_reflected_targets(
+    generators: &DMatrix<i32>,
+    starting_elements: &HashSet<DVector<i32>>,
+    elements_set: &HashSet<DVector<i32>>,
+    reflected_set: &HashSet<DVector<i32>>,
+    grading_vector: &RowDVector<i32>,
+    max_degree: u32,
+) -> HashSet<DVector<i32>> {
+    let mut new_elements = HashSet::new();
+    let mut tmp_vec = DVector::zeros(generators.nrows());
+    for c1 in generators.column_iter() {
+        for c2 in starting_elements.iter() {
+            tmp_vec.copy_from(c2);
+            tmp_vec += c1;
+            let deg = grading_vector.tr_dot(&tmp_vec) as u32;
+            if deg <= max_degree
+                && reflected_set.contains(&tmp_vec)
+                && !elements_set.contains(&tmp_vec)
+            {
+                new_elements.insert(tmp_vec.clone());
+            }
+        }
+    }
+    new_elements
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +499,26 @@ mod tests {
         let sg = sg_result.unwrap();
         assert_eq!(sg.degrees.len(), 3);
         assert_eq!(sg.degrees, RowDVector::from_row_slice(&[0, 1, 1]));
+    }
+
+    #[test]
+    fn test_semigroup_with_target_points() {
+        let generators = DMatrix::from_column_slice(2, 2, &[1, 0, 0, 1]);
+        let grading_vector = RowDVector::from_row_slice(&[1, 1]);
+        let target_points = DMatrix::from_column_slice(2, 1, &[2, 1]);
+
+        let sg = Semigroup::with_target_points(generators, grading_vector, target_points).unwrap();
+        let elements = matrix_columns_to_set(&sg.elements);
+        let expected = HashSet::from([
+            DVector::from_column_slice(&[0, 0]),
+            DVector::from_column_slice(&[1, 0]),
+            DVector::from_column_slice(&[2, 0]),
+            DVector::from_column_slice(&[0, 1]),
+            DVector::from_column_slice(&[1, 1]),
+            DVector::from_column_slice(&[2, 1]),
+        ]);
+
+        assert_eq!(elements, expected);
     }
 
     #[test]

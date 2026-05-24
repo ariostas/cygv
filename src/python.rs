@@ -47,7 +47,7 @@ fn to_vec(v: DVector<i32>) -> Vec<i32> {
 /// Compute GV or GW invariants
 #[pyfunction]
 #[pyo3(name = "_compute_gvgw")]
-#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, nefpart=None, n_threads=None, pool_size=1000, prec=None))]
+#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, pool_size=1000, prec=None))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
@@ -58,6 +58,7 @@ pub fn compute_gvgw(
     is_threefold: bool,
     max_deg: Option<u32>,
     min_points: Option<u32>,
+    target_points: Option<Vec<Vec<i32>>>,
     nefpart: Option<Vec<Vec<i32>>>,
     n_threads: Option<u32>,
     pool_size: usize,
@@ -67,6 +68,7 @@ pub fn compute_gvgw(
     let generators = to_matrix(generators);
     let grading_vector = to_rowvector(grading_vector);
     let q = to_matrix(q);
+    let target_points = target_points.map(to_matrix);
     let nefpart = nefpart.unwrap_or_default();
     let nefpart: Vec<_> = nefpart.into_iter().map(to_vector).collect();
 
@@ -81,6 +83,7 @@ pub fn compute_gvgw(
                 zero_cutoff,
                 max_deg,
                 min_points,
+                target_points,
                 q,
                 nefpart,
                 intnums,
@@ -93,6 +96,7 @@ pub fn compute_gvgw(
                 zero_cutoff,
                 max_deg,
                 min_points,
+                target_points,
                 q,
                 nefpart,
                 intnums,
@@ -105,6 +109,7 @@ pub fn compute_gvgw(
                 zero_cutoff,
                 max_deg,
                 min_points,
+                target_points,
                 q,
                 nefpart,
                 intnums,
@@ -117,6 +122,7 @@ pub fn compute_gvgw(
                 zero_cutoff,
                 max_deg,
                 min_points,
+                target_points,
                 q,
                 nefpart,
                 intnums,
@@ -146,6 +152,7 @@ pub fn compute_gvgw(
                 zero_cutoff,
                 max_deg,
                 min_points,
+                target_points,
                 q,
                 nefpart,
                 intnums,
@@ -158,6 +165,7 @@ pub fn compute_gvgw(
                 zero_cutoff,
                 max_deg,
                 min_points,
+                target_points,
                 q,
                 nefpart,
                 intnums,
@@ -170,6 +178,7 @@ pub fn compute_gvgw(
                 zero_cutoff,
                 max_deg,
                 min_points,
+                target_points,
                 q,
                 nefpart,
                 intnums,
@@ -182,6 +191,7 @@ pub fn compute_gvgw(
                 zero_cutoff,
                 max_deg,
                 min_points,
+                target_points,
                 q,
                 nefpart,
                 intnums,

@@ -7,6 +7,7 @@ use core::fmt;
 pub enum SemigroupError {
     NonPositiveDegreeError,
     MissingIdentityError,
+    DimensionMismatchError,
 }
 
 /// Implement Display trait for SemigroupError.
@@ -17,6 +18,9 @@ impl fmt::Display for SemigroupError {
                 "the degree of all non-zero elements must be positive"
             }
             SemigroupError::MissingIdentityError => "the identity element is missing",
+            SemigroupError::DimensionMismatchError => {
+                "the dimensions of the semigroup data do not match"
+            }
         };
         write!(f, "{message}")
     }

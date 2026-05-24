@@ -27,6 +27,7 @@ def _compute_gvgw_subprocess(
     is_threefold: bool,
     max_deg: int | None = None,
     min_points: int | None = None,
+    target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
     prec: int | None = None,
 ) -> None:
@@ -43,7 +44,10 @@ def _compute_gvgw_subprocess(
                 is_threefold,
                 max_deg,
                 min_points,
+                target_points,
                 nefpart,
+                None,
+                1000,
                 prec,
             )
         )
@@ -63,6 +67,7 @@ def _wrapped_compute_gvgw(
     is_threefold: bool,
     max_deg: int | None = None,
     min_points: int | None = None,
+    target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
     prec: int | None = None,
 ) -> Any:
@@ -82,6 +87,7 @@ def _wrapped_compute_gvgw(
             is_threefold,
             max_deg,
             min_points,
+            target_points,
             nefpart,
             prec,
         ),
@@ -121,12 +127,15 @@ def compute_gv(
     intnums: dict[tuple[int, int, int], int],
     max_deg: int | None = None,
     min_points: int | None = None,
+    target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
     prec: int | None = None,
 ) -> list[Any]:
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
+    if target_points is not None:
+        target_points = np.array(target_points, dtype=int)
     is_threefold = _is_threefold(q, nefpart)
     res_tmp = _wrapped_compute_gvgw(
         generators,
@@ -137,6 +146,7 @@ def compute_gv(
         is_threefold,
         max_deg,
         min_points,
+        target_points,
         nefpart,
         prec,
     )
@@ -154,6 +164,7 @@ def compute_gw(
     intnums: dict[tuple[int, int, int], int],
     max_deg: int | None = None,
     min_points: int | None = None,
+    target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
     prec: int | None = None,
 ) -> list[Any]:
@@ -162,6 +173,8 @@ def compute_gw(
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
+    if target_points is not None:
+        target_points = np.array(target_points, dtype=int)
     is_threefold = _is_threefold(q, nefpart)
     res_tmp = _wrapped_compute_gvgw(
         generators,
@@ -172,6 +185,7 @@ def compute_gw(
         is_threefold,
         max_deg,
         min_points,
+        target_points,
         nefpart,
         prec,
     )
