@@ -294,11 +294,7 @@ fn check_degrees(
 }
 
 fn matrix_columns_to_set(elements: &DMatrix<i32>) -> HashSet<DVector<i32>> {
-    let mut elements_set = HashSet::new();
-    for c in elements.column_iter() {
-        elements_set.insert(DVector::from_column_slice(c.as_slice()));
-    }
-    elements_set
+    elements.column_iter().map(|c| c.clone_owned()).collect()
 }
 
 /// Returns only the elements with degree up to the specified maximum degree.
