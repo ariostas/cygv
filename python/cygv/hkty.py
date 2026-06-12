@@ -126,6 +126,10 @@ def _regularize_target_points(
     if target_points is None:
         return None
     target_points = np.array(target_points, dtype=int)
+    if target_points.size == 0:
+        return None
+    if target_points.ndim > 2:
+        raise ValueError("target_points must be at most 2-dimensional")
     if target_points.ndim == 1:
         target_points = target_points.reshape(1, -1)
     return target_points
