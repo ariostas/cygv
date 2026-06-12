@@ -129,7 +129,8 @@ def _regularize_target_points(
     if target_points.size == 0:
         return None
     if target_points.ndim > 2:
-        raise ValueError("target_points must be at most 2-dimensional")
+        msg = "target_points must be a 1D or 2D array-like of ints"
+        raise ValueError(msg)
     if target_points.ndim == 1:
         target_points = target_points.reshape(1, -1)
     return target_points
