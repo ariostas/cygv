@@ -17,6 +17,10 @@ def test_threefold() -> None:
     compute_gv(
         generators, grading_vector, q, intnums, target_points=[[10, 10], [12, 10]]
     )
+    compute_gw(generators, grading_vector, q, intnums, target_points=[10, 10])
+    compute_gw(
+        generators, grading_vector, q, intnums, target_points=[[10, 10], [12, 10]]
+    )
 
     generators = [
         [-1, 0, 0, 0, 0, 1, -1],
