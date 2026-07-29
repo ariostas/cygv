@@ -22,6 +22,14 @@ cargo test test_threefold             # single test by name
 cargo test --test full_hkty           # single integration test file
 cargo doc --open
 
+# Benchmarks (see the Benchmarks section below)
+cargo bench                           # both targets, quick scenarios only
+cargo bench --bench bench             # wall clock (criterion)
+cargo bench --bench memory            # allocations and peak memory
+cargo bench -- fourfold               # only the scenarios whose id contains "fourfold"
+CYGV_BENCH_HEAVY=1 cargo bench        # add the high-degree scenarios
+CYGV_BENCH_THREADS=1 cargo bench      # pin the worker thread count
+
 # Python (builds the Rust extension via maturin)
 uv sync --extra tests                 # creates .venv and builds the extension
 uv run pytest
@@ -106,6 +114,36 @@ to a temp file and surfaced in the raised `RuntimeError` when the process dies.
 
 Note the transpose convention: the Rust API takes column-major matrices, while the Python API
 takes row-oriented lists (`to_matrix` in `src/python.rs` treats each inner list as a column).
+
+## Benchmarks
+
+Both bench targets are driven by the same scenario list in `benches/common/mod.rs`: a model
+(`threefold`, $h^{1,1} = 2$ hypersurface; `fourfold`, $h^{1,1} = 6$ CICY) crossed with the four
+`Variant`s (GV/GW × rational/float), at a couple of maximum degrees. A scenario id looks like
+`fourfold/deg15/gw-float`, and any argument after `--` that is not a flag filters on it. Adding a
+model or a degree means adding a row to `scenarios()`; nothing else has to change.
+
+- `benches/bench.rs` measures wall clock with criterion. Each scenario carries a `sample_size` and
+  an `expected_secs` (measured on a 6-core machine) that only sizes criterion's measurement window;
+  criterion will suggest raising the target time, which is expected — the window is deliberately
+  set just under one run per sample so slow cases are not sampled twice over.
+- `benches/memory.rs` measures allocations. `cargo bench --bench memory` prints peak live bytes,
+  total bytes allocated, allocation count, peak RSS and wall clock per scenario.
+
+Memory needs care because the bulk of it lives in GMP/MPFR numbers, which C code allocates and
+Rust's global allocator therefore never sees. `benches/memory.rs` installs its own allocation
+functions through `gmp_mpfr_sys::gmp::set_memory_functions` (MPFR routes through the same hooks
+when built against GMP, which is how `gmp-mpfr-sys` builds it) plus a `GlobalAlloc` wrapper, so
+both sides feed the same counters. GMP passes the block size back on free and realloc, so no
+bookkeeping headers are needed. The hooks must be installed before any GMP object exists, which is
+why it happens first thing in `main`. Each scenario then runs in a child process (`--run <id>`,
+spawned by the parent), so peaks do not leak between scenarios and `VmHWM` reflects one scenario
+only. The `gmp-mpfr-sys` dev-dependency must stay compatible with the version `rug` links against.
+
+The high-degree scenarios are gated behind `CYGV_BENCH_HEAVY` because criterion has to run each of
+them ten or more times; the memory target runs everything once, so enabling them there is cheap.
+`CYGV_BENCH_THREADS` pins the worker count (default: one thread per core), which cuts the noise
+when comparing two revisions.
 
 ## Docs
 
