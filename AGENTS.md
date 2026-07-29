@@ -44,6 +44,19 @@ toolchain plus `m4` and `make` (`configure: error: No usable m4 in $PATH` means 
 CI sets `CC=clang` on all platforms; locally the default compiler is usually fine, and forcing
 `CC=clang` fails outright if clang is not installed. Windows builds go through MSYS2/MINGW64.
 
+That source build dominates CI (~13 min on Windows, where it used to be more than half the job),
+so both CI workflows cache it. `gmp-mpfr-sys` keeps the built libraries in the directory named by
+`GMP_MPFR_SYS_CACHE`, under a subdirectory keyed by version, target triple, `CC` and `CFLAGS`, and
+copies them back instead of rebuilding — about 3.5 MB, and a ~240 s build becomes ~8 s. The
+workflows point that variable at `$RUNNER_TEMP/gmp-mpfr-sys` and restore it with `actions/cache`.
+Two consequences worth remembering: `CC` must be set identically for every cargo invocation in a
+job (a step that drops it looks under a different `CC-*` subdirectory and rebuilds from source),
+and the cache does not depend on the cargo profile, so the whole Python matrix and the Rust
+workflow share one key per OS — which is also why the key hashes `Cargo.lock` rather than anything
+build-specific. The Rust workflow additionally uses `Swatinem/rust-cache` for the
+registry and `target/`, but not on Windows — that action invokes `cargo` outside the msys2 shell,
+where the MINGW64 toolchain is not on `PATH`.
+
 `[tool.uv] cache-keys` in `pyproject.toml` lists `src/**/*.rs`; without it uv would not rebuild the
 editable extension when only Rust sources change, and `uv run pytest` would test a stale build.
 `uv.lock` is gitignored — it pins only the dev environment and does not affect consumers.
@@ -147,7 +160,11 @@ both sides feed the same counters. GMP passes the block size back on free and re
 bookkeeping headers are needed. The hooks must be installed before any GMP object exists, which is
 why it happens first thing in `main`. Each scenario then runs in a child process (`--run <id>`,
 spawned by the parent), so peaks do not leak between scenarios and `VmHWM` reflects one scenario
-only. The `gmp-mpfr-sys` dev-dependency must stay compatible with the version `rug` links against.
+only. The `gmp-mpfr-sys` dev-dependency must stay compatible with the version `rug` links against,
+and must request exactly the features `rug` does (`default-features = false`, `mpc` and `mpfr`).
+Cargo fingerprints feature *names*, not what they expand to, so enabling `default` here — which
+resolves to the very same two features — splits it into a second build unit and compiles GMP and
+MPFR from source a second time, doubling every cold CI build.
 
 The high-degree scenarios are gated behind `CYGV_BENCH_HEAVY` because criterion has to run each of
 them ten or more times; the memory target runs everything once, so enabling them there is cheap.

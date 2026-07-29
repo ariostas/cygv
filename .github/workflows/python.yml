@@ -27,6 +27,8 @@ jobs:
     defaults:
       run:
         shell: ${{ matrix.os == 'windows-2022' && 'msys2 {0}' || 'bash' }}
+    env:
+      CC: clang
     steps:
       - name: Set up MSYS2
         if: runner.os == 'Windows'
@@ -56,8 +58,20 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+      # See the Rust workflow: this caches the compiled GMP and MPFR libraries,
+      # which is where nearly all of the build time goes. Their contents depend
+      # only on the target and the C compiler, so the whole matrix — and the Rust
+      # workflow — share a single key per OS.
+      - name: Point gmp-mpfr-sys at a cacheable directory
+        run: echo "GMP_MPFR_SYS_CACHE=${{ runner.temp }}/gmp-mpfr-sys" >> "$GITHUB_ENV"
+      - name: Cache GMP and MPFR builds
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/gmp-mpfr-sys
+          key: gmp-mpfr-sys-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: gmp-mpfr-sys-${{ matrix.os }}-
       - name: Pip install the package
-        run: CC=clang python -m pip install .[tests]
+        run: python -m pip install .[tests]
       - name: Run pytest
         run: |
           pytest -vv

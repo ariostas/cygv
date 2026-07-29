@@ -26,6 +26,11 @@ jobs:
     defaults:
       run:
         shell: ${{ matrix.os == 'windows-2022' && 'msys2 {0}' || 'bash' }}
+    env:
+      # `gmp-mpfr-sys` keys its build cache on the compiler, so this has to be
+      # set for the whole job: a cargo step that ran without it would miss the
+      # cache and build GMP and MPFR from source again.
+      CC: clang
     steps:
       - name: Set up MSYS2
         if: runner.os == 'Windows'
@@ -45,8 +50,29 @@ jobs:
             curl
       - name: Check out repo
         uses: actions/checkout@v7
+      # `rug` builds GMP and MPFR from source, which dominates the job (~13 min
+      # on Windows). `gmp-mpfr-sys` keeps the built libraries in the directory
+      # named by GMP_MPFR_SYS_CACHE, keyed internally by version, target and
+      # compiler, so restoring it turns the build into a file copy. The variable
+      # goes through GITHUB_ENV because the `runner` context is not available in
+      # a job-level `env` block.
+      - name: Point gmp-mpfr-sys at a cacheable directory
+        run: echo "GMP_MPFR_SYS_CACHE=${{ runner.temp }}/gmp-mpfr-sys" >> "$GITHUB_ENV"
+      - name: Cache GMP and MPFR builds
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/gmp-mpfr-sys
+          key: gmp-mpfr-sys-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: gmp-mpfr-sys-${{ matrix.os }}-
+      # Caches the registry and target dir. Skipped on Windows: the action runs
+      # `cargo` from node rather than through the msys2 shell, so it would key
+      # the cache on the runner's preinstalled MSVC toolchain instead of the
+      # MINGW64 one that actually builds here.
+      - name: Cache cargo registry and build artifacts
+        if: runner.os != 'Windows'
+        uses: Swatinem/rust-cache@v2
       - name: Build
-        run: CC=clang cargo build --verbose
+        run: cargo build --verbose
       - name: Run tests
         run: cargo test --verbose
 
