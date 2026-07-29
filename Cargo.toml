@@ -23,9 +23,16 @@ features = ["abi3-py310"]
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
+# Only used by the memory benchmark, to route GMP/MPFR allocations through a
+# counting allocator. Must stay compatible with the version `rug` links against.
+gmp-mpfr-sys = "1.7"
 
 [[bench]]
 name = "bench"
+harness = false
+
+[[bench]]
+name = "memory"
 harness = false
 
 [package.metadata.docs.rs]
