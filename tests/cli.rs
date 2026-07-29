@@ -38,11 +38,16 @@ fn check_results(docs: &[Yaml], expected: &[&str]) {
         assert_eq!(doc["invariants"].as_str(), Some(*key));
         let results = doc["results"].as_vec().expect("missing results");
         assert!(!results.is_empty());
+        assert!(!doc["grading_vector"]
+            .as_vec()
+            .expect("missing grading vector")
+            .is_empty());
         for entry in results {
             assert!(!entry["curve_class"]
                 .as_vec()
                 .expect("missing class")
                 .is_empty());
+            assert!(entry["degree"].as_i64().is_some_and(|d| d > 0));
             assert!(!entry[*key].is_badvalue());
         }
     }

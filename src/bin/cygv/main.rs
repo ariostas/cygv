@@ -13,7 +13,8 @@ Compute GV and GW invariants of the CY manifolds specified in the input.
 
 The input is a stream of YAML documents, each of which specifies a single CY
 manifold, and the results are written back as one YAML document per input
-document. A minimal input document looks as follows.
+document, sorted by the degree of the curve classes under the grading vector.
+A minimal input document looks as follows.
 
   generators: [[0, -1], [1, 2]]
   grading_vector: [3, -1]

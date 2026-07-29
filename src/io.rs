@@ -35,9 +35,10 @@
 //! name: quintic-like threefold
 //! invariants: gv
 //! is_threefold: true
+//! grading_vector: [3, -1]
 //! results:
-//!   - {curve_class: [1, 0], gv: 3}
-//!   - {curve_class: [0, 1], gv: -6}
+//!   - {curve_class: [0, -1], degree: 1, gv: -4}
+//!   - {curve_class: [1, 0], degree: 3, gv: 7524}
 //! ```
 //!
 //! See [`Input`] for the full list of fields.
@@ -315,9 +316,11 @@ impl Input {
 
     /// Write the results of a computation as a YAML document.
     ///
-    /// GV invariants are written as integers, while GW invariants are written as
-    /// quoted strings, since they are either fractions or floating-point numbers with
-    /// a precision that YAML cannot represent.
+    /// The degree of each curve class under the grading vector is written along with
+    /// it, since it is what the results are sorted by. GV invariants are written as
+    /// integers, while GW invariants are written as quoted strings, since they are
+    /// either fractions or floating-point numbers with a precision that YAML cannot
+    /// represent.
     pub fn write_results(
         &self,
         writer: &mut impl Write,
@@ -330,19 +333,17 @@ impl Input {
         }
         writeln!(writer, "invariants: {key}")?;
         writeln!(writer, "is_threefold: {}", self.is_threefold)?;
+        write!(writer, "grading_vector: ")?;
+        write_int_seq(writer, self.grading_vector.iter())?;
+        writeln!(writer)?;
         if results.is_empty() {
             return writeln!(writer, "results: []");
         }
         writeln!(writer, "results:")?;
         for ((curve, idx), value) in results {
-            write!(writer, "  - {{curve_class: [")?;
-            for (i, c) in curve.iter().enumerate() {
-                if i > 0 {
-                    write!(writer, ", ")?;
-                }
-                write!(writer, "{c}")?;
-            }
-            write!(writer, "]")?;
+            write!(writer, "  - {{curve_class: ")?;
+            write_int_seq(writer, curve.iter())?;
+            write!(writer, ", degree: {}", self.degree(curve))?;
             if !self.is_threefold {
                 write!(writer, ", surface_index: {idx}")?;
             }
@@ -572,6 +573,21 @@ fn as_indices(indices: &[i32]) -> Result<(usize, usize, usize), IoError> {
     ))
 }
 
+/// Write a sequence of integers as a YAML flow sequence.
+fn write_int_seq<'a>(
+    writer: &mut impl Write,
+    values: impl Iterator<Item = &'a i32>,
+) -> std::io::Result<()> {
+    write!(writer, "[")?;
+    for (i, c) in values.enumerate() {
+        if i > 0 {
+            write!(writer, ", ")?;
+        }
+        write!(writer, "{c}")?;
+    }
+    write!(writer, "]")
+}
+
 /// Turn a string into a YAML scalar, quoting it only when it is needed.
 fn quote_string(data: &str) -> String {
     let is_plain = data.starts_with(|c: char| c.is_ascii_alphabetic())
@@ -743,16 +759,18 @@ min_points: 20
     fn test_write_results() {
         let mut input = load_one(THREEFOLD).unwrap();
         let results = vec![
-            ((dvector![1, 0], 0), "3".to_owned()),
-            ((dvector![0, 1], 2), "-6".to_owned()),
+            ((dvector![0, -1], 0), "-4".to_owned()),
+            ((dvector![1, 0], 2), "7524".to_owned()),
         ];
 
         let mut buf = Vec::new();
         input.write_results(&mut buf, &results).unwrap();
         assert_eq!(
             String::from_utf8(buf).unwrap(),
-            "---\nname: test\ninvariants: gv\nis_threefold: true\nresults:\n  \
-             - {curve_class: [1, 0], gv: 3}\n  - {curve_class: [0, 1], gv: -6}\n"
+            "---\nname: test\ninvariants: gv\nis_threefold: true\n\
+             grading_vector: [3, -1]\nresults:\n  \
+             - {curve_class: [0, -1], degree: 1, gv: -4}\n  \
+             - {curve_class: [1, 0], degree: 3, gv: 7524}\n"
         );
 
         input.name = None;
@@ -762,16 +780,17 @@ min_points: 20
         input.write_results(&mut buf, &results).unwrap();
         assert_eq!(
             String::from_utf8(buf).unwrap(),
-            "---\ninvariants: gw\nis_threefold: false\nresults:\n  \
-             - {curve_class: [1, 0], surface_index: 0, gw: '3'}\n  \
-             - {curve_class: [0, 1], surface_index: 2, gw: '-6'}\n"
+            "---\ninvariants: gw\nis_threefold: false\n\
+             grading_vector: [3, -1]\nresults:\n  \
+             - {curve_class: [0, -1], degree: 1, surface_index: 0, gw: '-4'}\n  \
+             - {curve_class: [1, 0], degree: 3, surface_index: 2, gw: '7524'}\n"
         );
 
         let mut buf = Vec::new();
         input.write_results(&mut buf, &[]).unwrap();
         assert_eq!(
             String::from_utf8(buf).unwrap(),
-            "---\ninvariants: gw\nis_threefold: false\nresults: []\n"
+            "---\ninvariants: gw\nis_threefold: false\ngrading_vector: [3, -1]\nresults: []\n"
         );
     }
 
@@ -818,6 +837,10 @@ min_points: 20
         assert_eq!(output[0]["name"].as_str(), Some("test"));
         assert_eq!(output[0]["invariants"].as_str(), Some("gv"));
         assert_eq!(output[0]["is_threefold"].as_bool(), Some(true));
+        assert_eq!(
+            as_int_vec(&output[0]["grading_vector"], "").unwrap(),
+            input.grading_vector.as_slice()
+        );
         let parsed = output[0]["results"].as_vec().unwrap();
         assert_eq!(parsed.len(), results.len());
         for (entry, ((curve, _), value)) in parsed.iter().zip(results.iter()) {
@@ -825,6 +848,7 @@ min_points: 20
                 as_int_vec(&entry["curve_class"], "").unwrap(),
                 curve.as_slice()
             );
+            assert_eq!(entry["degree"].as_i64(), Some(input.degree(curve)));
             assert_eq!(entry["gv"].as_i64().unwrap().to_string(), *value);
         }
     }

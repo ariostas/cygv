@@ -35,16 +35,18 @@ invariants: gv
 min_points: 100
 ```
 
-The results are written back as one YAML document per input document.
+The results are written back as one YAML document per input document, sorted by the degree of
+the curve classes under the grading vector.
 
 ```yaml
 ---
 name: an example threefold
 invariants: gv
 is_threefold: true
+grading_vector: [3, -1]
 results:
-  - {curve_class: [0, -1], gv: -4}
-  - {curve_class: [1, 0], gv: 7524}
+  - {curve_class: [0, -1], degree: 1, gv: -4}
+  - {curve_class: [1, 0], degree: 3, gv: 7524}
 ```
 
 Run `cygv --help` for the full list of input fields and options, and see the `examples` directory
