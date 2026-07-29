@@ -41,6 +41,7 @@ venv/
 *.egg-info/
 .installed.cfg
 *.egg
+uv.lock
 
 # Installer logs
 pip-log.txt

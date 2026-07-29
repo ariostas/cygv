@@ -49,6 +49,15 @@ Repository = "https://github.com/ariostas/cygv"
 python-source = "python"
 features = ["pyo3/extension-module"]
 
+[tool.uv]
+# Without these, uv will not rebuild the extension module when only the Rust
+# sources change, so `uv run pytest` would test a stale build.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "src/**/*.rs" },
+]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
