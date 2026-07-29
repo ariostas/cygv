@@ -99,6 +99,8 @@ jobs:
       # which hashes the committed lockfile — would not describe what was built.
       - name: Build
         run: cargo build --locked --verbose
+      - name: Build without the CLI
+        run: cargo build --locked --no-default-features --verbose
       - name: Run tests
         run: cargo test --locked --verbose
 

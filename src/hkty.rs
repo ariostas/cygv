@@ -102,6 +102,169 @@ where
         .collect()
 }
 
+/// Compute GV or GW invariants, selecting the variant of [`run_hkty`] at runtime and
+/// formatting the resulting invariants as strings.
+///
+/// This is meant for interfaces that cannot make use of the compile-time variants,
+/// such as the Python bindings and the command line interface. GV invariants are
+/// formatted as integers, and GW invariants either as fractions or as floating-point
+/// numbers, depending on whether a precision is given.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_gvgw_strings(
+    generators: DMatrix<i32>,
+    grading_vector: RowDVector<i32>,
+    q: DMatrix<i32>,
+    nefpart: Vec<DVector<i32>>,
+    intnums: HashMap<(usize, usize, usize), i32>,
+    find_gv: bool,
+    is_threefold: bool,
+    max_deg: Option<u32>,
+    min_points: Option<u32>,
+    target_points: Option<DMatrix<i32>>,
+    n_threads: Option<u32>,
+    pool_size: usize,
+    prec: Option<u32>,
+) -> Vec<((DVector<i32>, usize), String)> {
+    if let Some(n_bits) = prec {
+        let mut zero_cutoff = Float::with_val(n_bits, 10);
+        zero_cutoff.pow_assign(-(n_bits as i32) / 3);
+        let res = match (find_gv, is_threefold) {
+            (true, true) => run_hkty::<Float, true, true>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                target_points,
+                q,
+                nefpart,
+                intnums,
+                n_threads,
+                pool_size,
+            ),
+            (false, true) => run_hkty::<Float, false, true>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                target_points,
+                q,
+                nefpart,
+                intnums,
+                n_threads,
+                pool_size,
+            ),
+            (true, false) => run_hkty::<Float, true, false>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                target_points,
+                q,
+                nefpart,
+                intnums,
+                n_threads,
+                pool_size,
+            ),
+            (false, false) => run_hkty::<Float, false, false>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                target_points,
+                q,
+                nefpart,
+                intnums,
+                n_threads,
+                pool_size,
+            ),
+        };
+        res.into_iter()
+            .map(|(k, gvgw)| {
+                (
+                    k,
+                    if find_gv {
+                        gvgw.to_integer().unwrap().to_string()
+                    } else {
+                        gvgw.to_string()
+                    },
+                )
+            })
+            .collect()
+    } else {
+        let zero_cutoff = Rational::new();
+        let res = match (find_gv, is_threefold) {
+            (true, true) => run_hkty::<Rational, true, true>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                target_points,
+                q,
+                nefpart,
+                intnums,
+                n_threads,
+                pool_size,
+            ),
+            (false, true) => run_hkty::<Rational, false, true>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                target_points,
+                q,
+                nefpart,
+                intnums,
+                n_threads,
+                pool_size,
+            ),
+            (true, false) => run_hkty::<Rational, true, false>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                target_points,
+                q,
+                nefpart,
+                intnums,
+                n_threads,
+                pool_size,
+            ),
+            (false, false) => run_hkty::<Rational, false, false>(
+                generators,
+                grading_vector,
+                zero_cutoff,
+                max_deg,
+                min_points,
+                target_points,
+                q,
+                nefpart,
+                intnums,
+                n_threads,
+                pool_size,
+            ),
+        };
+        res.into_iter()
+            .map(|(k, gvgw)| {
+                (
+                    k,
+                    if find_gv {
+                        gvgw.into_numer_denom().0.to_string()
+                    } else {
+                        gvgw.to_string()
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn compute_gv_rat_threefold(
     generators: DMatrix<i32>,

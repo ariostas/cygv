@@ -1,8 +1,7 @@
-use crate::run_hkty;
+use crate::hkty::compute_gvgw_strings;
 use ctrlc;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
-use rug::{ops::PowAssign, Float, Rational};
 use std::collections::HashMap;
 
 fn to_matrix(m: Vec<Vec<i32>>) -> DMatrix<i32> {
@@ -72,149 +71,26 @@ pub fn compute_gvgw(
     let nefpart = nefpart.unwrap_or_default();
     let nefpart: Vec<_> = nefpart.into_iter().map(to_vector).collect();
 
-    let final_res;
-    if let Some(n_bits) = prec {
-        let mut zero_cutoff = Float::with_val(n_bits, 10);
-        zero_cutoff.pow_assign(-(n_bits as i32) / 3);
-        let res = match (find_gv, is_threefold) {
-            (true, true) => run_hkty::<Float, true, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, true) => run_hkty::<Float, false, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (true, false) => run_hkty::<Float, true, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, false) => run_hkty::<Float, false, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-        };
-        final_res = res
-            .into_iter()
-            .map(|((v, c), gvgw)| {
-                (
-                    (to_vec(v), c),
-                    if find_gv {
-                        gvgw.to_integer().unwrap().to_string()
-                    } else {
-                        gvgw.to_string()
-                    },
-                )
-            })
-            .collect();
-    } else {
-        let zero_cutoff = Rational::new();
-        let res = match (find_gv, is_threefold) {
-            (true, true) => run_hkty::<Rational, true, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, true) => run_hkty::<Rational, false, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (true, false) => run_hkty::<Rational, true, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, false) => run_hkty::<Rational, false, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-        };
-        final_res = res
-            .into_iter()
-            .map(|((v, c), gvgw)| {
-                (
-                    (to_vec(v), c),
-                    if find_gv {
-                        gvgw.into_numer_denom().0.to_string()
-                    } else {
-                        gvgw.to_string()
-                    },
-                )
-            })
-            .collect();
-    };
+    let res = compute_gvgw_strings(
+        generators,
+        grading_vector,
+        q,
+        nefpart,
+        intnums,
+        find_gv,
+        is_threefold,
+        max_deg,
+        min_points,
+        target_points,
+        n_threads,
+        pool_size,
+        prec,
+    );
 
-    Ok(final_res)
+    Ok(res
+        .into_iter()
+        .map(|((v, c), gvgw)| ((to_vec(v), c), gvgw))
+        .collect())
 }
 
 /// A Python module implemented in Rust.

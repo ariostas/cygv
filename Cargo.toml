@@ -11,13 +11,25 @@ repository = "https://github.com/ariostas/cygv"
 name = "cygv"
 crate-type = ["lib", "cdylib"]
 
+[[bin]]
+name = "cygv"
+path = "src/bin/cygv/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+# The command line interface, i.e. the `cygv` binary and the `io` module. Library
+# users that do not need it can depend on this crate with `default-features = false`
+# to avoid pulling in the argument and YAML parsers.
+cli = ["dep:clap", "dep:yaml-rust2"]
+
 [dependencies]
-clap = { version = "4.5.16", features = ["derive"] }
+clap = { version = "4.5.16", features = ["derive"], optional = true }
 ctrlc = "3.4.4"
 itertools = "0.14.0"
 nalgebra = "0.35.0"
 rug = "1.25.0"
-yaml-rust2 = "0.8"
+yaml-rust2 = { version = "0.8", optional = true }
 
 [dependencies.pyo3]
 version = "0.28.2"

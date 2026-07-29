@@ -7,6 +7,8 @@ repos:
       - id: check-merge-conflict
       - id: check-symlinks
       - id: check-yaml
+        # The example inputs of the CLI are streams of multiple documents.
+        args: ["--allow-multiple-documents"]
       - id: debug-statements
       - id: end-of-file-fixer
       - id: mixed-line-ending

@@ -1,0 +1,36 @@
+# An example input for the cygv command line interface.
+#
+#   cygv --file examples/threefold.yaml
+#
+# It computes the GV invariants, and then the GW invariants, of a CY threefold
+# hypersurface with h^{1,1} = 2.
+---
+name: threefold GV invariants
+# The generators of the Mori cone.
+generators: [[0, -1], [1, 2]]
+# A vector that has a positive inner product with every generator.
+grading_vector: [3, -1]
+# The GLSM charge matrix, given as one charge vector per Kähler parameter.
+q: [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]
+# The triple intersection numbers, given as [i, j, k, value] entries. Only one
+# ordering of each triplet of indices may be given.
+intnums:
+  - [0, 0, 0, 2]
+  - [0, 0, 1, 1]
+  - [0, 1, 1, -1]
+  - [1, 1, 1, 5]
+invariants: gv
+min_points: 100
+---
+name: threefold GW invariants
+generators: [[0, -1], [1, 2]]
+grading_vector: [3, -1]
+q: [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]
+# The intersection numbers can also be given as a mapping.
+intnums:
+  "0,0,0": 2
+  "0,0,1": 1
+  "0,1,1": -1
+  "1,1,1": 5
+invariants: gw
+min_points: 100
