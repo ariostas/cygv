@@ -48,6 +48,15 @@ CI sets `CC=clang` on all platforms; locally the default compiler is usually fin
 editable extension when only Rust sources change, and `uv run pytest` would test a stale build.
 `uv.lock` is gitignored — it pins only the dev environment and does not affect consumers.
 
+`Cargo.lock`, by contrast, is tracked. The usual "libraries do not commit a lockfile" rule assumes
+consumers re-resolve from `Cargo.toml`, which holds for the crates.io half of this project but not
+for the PyPI half: those users install wheels that CI compiled, so the lockfile decides what they
+actually get. It also keeps the benchmarks honest — comparing two revisions is only meaningful if
+the dependency set is held fixed — and keeps CI failures attributable to commits rather than to a
+dependency that drifted underneath them. The cost is that CI no longer continuously exercises the
+newest semver-compatible dependencies; the monthly grouped cargo Dependabot PR is what covers that,
+so it should be treated as a real test run rather than rubber-stamped.
+
 PR titles must follow conventional commits (enforced by `.github/workflows/pr_title.yml`).
 
 ## Architecture
