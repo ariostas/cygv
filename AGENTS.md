@@ -70,6 +70,13 @@ dependency that drifted underneath them. The cost is that CI no longer continuou
 newest semver-compatible dependencies; the monthly grouped cargo Dependabot PR is what covers that,
 so it should be treated as a real test run rather than rubber-stamped.
 
+Every workflow that compiles Rust enforces the lockfile, so a manifest change committed without its
+lockfile update fails instead of silently re-resolving. The Rust workflow passes `--locked` to
+cargo directly; the Python and deploy workflows reach cargo through maturin and set
+`MATURIN_PEP517_ARGS=--locked` instead. Two wrinkles there: cibuildwheel needs it repeated inside
+`CIBW_ENVIRONMENT` to reach the container builds, and maturin's `build_sdist` never reads the
+variable, so the sdist job is unaffected by it.
+
 PR titles must follow conventional commits (enforced by `.github/workflows/pr_title.yml`).
 
 ## Architecture

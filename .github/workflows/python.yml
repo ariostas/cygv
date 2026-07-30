@@ -29,6 +29,9 @@ jobs:
         shell: ${{ matrix.os == 'windows-2022' && 'msys2 {0}' || 'bash' }}
     env:
       CC: clang
+      # `pip install .` drives cargo through maturin, which takes its cargo
+      # flags from this variable; the Rust workflow passes `--locked` directly.
+      MATURIN_PEP517_ARGS: --locked
     steps:
       - name: Set up MSYS2
         if: runner.os == 'Windows'

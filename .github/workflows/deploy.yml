@@ -32,6 +32,14 @@ jobs:
     defaults:
       run:
         shell: ${{ matrix.os == 'windows-2022' && 'msys2 {0}' || 'bash' }}
+    env:
+      # These are the artifacts users actually install, so the wheels must be
+      # built from the committed lockfile rather than a fresh resolution.
+      # maturin's PEP 517 backend splits this into the args it passes to
+      # `maturin pep517 build-wheel`, which forwards cargo's `--locked`. It has
+      # to be repeated inside CIBW_ENVIRONMENT below to reach the container
+      # builds, and `build_sdist` ignores it, so the sdist job is unaffected.
+      MATURIN_PEP517_ARGS: --locked
     steps:
       - name: Set up MSYS2
         if: runner.os == 'Windows'
@@ -60,7 +68,7 @@ jobs:
         run: |
           pipx run cibuildwheel
         env:
-          CIBW_ENVIRONMENT: 'PATH="$HOME/.cargo/bin:$PATH" CARGO_TERM_COLOR="always"'
+          CIBW_ENVIRONMENT: 'PATH="$HOME/.cargo/bin:$PATH" CARGO_TERM_COLOR="always" MATURIN_PEP517_ARGS="--locked"'
           CIBW_BEFORE_BUILD: rustup show
           CIBW_BEFORE_BUILD_LINUX: >
             curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain=stable --profile=minimal -y &&
