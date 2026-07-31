@@ -93,8 +93,16 @@ jobs:
           # only the first job to finish saves under a given key anyway.
           key: cargo-release-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-release-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-
+      # Windows builds without isolation because MSYS2 has no maturin wheel on
+      # PyPI: pip would build the only build dependency from source, which took
+      # five minutes of every run while `mingw-w64-x86_64-python-maturin` sat
+      # installed and unused. deploy.yml skips isolation on Windows for the same
+      # reason. The tradeoff is that pip stops checking `build-system.requires`,
+      # so the maturin pacman ships has to keep satisfying `>=1.5,<2.0`. The
+      # other platforms get a maturin wheel in seconds and do not preinstall it,
+      # so they keep isolation.
       - name: Pip install the package
-        run: python -m pip install .[tests]
+        run: python -m pip install ${{ runner.os == 'Windows' && '--no-build-isolation' || '' }} .[tests]
       - name: Run pytest
         run: |
           pytest -vv

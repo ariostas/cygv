@@ -67,6 +67,13 @@ never be replaced. And the two workflows use different key prefixes — `cargo-d
 release; sharing a key would leave whichever job saved second restoring a `target/` with the wrong
 profile in it. Nothing prunes these entries, so they are considerably larger than the GMP one.
 
+The Windows Python job additionally installs with `--no-build-isolation`. maturin — the only entry
+in `build-system.requires` — has no MINGW64 wheel on PyPI, so pip's isolated build environment
+compiled it from source on every run, five minutes of work to duplicate the
+`mingw-w64-x86_64-python-maturin` that pacman had already installed. `deploy.yml` skips isolation
+on Windows for the same reason. The catch is that pip no longer enforces `build-system.requires`
+there, so the version pacman ships has to keep satisfying `>=1.5,<2.0` on its own.
+
 `[tool.uv] cache-keys` in `pyproject.toml` lists `src/**/*.rs`; without it uv would not rebuild the
 editable extension when only Rust sources change, and `uv run pytest` would test a stale build.
 `uv.lock` is gitignored — it pins only the dev environment and does not affect consumers.
