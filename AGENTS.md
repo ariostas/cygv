@@ -53,9 +53,19 @@ Two consequences worth remembering: `CC` must be set identically for every cargo
 job (a step that drops it looks under a different `CC-*` subdirectory and rebuilds from source),
 and the cache does not depend on the cargo profile, so the whole Python matrix and the Rust
 workflow share one key per OS — which is also why the key hashes `Cargo.lock` rather than anything
-build-specific. The Rust workflow additionally uses `Swatinem/rust-cache` for the
-registry and `target/`, but not on Windows — that action invokes `cargo` outside the msys2 shell,
-where the MINGW64 toolchain is not on `PATH`.
+build-specific.
+
+Both workflows separately cache `~/.cargo/registry` and `target/` with a hand-rolled
+`actions/cache` step rather than `Swatinem/rust-cache`, because that action runs `cargo` from node
+instead of through the msys2 shell and would therefore key the Windows cache on the runner's
+preinstalled MSVC toolchain rather than the MINGW64 one doing the build. Two things that action
+handled for us have to be done explicitly. The toolchain version goes in the key (and in the
+restore-key prefix): a compiler upgrade invalidates every artifact in `target/`, and because
+`actions/cache` skips saving whenever the primary key hits exactly, a stale entry would otherwise
+never be replaced. And the two workflows use different key prefixes — `cargo-dev-` and
+`cargo-release-` — because the Rust workflow builds the dev profile and the Python workflow builds
+release; sharing a key would leave whichever job saved second restoring a `target/` with the wrong
+profile in it. Nothing prunes these entries, so they are considerably larger than the GMP one.
 
 `[tool.uv] cache-keys` in `pyproject.toml` lists `src/**/*.rs`; without it uv would not rebuild the
 editable extension when only Rust sources change, and `uv run pytest` would test a stale build.

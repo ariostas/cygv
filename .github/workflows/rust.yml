@@ -64,13 +64,34 @@ jobs:
           path: ${{ runner.temp }}/gmp-mpfr-sys
           key: gmp-mpfr-sys-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: gmp-mpfr-sys-${{ matrix.os }}-
-      # Caches the registry and target dir. Skipped on Windows: the action runs
-      # `cargo` from node rather than through the msys2 shell, so it would key
-      # the cache on the runner's preinstalled MSVC toolchain instead of the
-      # MINGW64 one that actually builds here.
+      # Caches the registry and the target dir. Done by hand rather than with
+      # Swatinem/rust-cache because that action runs `cargo` from node instead
+      # of through the msys2 shell, so on Windows it would key the cache on the
+      # runner's preinstalled MSVC toolchain rather than the MINGW64 one that
+      # actually builds here.
+      #
+      # The toolchain has to be part of the key: an upgrade invalidates every
+      # artifact in `target/`, and since actions/cache skips saving whenever the
+      # primary key hits exactly, a stale entry would otherwise never be
+      # replaced. It is in the restore-key prefix too, so a new toolchain starts
+      # clean instead of restoring artifacts it cannot use.
+      # Keep only alphanumerics and dots: cache keys reject commas, and the
+      # MINGW64 toolchain reports `rustc 1.x.0 (hash date) (Rev1, Built by
+      # MSYS2 project)`.
+      - name: Record the toolchain for the cache key
+        run: echo "RUSTC_VERSION=$(rustc -V | tr -dc 'A-Za-z0-9.')" >> "$GITHUB_ENV"
       - name: Cache cargo registry and build artifacts
-        if: runner.os != 'Windows'
-        uses: Swatinem/rust-cache@v2
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          # `dev-` because this workflow builds the dev profile while the Python
+          # workflow builds release; sharing a key would mean whichever saved
+          # first left the other restoring a target dir without its profile.
+          key: cargo-dev-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-dev-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-
       # `--locked` fails the build rather than silently re-resolving when
       # `Cargo.lock` is out of date with `Cargo.toml`. Without it a manifest
       # change committed without its lockfile update would be tested against a

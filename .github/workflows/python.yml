@@ -73,6 +73,26 @@ jobs:
           path: ${{ runner.temp }}/gmp-mpfr-sys
           key: gmp-mpfr-sys-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: gmp-mpfr-sys-${{ matrix.os }}-
+      # Same hand-rolled cargo cache as the Rust workflow; see there for why it
+      # is not Swatinem/rust-cache and why the toolchain is in the key. This one
+      # covers the release-profile build that `pip install .` drives through
+      # maturin, which is what is left of the Windows job's runtime.
+      # See the Rust workflow: cache keys reject commas, which the MINGW64
+      # toolchain's version string contains.
+      - name: Record the toolchain for the cache key
+        run: echo "RUSTC_VERSION=$(rustc -V | tr -dc 'A-Za-z0-9.')" >> "$GITHUB_ENV"
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          # The three Python versions share a key: abi3 aside, pyo3 and cygv
+          # rebuild per interpreter, but every other dependency is shared, and
+          # only the first job to finish saves under a given key anyway.
+          key: cargo-release-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-release-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-
       - name: Pip install the package
         run: python -m pip install .[tests]
       - name: Run pytest
