@@ -25,7 +25,14 @@ features = ["abi3-py310"]
 criterion = { version = "0.8.1", features = ["html_reports"] }
 # Only used by the memory benchmark, to route GMP/MPFR allocations through a
 # counting allocator. Must stay compatible with the version `rug` links against.
-gmp-mpfr-sys = "1.7"
+# The feature list must match `rug`'s exactly (it depends on this crate with
+# `default-features = false`): cargo fingerprints feature *names*, so enabling
+# `default` here — even though it expands to the same set — would create a second
+# build unit and rebuild GMP and MPFR from source a second time.
+gmp-mpfr-sys = { version = "1.7", default-features = false, features = [
+  "mpc",
+  "mpfr",
+] }
 
 [[bench]]
 name = "bench"

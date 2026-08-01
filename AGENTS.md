@@ -44,6 +44,36 @@ toolchain plus `m4` and `make` (`configure: error: No usable m4 in $PATH` means 
 CI sets `CC=clang` on all platforms; locally the default compiler is usually fine, and forcing
 `CC=clang` fails outright if clang is not installed. Windows builds go through MSYS2/MINGW64.
 
+That source build dominates CI (~13 min on Windows, where it used to be more than half the job),
+so both CI workflows cache it. `gmp-mpfr-sys` keeps the built libraries in the directory named by
+`GMP_MPFR_SYS_CACHE`, under a subdirectory keyed by version, target triple, `CC` and `CFLAGS`, and
+copies them back instead of rebuilding — about 3.5 MB, and a ~240 s build becomes ~8 s. The
+workflows point that variable at `$RUNNER_TEMP/gmp-mpfr-sys` and restore it with `actions/cache`.
+Two consequences worth remembering: `CC` must be set identically for every cargo invocation in a
+job (a step that drops it looks under a different `CC-*` subdirectory and rebuilds from source),
+and the cache does not depend on the cargo profile, so the whole Python matrix and the Rust
+workflow share one key per OS — which is also why the key hashes `Cargo.lock` rather than anything
+build-specific.
+
+Both workflows separately cache `~/.cargo/registry` and `target/` with a hand-rolled
+`actions/cache` step rather than `Swatinem/rust-cache`, because that action runs `cargo` from node
+instead of through the msys2 shell and would therefore key the Windows cache on the runner's
+preinstalled MSVC toolchain rather than the MINGW64 one doing the build. Two things that action
+handled for us have to be done explicitly. The toolchain version goes in the key (and in the
+restore-key prefix): a compiler upgrade invalidates every artifact in `target/`, and because
+`actions/cache` skips saving whenever the primary key hits exactly, a stale entry would otherwise
+never be replaced. And the two workflows use different key prefixes — `cargo-dev-` and
+`cargo-release-` — because the Rust workflow builds the dev profile and the Python workflow builds
+release; sharing a key would leave whichever job saved second restoring a `target/` with the wrong
+profile in it. Nothing prunes these entries, so they are considerably larger than the GMP one.
+
+The Windows Python job additionally installs with `--no-build-isolation`. maturin — the only entry
+in `build-system.requires` — has no MINGW64 wheel on PyPI, so pip's isolated build environment
+compiled it from source on every run, five minutes of work to duplicate the
+`mingw-w64-x86_64-python-maturin` that pacman had already installed. `deploy.yml` skips isolation
+on Windows for the same reason. The catch is that pip no longer enforces `build-system.requires`
+there, so the version pacman ships has to keep satisfying `>=1.5,<2.0` on its own.
+
 `[tool.uv] cache-keys` in `pyproject.toml` lists `src/**/*.rs`; without it uv would not rebuild the
 editable extension when only Rust sources change, and `uv run pytest` would test a stale build.
 `uv.lock` is gitignored — it pins only the dev environment and does not affect consumers.
@@ -56,6 +86,13 @@ the dependency set is held fixed — and keeps CI failures attributable to commi
 dependency that drifted underneath them. The cost is that CI no longer continuously exercises the
 newest semver-compatible dependencies; the monthly grouped cargo Dependabot PR is what covers that,
 so it should be treated as a real test run rather than rubber-stamped.
+
+Every workflow that compiles Rust enforces the lockfile, so a manifest change committed without its
+lockfile update fails instead of silently re-resolving. The Rust workflow passes `--locked` to
+cargo directly; the Python and deploy workflows reach cargo through maturin and set
+`MATURIN_PEP517_ARGS=--locked` instead. Two wrinkles there: cibuildwheel needs it repeated inside
+`CIBW_ENVIRONMENT` to reach the container builds, and maturin's `build_sdist` never reads the
+variable, so the sdist job is unaffected by it.
 
 PR titles must follow conventional commits (enforced by `.github/workflows/pr_title.yml`).
 
@@ -147,7 +184,11 @@ both sides feed the same counters. GMP passes the block size back on free and re
 bookkeeping headers are needed. The hooks must be installed before any GMP object exists, which is
 why it happens first thing in `main`. Each scenario then runs in a child process (`--run <id>`,
 spawned by the parent), so peaks do not leak between scenarios and `VmHWM` reflects one scenario
-only. The `gmp-mpfr-sys` dev-dependency must stay compatible with the version `rug` links against.
+only. The `gmp-mpfr-sys` dev-dependency must stay compatible with the version `rug` links against,
+and must request exactly the features `rug` does (`default-features = false`, `mpc` and `mpfr`).
+Cargo fingerprints feature *names*, not what they expand to, so enabling `default` here — which
+resolves to the very same two features — splits it into a second build unit and compiles GMP and
+MPFR from source a second time, doubling every cold CI build.
 
 The high-degree scenarios are gated behind `CYGV_BENCH_HEAVY` because criterion has to run each of
 them ten or more times; the memory target runs everything once, so enabling them there is cheap.

@@ -27,6 +27,11 @@ jobs:
     defaults:
       run:
         shell: ${{ matrix.os == 'windows-2022' && 'msys2 {0}' || 'bash' }}
+    env:
+      CC: clang
+      # `pip install .` drives cargo through maturin, which takes its cargo
+      # flags from this variable; the Rust workflow passes `--locked` directly.
+      MATURIN_PEP517_ARGS: --locked
     steps:
       - name: Set up MSYS2
         if: runner.os == 'Windows'
@@ -56,8 +61,48 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+      # See the Rust workflow: this caches the compiled GMP and MPFR libraries,
+      # which is where nearly all of the build time goes. Their contents depend
+      # only on the target and the C compiler, so the whole matrix — and the Rust
+      # workflow — share a single key per OS.
+      - name: Point gmp-mpfr-sys at a cacheable directory
+        run: echo "GMP_MPFR_SYS_CACHE=${{ runner.temp }}/gmp-mpfr-sys" >> "$GITHUB_ENV"
+      - name: Cache GMP and MPFR builds
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/gmp-mpfr-sys
+          key: gmp-mpfr-sys-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: gmp-mpfr-sys-${{ matrix.os }}-
+      # Same hand-rolled cargo cache as the Rust workflow; see there for why it
+      # is not Swatinem/rust-cache and why the toolchain is in the key. This one
+      # covers the release-profile build that `pip install .` drives through
+      # maturin, which is what is left of the Windows job's runtime.
+      # See the Rust workflow: cache keys reject commas, which the MINGW64
+      # toolchain's version string contains.
+      - name: Record the toolchain for the cache key
+        run: echo "RUSTC_VERSION=$(rustc -V | tr -dc 'A-Za-z0-9.')" >> "$GITHUB_ENV"
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          # The three Python versions share a key: abi3 aside, pyo3 and cygv
+          # rebuild per interpreter, but every other dependency is shared, and
+          # only the first job to finish saves under a given key anyway.
+          key: cargo-release-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-release-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-
+      # Windows builds without isolation because MSYS2 has no maturin wheel on
+      # PyPI: pip would build the only build dependency from source, which took
+      # five minutes of every run while `mingw-w64-x86_64-python-maturin` sat
+      # installed and unused. deploy.yml skips isolation on Windows for the same
+      # reason. The tradeoff is that pip stops checking `build-system.requires`,
+      # so the maturin pacman ships has to keep satisfying `>=1.5,<2.0`. The
+      # other platforms get a maturin wheel in seconds and do not preinstall it,
+      # so they keep isolation.
       - name: Pip install the package
-        run: CC=clang python -m pip install .[tests]
+        run: python -m pip install ${{ runner.os == 'Windows' && '--no-build-isolation' || '' }} .[tests]
       - name: Run pytest
         run: |
           pytest -vv
