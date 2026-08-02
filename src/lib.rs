@@ -4,6 +4,8 @@ pub mod factorial;
 pub mod fundamental_period;
 pub mod hkty;
 pub mod instanton;
+#[cfg(feature = "cli")]
+pub mod io;
 pub mod misc;
 pub mod polynomial;
 pub mod pool;

@@ -47,6 +47,9 @@ Repository = "https://github.com/ariostas/cygv"
 
 [tool.maturin]
 python-source = "python"
+# The extension module does not need the command line interface, and building it
+# would pull in the argument and YAML parsers.
+no-default-features = true
 features = ["pyo3/extension-module"]
 
 [tool.uv]

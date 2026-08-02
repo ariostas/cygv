@@ -17,10 +17,12 @@ with maturin/PyO3. Licensed GPLv3+.
 ```bash
 # Rust
 cargo build
-cargo test                            # unit tests in src/**, integration test in tests/full_hkty.rs
+cargo test                            # unit tests in src/**, integration tests in tests/
 cargo test test_threefold             # single test by name
 cargo test --test full_hkty           # single integration test file
 cargo doc --open
+cargo run -- --file examples/threefold.yaml   # the CLI
+cargo build --no-default-features     # library only, i.e. without the cli feature
 
 # Benchmarks (see the Benchmarks section below)
 cargo bench                           # both targets, quick scenarios only
@@ -123,9 +125,10 @@ indices differently (the first index is a reference surface in the n-fold case).
 
 - **Const generics select variants at compile time.** `run_hkty<T, FIND_GV, IS_THREEFOLD>` is
   monomorphized over `T ∈ {Rational, Float}` and the two bools. Every entry point — the eight
-  `compute_g{v,w}_{rat,float}_{threefold,nfold}` wrappers in `src/hkty.rs` and the `match (find_gv,
-  is_threefold)` in `src/python.rs` — is just a dispatch into that one generic. Adding an option
-  here means touching all of those dispatch sites.
+  `compute_g{v,w}_{rat,float}_{threefold,nfold}` wrappers in `src/hkty.rs`, and
+  `compute_gvgw_strings` in the same file, which is the single runtime dispatch used by both
+  `src/python.rs` and the CLI — is just a dispatch into that one generic. Adding an option here
+  means touching all of those dispatch sites.
 - **`PolynomialCoeff<T>`** (`src/polynomial/coefficient.rs`) is the compound trait that lets the
   same code run over exact `rug::Rational` and arbitrary-precision `rug::Float`. It is built almost
   entirely from `*Assign` traits: coefficient arithmetic is done in place to avoid allocating
@@ -146,11 +149,30 @@ indices differently (the first index is a reference surface in the n-fold case).
   queue, `thread::scope` to spawn one worker per per-thread `NumberPool`, an `mpsc` channel back to
   the main thread which assembles results, and `drop(tx)` to terminate the receive loop. No rayon.
 
+### Command line interface
+
+`src/bin/cygv/main.rs` is a thin clap front end: it reads YAML from a file or stdin, parses it with
+`io::Input::load_all`, and writes one YAML document of results per input document to a file or
+stdout, flushing after each one. All of the parsing, validation, and formatting lives in
+`src/io.rs`, whose `Input` struct mirrors the arguments of `run_hkty` and whose field conventions
+match the Python API (each inner list is a *column*). `Input::from_yaml` rejects unknown fields and
+validates shapes eagerly — including a `process_int_nums` dry run — because `run_hkty` itself still
+unwraps its errors. `Input::compute` sorts the results by degree and then lexicographically by
+curve class, since the order in which curve classes of equal degree come out of `run_hkty` is not
+deterministic. Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
+
+The whole CLI sits behind the default `cli` feature: `clap` and `yaml-rust2` are optional
+dependencies, `[[bin]]` declares `required-features = ["cli"]`, and both `io` (in `src/lib.rs`) and
+`tests/cli.rs` are `#[cfg]`-gated on it. The wheel does not need any of it, so `[tool.maturin]` sets
+`no-default-features = true` — which means the Python build never exercises `src/io.rs`, and
+`cargo build --no-default-features` (run in CI) is what keeps the gate honest.
+
 ### Python layer
 
 `src/python.rs` exposes a single `_compute_gvgw` PyO3 function (module built with `gil_used =
-false`); results are returned as **strings** and parsed on the Python side into `int`,
-`fractions.Fraction`, or `mpmath.mpf` depending on `find_gv`/`prec`.
+false`) that forwards to `hkty::compute_gvgw_strings`; results are returned as **strings** and
+parsed on the Python side into `int`, `fractions.Fraction`, or `mpmath.mpf` depending on
+`find_gv`/`prec`.
 
 `python/cygv/hkty.py` wraps it: `compute_gv` / `compute_gw` normalize inputs to numpy arrays, infer
 `is_threefold` from the shape of `q` and the nef partition, and run the Rust call in a
