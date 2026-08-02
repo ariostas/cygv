@@ -372,11 +372,8 @@ where
         let mut n = n.unsigned_abs();
         let mut tmp_poly = if invert {
             // The reciprocal requires a nonzero constant term, so its minimum degree
-            // is zero and no truncation is possible before the multiplications.
-            let tmp_poly2 = self.recipr(poly_props, coeff_pool)?;
-            let tmp_poly3 = tmp_poly2.truncated(max_deg, poly_props, coeff_pool);
-            tmp_poly2.drop(coeff_pool);
-            tmp_poly3
+            // is zero and no up-front truncation is possible.
+            self.recipr(poly_props, coeff_pool)?
         } else {
             // When the minimum degree of the result exceeds the maximum degree of
             // the semigroup, the truncated result is the zero polynomial. Computing

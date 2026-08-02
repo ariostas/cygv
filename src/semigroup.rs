@@ -324,9 +324,9 @@ fn find_generators(elements: &DMatrix<i32>) -> DMatrix<i32> {
     // TODO: Need to check if it is worth to do this in parallel.
 
     // Elements that are the sum of up to this many other elements are discarded.
-    // TODO: Need to check if this is reasonable. The original code checked sums
-    // of up to 4 elements, but that was probably too high.
-    let max_sum_elements = 2;
+    // TODO: Need to check if this is reasonable. The original code used sums of
+    // up to 4 elements, but that was probably too high.
+    let max_sum_elements = 3;
 
     let dim = elements.nrows();
     let zero_vec = DVector::<i32>::zeros(dim);
