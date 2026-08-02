@@ -4,8 +4,13 @@ version = "0.2.3"
 description = "Compute GV and GW invariants of CY manifolds."
 authors = ["Andres Rios Tascon"]
 edition = "2021"
+# Keep in sync with the newest API used (currently u32::is_multiple_of).
+rust-version = "1.87"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/ariostas/cygv"
+readme = "README.md"
+keywords = ["calabi-yau", "gopakumar-vafa", "gromov-witten", "mirror-symmetry"]
+categories = ["science", "mathematics", "algorithms"]
 
 [lib]
 name = "cygv"
@@ -22,10 +27,14 @@ default = ["cli"]
 # users that do not need it can depend on this crate with `default-features = false`
 # to avoid pulling in the argument and YAML parsers.
 cli = ["dep:clap", "dep:yaml-rust2"]
+# The Python bindings, i.e. the `python` module. Only the extension module built
+# by maturin needs them (see `[tool.maturin]` in pyproject.toml), so plain Rust
+# builds do not have to compile pyo3.
+python = ["dep:pyo3", "dep:ctrlc"]
 
 [dependencies]
 clap = { version = "4.5.16", features = ["derive"], optional = true }
-ctrlc = "3.4.4"
+ctrlc = { version = "3.4.4", optional = true }
 itertools = "0.14.0"
 nalgebra = "0.35.0"
 rug = "1.25.0"
@@ -34,6 +43,7 @@ yaml-rust2 = { version = "0.11", optional = true }
 [dependencies.pyo3]
 version = "0.28.2"
 features = ["abi3-py310"]
+optional = true
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }

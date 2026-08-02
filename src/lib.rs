@@ -9,6 +9,7 @@ pub mod io;
 pub mod misc;
 pub mod polynomial;
 pub mod pool;
+#[cfg(feature = "python")]
 pub mod python;
 pub mod semigroup;
 pub mod series_inversion;
@@ -28,6 +29,7 @@ pub use semigroup::Semigroup;
 pub use polynomial::coefficient::PolynomialCoeff;
 
 // Re-export python module
+#[cfg(feature = "python")]
 #[doc(inline)]
 pub use python::cygv;
 
