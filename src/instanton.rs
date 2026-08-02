@@ -173,7 +173,11 @@ fn compute_expalpha_thread<T>(
             }
             Err(e) => Err(e),
         };
-        tx.send((t, p)).unwrap();
+        // The receiver hangs up early when another worker reports an error, so a
+        // failed send just means that there is nothing left to do.
+        if tx.send((t, p)).is_err() {
+            break;
+        }
     }
 }
 

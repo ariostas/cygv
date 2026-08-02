@@ -3,7 +3,7 @@
 use core::fmt;
 
 /// An error enum for polynomial errors.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PolynomialError {
     ZeroConstantTermError,
     NonZeroConstantTermError,
