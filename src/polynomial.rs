@@ -371,13 +371,21 @@ where
         let invert = n < 0;
         let mut n = n.unsigned_abs();
         let mut tmp_poly = if invert {
-            let tmp_poly2 = self.recipr(poly_props, coeff_pool)?;
-            let tmp_poly3 =
-                tmp_poly2.truncated(max_deg - (n - 1) * min_deg, poly_props, coeff_pool);
-            tmp_poly2.drop(coeff_pool);
-            tmp_poly3
+            // The reciprocal requires a nonzero constant term, so its minimum degree
+            // is zero and no up-front truncation is possible.
+            self.recipr(poly_props, coeff_pool)?
         } else {
-            self.truncated(max_deg - (n - 1) * min_deg, poly_props, coeff_pool)
+            // When the minimum degree of the result exceeds the maximum degree of
+            // the semigroup, the truncated result is the zero polynomial. Computing
+            // the truncation degree naively would underflow in that case.
+            let Some(trunc_deg) = (n - 1)
+                .checked_mul(min_deg)
+                .and_then(|d| max_deg.checked_sub(d))
+            else {
+                res.drop(coeff_pool);
+                return Ok(Self::new());
+            };
+            self.truncated(trunc_deg, poly_props, coeff_pool)
         };
         loop {
             if !n.is_multiple_of(2) {
@@ -891,6 +899,29 @@ mod tests {
         let p_3 = p.pow(3, &poly_props, &mut coeff_pool).unwrap();
         let p_3_res = p.mul(&p_2, &poly_props, &mut coeff_pool);
         assert_eq!(p_3, p_3_res);
+    }
+
+    #[test]
+    fn test_pow_truncates_to_zero() {
+        let tmp_rational = Rational::new();
+        let semigroup = example_semigroup();
+        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 100);
+
+        // The semigroup has maximum degree two, so any power beyond the second of a
+        // polynomial with minimum degree one truncates to zero.
+        let p = polynomial!(
+            tmp_rational,
+            (1, 2), // 2*x
+            (2, 3)  // 3*y
+        );
+        let p_4 = p.pow(4, &poly_props, &mut coeff_pool).unwrap();
+        assert_eq!(p_4, Polynomial::new());
+
+        // Powers of the zero polynomial stay zero.
+        let p_zero: Polynomial<Rational> = Polynomial::new();
+        let p_zero_2 = p_zero.pow(2, &poly_props, &mut coeff_pool).unwrap();
+        assert_eq!(p_zero_2, Polynomial::new());
     }
 
     #[test]
