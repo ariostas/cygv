@@ -42,14 +42,15 @@ where
 }
 
 /// Computes qN and Li2(qN)
-#[allow(clippy::type_complexity)]
-fn compute_li2qn_thread<T, const FIND_GV: bool>(
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn compute_li2qn_thread<T>(
     tasks: Arc<Mutex<Iter<usize>>>,
     tx: Sender<(usize, Polynomial<T>, Result<Polynomial<T>, PolynomialError>)>,
     previous_qn: &VecDeque<HashMap<usize, Polynomial<T>>>,
     previous_qn_ind: &VecDeque<Vec<usize>>,
     expalpha: &[(Polynomial<T>, Polynomial<T>)],
     poly_props: &PolynomialProperties<T>,
+    find_gv: bool,
     np: &mut NumberPool<T>,
 ) where
     T: PolynomialCoeff<T>,
@@ -136,7 +137,7 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
             poly_props,
             np,
         );
-        let tmp_li2qn = if FIND_GV {
+        let tmp_li2qn = if find_gv {
             tmp_qn.li_2(poly_props, np)
         } else {
             Ok(tmp_qn.clone(np))
@@ -150,9 +151,11 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
 }
 
 /// Find the coefficients of the inverse series, i.e. the GV or GW invariants.
-pub fn invert_series<T, const FIND_GV: bool, const IS_THREEFOLD: bool>(
+pub fn invert_series<T>(
     inst_data: InstantonData<T>,
     poly_props: &PolynomialProperties<T>,
+    find_gv: bool,
+    is_threefold: bool,
     all_pools: &mut (NumberPool<T>, Vec<NumberPool<T>>),
 ) -> Result<HashMap<(usize, usize), T>, SeriesInversionError>
 where
@@ -204,7 +207,7 @@ where
                 _ => {}
             }
         }
-        if IS_THREEFOLD {
+        if is_threefold {
             for j in vec_deg {
                 let kk = poly_props
                     .semigroup
@@ -220,7 +223,7 @@ where
                 };
                 tmp_gv.assign(gv_ref);
                 tmp_gv /= kk.1;
-                if FIND_GV {
+                if find_gv {
                     tmp_gv_rounded.assign(&tmp_gv);
                     tmp_gv_rounded.round_mut();
                     tmp_gv -= &tmp_gv_rounded;
@@ -254,7 +257,7 @@ where
                         continue;
                     };
                     tmp_gv.assign(gv_ref);
-                    if FIND_GV {
+                    if find_gv {
                         tmp_gv_rounded.assign(&tmp_gv);
                         tmp_gv_rounded.round_mut();
                         tmp_gv -= &tmp_gv_rounded;
@@ -299,13 +302,14 @@ where
                 let tx = tx.clone();
                 let tasks = Arc::clone(&tasks_iter);
                 s.spawn(|| {
-                    compute_li2qn_thread::<T, FIND_GV>(
+                    compute_li2qn_thread(
                         tasks,
                         tx,
                         &previous_qn,
                         &previous_qn_ind,
                         &expalpha,
                         poly_props,
+                        find_gv,
                         np,
                     );
                 });
@@ -317,7 +321,7 @@ where
                     break;
                 };
                 computed_qn.insert(j, qn.clone(main_pool));
-                if IS_THREEFOLD {
+                if is_threefold {
                     for (k, inst_k) in inst.iter_mut().enumerate() {
                         if poly_props.semigroup.elements[(k, j)] == 0 {
                             continue;

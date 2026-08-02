@@ -52,7 +52,7 @@ where
     }
 }
 
-/// Efficienty computes products and fractions of factorials.
+/// Efficiently computes products and fractions of factorials.
 ///
 /// # Examples
 ///

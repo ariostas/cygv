@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Process the input intersection numbers and find the relevant pairs of indices.
 /// For threefolds, the relevant pair of indices are simply all distinct (sorted) pairs.
-/// Othersize, the relevant pairs are the indices in the second and third columns,
+/// Otherwise, the relevant pairs are the indices in the second and third columns,
 /// since indices in the first column correspond to reference surfaces.
 #[allow(clippy::type_complexity)]
 pub fn process_int_nums(
