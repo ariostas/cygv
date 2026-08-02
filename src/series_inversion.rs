@@ -141,7 +141,11 @@ fn compute_li2qn_thread<T, const FIND_GV: bool>(
         } else {
             Ok(tmp_qn.clone(np))
         };
-        tx.send((t, tmp_qn, tmp_li2qn)).unwrap();
+        // The receiver hangs up early when another worker reports an error, so a
+        // failed send just means that there is nothing left to do.
+        if tx.send((t, tmp_qn, tmp_li2qn)).is_err() {
+            break;
+        }
     }
 }
 
@@ -335,6 +339,9 @@ where
                 }
             }
         });
+        if let Some(e) = error {
+            return Err(e.into());
+        }
         // Now we update the cache of previous qN
         previous_qn.pop_front();
         previous_qn_ind.pop_front();

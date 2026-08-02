@@ -47,6 +47,11 @@ pub fn process_int_nums(
             return Err(MiscError::RepeatedIdxIntNums);
         }
     }
+    // All of the input intersection numbers may have been zero, in which case the
+    // maxima taken below would panic.
+    if intnum_res.is_empty() {
+        return Err(MiscError::EmptyIntNums);
+    }
     let n_indices = if is_threefold {
         intnum_idxpairs.iter().map(|p| p.1).max().unwrap()
     } else {
@@ -76,5 +81,14 @@ mod tests {
         assert_eq!(intnum_dict.len(), 3);
         assert_eq!(intnum_idxpairs.len(), 3);
         assert_eq!(n_indices, 1);
+    }
+
+    #[test]
+    fn test_all_zero_int_nums() {
+        let intnums = HashMap::from([((0, 1, 1), 0), ((0, 1, 2), 0)]);
+        for is_threefold in [true, false] {
+            let result = process_int_nums(intnums.clone(), is_threefold);
+            assert!(matches!(result, Err(MiscError::EmptyIntNums)));
+        }
     }
 }

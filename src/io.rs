@@ -752,6 +752,14 @@ min_points: 20
             load_one(&THREEFOLD.replace("[0, 1, 1, -1]", "[0, 1, 1, -1], [1, 0, 1, 2]")),
             Err(IoError::InvalidField { field, .. }) if field == "intnums"
         ));
+        // Intersection numbers that are all zero must be rejected, not panic.
+        assert!(matches!(
+            load_one(&THREEFOLD.replace(
+                "intnums: [[0, 0, 0, 2], [0, 0, 1, 1], [0, 1, 1, -1], [1, 1, 1, 5]]",
+                "intnums: [[0, 0, 0, 0], [0, 0, 1, 0]]",
+            )),
+            Err(IoError::InvalidField { field, .. }) if field == "intnums"
+        ));
         assert!(Input::load_all("generators: [[1]], bad").is_err());
     }
 
