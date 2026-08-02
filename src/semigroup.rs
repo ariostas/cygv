@@ -1,9 +1,9 @@
 //! Affine semigroups that generate SCRP cones.
 //!
 //! This module contains functions to construct (truncated) affine semigroups
-//! that generate scrongly-convex rational polyhedral cones. In other words, the
+//! that generate strongly-convex rational polyhedral cones. In other words, the
 //! semigroups are of the form $S_\sigma=\sigma\cap\mathbb{Z}^n$ for a
-//! strongly-convex rational polyhedal cone $\sigma$ and some
+//! strongly-convex rational polyhedral cone $\sigma$ and some
 //! $n\in\mathbb{Z}_{>0}$.
 
 pub mod error;

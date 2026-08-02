@@ -125,63 +125,38 @@ pub fn compute_gvgw_strings(
     pool_size: usize,
     prec: Option<u32>,
 ) -> Vec<((DVector<i32>, usize), String)> {
+    // Dispatch to the instantiation of `run_hkty` selected by the coefficient type
+    // and the two runtime flags. The flags and the argument list, which are the
+    // same for every variant, are each written only once here.
+    macro_rules! run_hkty_variant {
+        ($t:ty, $cutoff:expr) => {
+            match (find_gv, is_threefold) {
+                (true, true) => run_hkty_variant!(@call $t, $cutoff, true, true),
+                (true, false) => run_hkty_variant!(@call $t, $cutoff, true, false),
+                (false, true) => run_hkty_variant!(@call $t, $cutoff, false, true),
+                (false, false) => run_hkty_variant!(@call $t, $cutoff, false, false),
+            }
+        };
+        (@call $t:ty, $cutoff:expr, $find_gv:literal, $is_threefold:literal) => {
+            run_hkty::<$t, $find_gv, $is_threefold>(
+                generators,
+                grading_vector,
+                $cutoff,
+                max_deg,
+                min_points,
+                target_points,
+                q,
+                nefpart,
+                intnums,
+                n_threads,
+                pool_size,
+            )
+        };
+    }
     if let Some(n_bits) = prec {
         let mut zero_cutoff = Float::with_val(n_bits, 10);
         zero_cutoff.pow_assign(-(n_bits as i32) / 3);
-        let res = match (find_gv, is_threefold) {
-            (true, true) => run_hkty::<Float, true, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, true) => run_hkty::<Float, false, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (true, false) => run_hkty::<Float, true, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, false) => run_hkty::<Float, false, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-        };
+        let res = run_hkty_variant!(Float, zero_cutoff);
         res.into_iter()
             .map(|(k, gvgw)| {
                 (
@@ -196,60 +171,7 @@ pub fn compute_gvgw_strings(
             .collect()
     } else {
         let zero_cutoff = Rational::new();
-        let res = match (find_gv, is_threefold) {
-            (true, true) => run_hkty::<Rational, true, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, true) => run_hkty::<Rational, false, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (true, false) => run_hkty::<Rational, true, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, false) => run_hkty::<Rational, false, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-        };
+        let res = run_hkty_variant!(Rational, zero_cutoff);
         res.into_iter()
             .map(|(k, gvgw)| {
                 (
