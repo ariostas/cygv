@@ -52,6 +52,60 @@ where
     }
 }
 
+/// A cache of generalized harmonic numbers $H_{n,m}$ for a fixed $m$.
+///
+/// The values are computed incrementally, so requesting $H_{n,m}$ only costs
+/// one reciprocal and one addition for each $n$ beyond the largest one
+/// requested so far. This is much cheaper than [`harmonic`] when the same
+/// values are needed repeatedly.
+///
+/// # Examples
+///
+/// ```
+/// use rug::Rational;
+/// use cygv::factorial::HarmonicCache;
+///
+/// let mut cache = HarmonicCache::new(2, &Rational::new());
+///
+/// assert_eq!(*cache.get(10), Rational::from((1_968_329, 1_270_080)));
+/// assert_eq!(*cache.get(1), Rational::from(1));
+/// ```
+pub struct HarmonicCache<T> {
+    m: u32,
+    values: Vec<T>,
+    tmp_var: T,
+}
+
+impl<T> HarmonicCache<T>
+where
+    T: Clone + RecipMut + Assign<u64> + for<'a> AddAssign<&'a T>,
+{
+    /// Create a new cache for the power $m$, using a clonable template number.
+    pub fn new(m: u32, template_num: &T) -> Self {
+        let mut zero = template_num.clone();
+        zero.assign(0u64);
+        Self {
+            m,
+            values: vec![zero],
+            tmp_var: template_num.clone(),
+        }
+    }
+
+    /// Return $H_{n,m}$, extending the cache when needed.
+    pub fn get(&mut self, n: u32) -> &T {
+        let n = n as usize;
+        while self.values.len() <= n {
+            let i = self.values.len() as u64;
+            self.tmp_var.assign(i.pow(self.m));
+            self.tmp_var.recip_mut();
+            let mut next = self.values[self.values.len() - 1].clone();
+            next += &self.tmp_var;
+            self.values.push(next);
+        }
+        &self.values[n]
+    }
+}
+
 /// Efficienty computes products and fractions of factorials.
 ///
 /// # Examples
@@ -144,6 +198,30 @@ mod tests {
 
             assert_eq!(res_rat, true_rat);
             assert!((&res_float - &true_float).complete(512).abs() < 1e-100);
+        }
+    }
+
+    #[test]
+    fn test_harmonic_cache() {
+        let mut res_rat = Rational::new();
+        let mut tmp_rat = Rational::new();
+
+        let prec = 512;
+        let mut res_float = Float::new(prec);
+        let mut tmp_float = Float::new(prec);
+
+        for m in [1, 2] {
+            let mut cache_rat = HarmonicCache::new(m, &Rational::new());
+            let mut cache_float = HarmonicCache::new(m, &Float::new(prec));
+
+            // Request the values out of order to exercise the incremental fill.
+            for n in [10, 0, 3, 10, 25] {
+                harmonic(n, m, &mut res_rat, &mut tmp_rat);
+                harmonic(n, m, &mut res_float, &mut tmp_float);
+
+                assert_eq!(*cache_rat.get(n), res_rat);
+                assert!((cache_float.get(n) - &res_float).complete(512).abs() < 1e-100);
+            }
         }
     }
 
