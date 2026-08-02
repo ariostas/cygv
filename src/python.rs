@@ -1,8 +1,11 @@
 use crate::hkty::compute_gvgw_strings;
-use ctrlc;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
 use std::collections::HashMap;
+use std::sync::Once;
+
+/// Installing a ctrl-c handler can only be done once per process, so guard it.
+static CTRLC_HANDLER: Once = Once::new();
 
 fn to_matrix(m: Vec<Vec<i32>>) -> DMatrix<i32> {
     let n_cols = m.len();
@@ -63,7 +66,9 @@ pub fn compute_gvgw(
     pool_size: usize,
     prec: Option<u32>,
 ) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
-    ctrlc::set_handler(|| std::process::exit(1)).unwrap();
+    CTRLC_HANDLER.call_once(|| {
+        ctrlc::set_handler(|| std::process::exit(1)).expect("failed to install ctrl-c handler");
+    });
     let generators = to_matrix(generators);
     let grading_vector = to_rowvector(grading_vector);
     let q = to_matrix(q);

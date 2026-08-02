@@ -323,9 +323,10 @@ fn trim_by_max_deg(
 fn find_generators(elements: &DMatrix<i32>) -> DMatrix<i32> {
     // TODO: Need to check if it is worth to do this in parallel.
 
-    // TODO: Need to check if this is reasonable. For the original code it was
-    // 5, but that was probably too high.
-    let max_sum_elements = 3;
+    // Elements that are the sum of up to this many other elements are discarded.
+    // TODO: Need to check if this is reasonable. The original code checked sums
+    // of up to 4 elements, but that was probably too high.
+    let max_sum_elements = 2;
 
     let dim = elements.nrows();
     let zero_vec = DVector::<i32>::zeros(dim);
@@ -336,7 +337,7 @@ fn find_generators(elements: &DMatrix<i32>) -> DMatrix<i32> {
 
     let mut to_remove = HashSet::new();
 
-    for n in 2..max_sum_elements {
+    for n in 2..=max_sum_elements {
         for v in generators.iter().combinations_with_replacement(n) {
             tmp_vec.copy_from(&zero_vec);
             for c in v.into_iter() {
