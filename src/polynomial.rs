@@ -9,6 +9,7 @@ use crate::pool::NumberPool;
 use coefficient::PolynomialCoeff;
 use core::ops::{DivAssign, MulAssign};
 use error::PolynomialError;
+use nalgebra::DVector;
 use properties::PolynomialProperties;
 use std::collections::HashMap;
 
@@ -201,7 +202,9 @@ where
         let mut deg1;
         let mut deg2;
         let max_deg = poly_props.semigroup.max_degree;
-        let mut tmp_vec;
+        // Reuse a single buffer for the monomial sums to avoid allocating in the
+        // innermost loop.
+        let mut tmp_vec = DVector::<i32>::zeros(poly_props.semigroup.elements.nrows());
         let (pshort, plong) = if self.nonzero.len() < rhs.nonzero.len() {
             (self, rhs)
         } else {
@@ -215,8 +218,8 @@ where
                 if deg1 + deg2 > max_deg {
                     break;
                 }
-                tmp_vec = poly_props.semigroup.elements.column(i)
-                    + poly_props.semigroup.elements.column(j);
+                tmp_vec.copy_from(&poly_props.semigroup.elements.column(i));
+                tmp_vec += poly_props.semigroup.elements.column(j);
                 let Some(mon) = poly_props.monomial_map.get(&tmp_vec.as_view()) else {
                     continue;
                 };
@@ -350,6 +353,8 @@ where
         }
         res.div_scalar_assign(&const_term);
         tmp_poly.drop(coeff_pool);
+        p0.drop(coeff_pool);
+        coeff_pool.push(const_term);
         Ok(res)
     }
 
@@ -425,6 +430,7 @@ where
             }
         }
         tmp_poly.drop(coeff_pool);
+        coeff_pool.push(tmp_var);
         Ok((res_pos, res_neg))
     }
 

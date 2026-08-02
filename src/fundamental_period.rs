@@ -2,7 +2,7 @@
 
 pub mod error;
 
-use crate::factorial::{factorial_prod, harmonic};
+use crate::factorial::{factorial_prod, HarmonicCache};
 use crate::polynomial::{coefficient::PolynomialCoeff, Polynomial};
 use crate::pool::NumberPool;
 use crate::semigroup::Semigroup;
@@ -53,9 +53,10 @@ fn compute_c_0neg<T>(
 {
     let mut a: Vec<_> = (0..q.ncols()).map(|_| template_var.clone()).collect();
     let mut tmp_num0 = template_var.clone();
-    let mut tmp_num1 = template_var.clone();
     let mut c0fact = template_var.clone();
     let mut tmp_final = template_var.clone();
+    let mut harmonic1 = HarmonicCache::new(1, template_var);
+    let mut harmonic2 = HarmonicCache::new(2, template_var);
     loop {
         let t;
         {
@@ -73,12 +74,12 @@ fn compute_c_0neg<T>(
         for (i, aa) in a.iter_mut().enumerate() {
             aa.assign(0);
             for (&qq0, &cdq0) in q0.column(i).iter().zip(curves_dot_q0.column(t).iter()) {
-                harmonic(cdq0 as u32, 1, &mut tmp_num0, &mut tmp_num1);
+                tmp_num0.assign(harmonic1.get(cdq0 as u32));
                 tmp_num0 *= qq0;
                 *aa += &tmp_num0;
             }
             for (&qq, &cdq) in q.column(i).iter().zip(curves_dot_q.column(t).iter()) {
-                harmonic(cdq as u32, 1, &mut tmp_num0, &mut tmp_num1);
+                tmp_num0.assign(harmonic1.get(cdq as u32));
                 tmp_num0 *= qq;
                 *aa -= &tmp_num0;
             }
@@ -95,7 +96,7 @@ fn compute_c_0neg<T>(
                 .zip(q0.column(bb).iter())
                 .zip(curves_dot_q0.column(t).iter())
             {
-                harmonic(cdq0 as u32, 2, &mut tmp_num0, &mut tmp_num1);
+                tmp_num0.assign(harmonic2.get(cdq0 as u32));
                 tmp_num0 *= q0a * q0b;
                 tmp_final -= &tmp_num0;
             }
@@ -105,7 +106,7 @@ fn compute_c_0neg<T>(
                 .zip(q.column(bb).iter())
                 .zip(curves_dot_q.column(t).iter())
             {
-                harmonic(cdq as u32, 2, &mut tmp_num0, &mut tmp_num1);
+                tmp_num0.assign(harmonic2.get(cdq as u32));
                 tmp_num0 *= qa * qb;
                 tmp_final += &tmp_num0;
             }
@@ -139,6 +140,7 @@ fn compute_c_1neg<T>(
     let mut tmp_num0 = template_var.clone();
     let mut tmp_num1 = template_var.clone();
     let mut tmp_final = template_var.clone();
+    let mut harmonic1 = HarmonicCache::new(1, template_var);
     loop {
         let t;
         {
@@ -178,21 +180,16 @@ fn compute_c_1neg<T>(
         for (i, aa) in a.iter_mut().enumerate() {
             aa.assign(0);
             for (&qq0, &cdq0) in q0.column(i).iter().zip(curves_dot_q0.column(t).iter()) {
-                harmonic(cdq0 as u32, 1, &mut tmp_num0, &mut tmp_num1);
+                tmp_num0.assign(harmonic1.get(cdq0 as u32));
                 tmp_num0 *= qq0;
                 *aa += &tmp_num0;
             }
             for (&qq, &cdq) in q.column(i).iter().zip(curves_dot_q.column(t).iter()) {
-                harmonic(
-                    if cdq.is_negative() {
-                        (-cdq - 1) as u32
-                    } else {
-                        cdq as u32
-                    },
-                    1,
-                    &mut tmp_num0,
-                    &mut tmp_num1,
-                );
+                tmp_num0.assign(harmonic1.get(if cdq.is_negative() {
+                    (-cdq - 1) as u32
+                } else {
+                    cdq as u32
+                }));
                 tmp_num0 *= qq;
                 *aa -= &tmp_num0;
             }
