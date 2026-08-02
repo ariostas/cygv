@@ -48,9 +48,10 @@ Repository = "https://github.com/ariostas/cygv"
 [tool.maturin]
 python-source = "python"
 # The extension module does not need the command line interface, and building it
-# would pull in the argument and YAML parsers.
+# would pull in the argument and YAML parsers. The bindings themselves live
+# behind the off-by-default `python` feature, so it has to be enabled here.
 no-default-features = true
-features = ["pyo3/extension-module"]
+features = ["python", "pyo3/extension-module"]
 
 [tool.uv]
 # Without these, uv will not rebuild the extension module when only the Rust
