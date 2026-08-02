@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 /// A structure containing properties of a polynomial.
 ///
-/// This structure contains the data common to all polynomaials and is needed
+/// This structure contains the data common to all polynomials and is needed
 /// for most operations.
 #[derive(Clone, Debug)]
 pub struct PolynomialProperties<'a, T> {

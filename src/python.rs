@@ -4,43 +4,20 @@ use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-fn to_matrix(m: Vec<Vec<i32>>) -> DMatrix<i32> {
-    let n_cols = m.len();
-    let n_rows = if let Some(v) = m.first() { v.len() } else { 0 };
-    let mut res = DMatrix::zeros(n_rows, n_cols);
-    for (col_src, mut col_dst) in m.iter().zip(res.column_iter_mut()) {
-        for (src, dst) in col_src.iter().zip(col_dst.iter_mut()) {
-            *dst = *src;
-        }
+/// Turn a list of columns into a matrix, requiring the columns to have equal
+/// lengths.
+fn to_matrix(m: Vec<Vec<i32>>, name: &str) -> PyResult<DMatrix<i32>> {
+    let n_rows = m.first().map_or(0, Vec::len);
+    if m.iter().any(|col| col.len() != n_rows) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "the vectors of \"{name}\" must all have the same length"
+        )));
     }
-    res
-}
-
-fn to_vector(v: Vec<i32>) -> DVector<i32> {
-    let len = v.len();
-    let mut res = DVector::zeros(len);
-    for (src, dst) in v.iter().zip(res.iter_mut()) {
-        *dst = *src;
-    }
-    res
-}
-
-fn to_rowvector(v: Vec<i32>) -> RowDVector<i32> {
-    let len = v.len();
-    let mut res = RowDVector::zeros(len);
-    for (src, dst) in v.iter().zip(res.iter_mut()) {
-        *dst = *src;
-    }
-    res
-}
-
-fn to_vec(v: DVector<i32>) -> Vec<i32> {
-    let len = v.len();
-    let mut res = vec![0; len];
-    for (src, dst) in v.iter().zip(res.iter_mut()) {
-        *dst = *src;
-    }
-    res
+    Ok(DMatrix::from_iterator(
+        n_rows,
+        m.len(),
+        m.into_iter().flatten(),
+    ))
 }
 
 /// Compute GV or GW invariants
@@ -64,12 +41,17 @@ pub fn compute_gvgw(
     prec: Option<u32>,
 ) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
     ctrlc::set_handler(|| std::process::exit(1)).unwrap();
-    let generators = to_matrix(generators);
-    let grading_vector = to_rowvector(grading_vector);
-    let q = to_matrix(q);
-    let target_points = target_points.map(to_matrix);
-    let nefpart = nefpart.unwrap_or_default();
-    let nefpart: Vec<_> = nefpart.into_iter().map(to_vector).collect();
+    let generators = to_matrix(generators, "generators")?;
+    let grading_vector = RowDVector::from_vec(grading_vector);
+    let q = to_matrix(q, "q")?;
+    let target_points = target_points
+        .map(|m| to_matrix(m, "target_points"))
+        .transpose()?;
+    let nefpart: Vec<_> = nefpart
+        .unwrap_or_default()
+        .into_iter()
+        .map(DVector::from_vec)
+        .collect();
 
     let res = compute_gvgw_strings(
         generators,
@@ -89,7 +71,7 @@ pub fn compute_gvgw(
 
     Ok(res
         .into_iter()
-        .map(|((v, c), gvgw)| ((to_vec(v), c), gvgw))
+        .map(|((v, c), gvgw)| ((v.as_slice().to_vec(), c), gvgw))
         .collect())
 }
 
