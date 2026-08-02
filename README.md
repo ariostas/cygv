@@ -35,6 +35,17 @@ invariants: gv
 min_points: 100
 ```
 
+The intersection numbers can equivalently be given as a mapping from indices to values, which is
+easier to read when there are many of them.
+
+```yaml
+intnums:
+  "0,0,0": 2
+  "0,0,1": 1
+  "0,1,1": -1
+  "1,1,1": 5
+```
+
 The results are written back as one YAML document per input document, sorted by the degree of
 the curve classes under the grading vector.
 
