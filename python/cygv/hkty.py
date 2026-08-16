@@ -51,7 +51,10 @@ def _compute_gvgw_subprocess(
                 prec,
             )
         )
-    except BaseException as e:
+    # The catch has to be this broad: a panic on the Rust side surfaces as a
+    # PanicException, which derives from BaseException rather than Exception, and
+    # it still needs to be reported back to the parent process.
+    except BaseException as e:  # noqa: BLE001
         conn.send(RuntimeError(str(e)))
     conn.close()
 
