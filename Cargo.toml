@@ -9,7 +9,7 @@ rust-version = "1.87"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/ariostas/cygv"
 readme = "README.md"
-keywords = ["calabi-yau", "gopakumar-vafa", "gromov-witten", "mirror-symmetry"]
+keywords = ["calabi-yau", "string-theory", "gopakumar-vafa", "gromov-witten", "mirror-symmetry"]
 categories = ["science", "mathematics", "algorithms"]
 
 [lib]
