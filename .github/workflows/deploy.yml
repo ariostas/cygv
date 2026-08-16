@@ -40,6 +40,20 @@ jobs:
       # to be repeated inside CIBW_ENVIRONMENT below to reach the container
       # builds, and `build_sdist` ignores it, so the sdist job is unaffected.
       MATURIN_PEP517_ARGS: --locked
+      # pyo3 0.29 links the Python DLL with rustc's `raw-dylib`, which names the
+      # DLL in the import table instead of taking the name from an import
+      # library. It picks that name from the interpreter configuration, and for
+      # abi3 builds with pyo3 0.29 or newer maturin no longer lets pyo3 probe
+      # the interpreter: it writes a PYO3_CONFIG_FILE of its own, which carries
+      # no `lib_name` and no indication that the interpreter is a MinGW one. So
+      # pyo3 falls back to the MSVC name, `python3.dll`, while MSYS2 ships
+      # `libpython3.dll`. Nothing fails at build time — raw-dylib needs no
+      # import library — and the extension only fails to load, with
+      # "DLL load failed [...] The specified module could not be found".
+      # Opting out restores the pre-0.29 behaviour: pyo3 links `-lpython3`,
+      # the MinGW linker resolves that to `libpython3.dll.a`, and the extension
+      # imports `libpython3.dll`. Only Windows builds read this variable.
+      PYO3_USE_RAW_DYLIB: 0
     steps:
       - name: Set up MSYS2
         if: runner.os == 'Windows'
