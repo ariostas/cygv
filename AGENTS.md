@@ -76,6 +76,19 @@ compiled it from source on every run, five minutes of work to duplicate the
 on Windows for the same reason. The catch is that pip no longer enforces `build-system.requires`
 there, so the version pacman ships has to keep satisfying `>=1.5,<2.0` on its own.
 
+Both Windows jobs also set `PYO3_USE_RAW_DYLIB=0`. pyo3 0.29 started linking the Python DLL with
+rustc's `raw-dylib`, which writes the DLL name straight into the import table rather than taking it
+from an import library, and it takes that name from the interpreter configuration. For abi3 builds
+against pyo3 0.29 or newer, maturin stops letting pyo3 probe the interpreter and writes a
+`PYO3_CONFIG_FILE` of its own, which carries neither a `lib_name` nor any hint that the interpreter
+is a MinGW one — so pyo3 falls back to the MSVC name `python3.dll`, while MSYS2 ships
+`libpython3.dll`. Nothing fails while building, because raw-dylib needs no import library; the
+extension simply fails to load, with `ImportError: DLL load failed while importing cygv: The
+specified module could not be found`. Opting out restores what pyo3 0.28 did: link `-lpython3`, let
+the MinGW linker resolve it to `/mingw64/lib/libpython3.dll.a`, and import `libpython3.dll`. The
+variable is only read by pyo3's build script on Windows, so setting it job-wide is harmless
+elsewhere. It can go once maturin records the MinGW library name in the config file it generates.
+
 `[tool.uv] cache-keys` in `pyproject.toml` lists `src/**/*.rs`; without it uv would not rebuild the
 editable extension when only Rust sources change, and `uv run pytest` would test a stale build.
 `uv.lock` is gitignored — it pins only the dev environment and does not affect consumers.
