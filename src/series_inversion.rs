@@ -3,7 +3,9 @@
 pub mod error;
 
 use crate::polynomial::{coefficient::PolynomialCoeff, error::PolynomialError};
-use crate::{instanton::InstantonData, NumberPool, Polynomial, PolynomialProperties};
+use crate::{
+    instanton::InstantonData, CYKind, InvariantKind, NumberPool, Polynomial, PolynomialProperties,
+};
 use core::cmp::Ordering;
 use core::slice::Iter;
 use error::SeriesInversionError;
@@ -50,7 +52,7 @@ fn compute_li2qn_thread<T>(
     previous_qn_ind: &VecDeque<Vec<usize>>,
     expalpha: &[(Polynomial<T>, Polynomial<T>)],
     poly_props: &PolynomialProperties<T>,
-    find_gv: bool,
+    invariant_kind: InvariantKind,
     np: &mut NumberPool<T>,
 ) where
     T: PolynomialCoeff<T>,
@@ -137,10 +139,9 @@ fn compute_li2qn_thread<T>(
             poly_props,
             np,
         );
-        let tmp_li2qn = if find_gv {
-            tmp_qn.li_2(poly_props, np)
-        } else {
-            Ok(tmp_qn.clone(np))
+        let tmp_li2qn = match invariant_kind {
+            InvariantKind::GV => tmp_qn.li_2(poly_props, np),
+            InvariantKind::GW => Ok(tmp_qn.clone(np)),
         };
         // The receiver hangs up early when another worker reports an error, so a
         // failed send just means that there is nothing left to do.
@@ -154,8 +155,8 @@ fn compute_li2qn_thread<T>(
 pub fn invert_series<T>(
     inst_data: InstantonData<T>,
     poly_props: &PolynomialProperties<T>,
-    find_gv: bool,
-    is_threefold: bool,
+    invariant_kind: InvariantKind,
+    cy_kind: CYKind,
     all_pools: &mut (NumberPool<T>, Vec<NumberPool<T>>),
 ) -> Result<HashMap<(usize, usize), T>, SeriesInversionError>
 where
@@ -207,87 +208,96 @@ where
                 _ => {}
             }
         }
-        if is_threefold {
-            for j in vec_deg {
-                let kk = poly_props
-                    .semigroup
-                    .elements
-                    .column(j)
-                    .iter()
-                    .cloned()
-                    .enumerate()
-                    .find(|(_, c)| *c != 0)
-                    .unwrap();
-                let Some(gv_ref) = inst[kk.0].coeffs.get(&(j)) else {
-                    continue;
-                };
-                tmp_gv.assign(gv_ref);
-                tmp_gv /= kk.1;
-                if find_gv {
-                    tmp_gv_rounded.assign(&tmp_gv);
-                    tmp_gv_rounded.round_mut();
-                    tmp_gv -= &tmp_gv_rounded;
-                    tmp_gv.abs_mut();
-                    if tmp_gv > 1e-3 {
-                        return Err(SeriesInversionError::NonIntegerGVError);
-                    }
-                    tmp_gv.assign(&tmp_gv_rounded);
-                    tmp_gv.abs_mut();
-                    if tmp_gv < 0.5 {
-                        continue;
-                    }
-                    final_gv.insert((j, 0), tmp_gv_rounded.clone());
-                    qn_to_compute.push(j);
-                    gv_qn_to_compute.insert(j, tmp_gv_rounded.clone());
-                } else {
-                    tmp_gv_rounded.assign(&tmp_gv);
-                    tmp_gv_rounded.abs_mut();
-                    if tmp_gv_rounded <= poly_props.zero_cutoff {
-                        continue;
-                    }
-                    final_gv.insert((j, 0), tmp_gv.clone());
-                    qn_to_compute.push(j);
-                    gv_qn_to_compute.insert(j, tmp_gv.clone());
-                }
-            }
-        } else {
-            for j in vec_deg {
-                for (k, inst_k) in inst.iter().enumerate() {
-                    let Some(gv_ref) = inst_k.coeffs.get(&(j)) else {
+        match cy_kind {
+            CYKind::Threefold => {
+                for j in vec_deg {
+                    let kk = poly_props
+                        .semigroup
+                        .elements
+                        .column(j)
+                        .iter()
+                        .cloned()
+                        .enumerate()
+                        .find(|(_, c)| *c != 0)
+                        .unwrap();
+                    let Some(gv_ref) = inst[kk.0].coeffs.get(&(j)) else {
                         continue;
                     };
                     tmp_gv.assign(gv_ref);
-                    if find_gv {
-                        tmp_gv_rounded.assign(&tmp_gv);
-                        tmp_gv_rounded.round_mut();
-                        tmp_gv -= &tmp_gv_rounded;
-                        tmp_gv.abs_mut();
-                        if tmp_gv > 1e-3 {
-                            return Err(SeriesInversionError::NonIntegerGVError);
-                        }
-                        tmp_gv.assign(&tmp_gv_rounded);
-                        tmp_gv.abs_mut();
-                        if tmp_gv < 0.5 {
-                            continue;
-                        }
-                        final_gv.insert((j, k), tmp_gv_rounded.clone());
-                        let h22list = h22gv_qn_to_compute.entry(j).or_insert_with(|| {
+                    tmp_gv /= kk.1;
+                    match invariant_kind {
+                        InvariantKind::GV => {
+                            tmp_gv_rounded.assign(&tmp_gv);
+                            tmp_gv_rounded.round_mut();
+                            tmp_gv -= &tmp_gv_rounded;
+                            tmp_gv.abs_mut();
+                            if tmp_gv > 1e-3 {
+                                return Err(SeriesInversionError::NonIntegerGVError);
+                            }
+                            tmp_gv.assign(&tmp_gv_rounded);
+                            tmp_gv.abs_mut();
+                            if tmp_gv < 0.5 {
+                                continue;
+                            }
+                            final_gv.insert((j, 0), tmp_gv_rounded.clone());
                             qn_to_compute.push(j);
-                            Vec::new()
-                        });
-                        h22list.push((k, tmp_gv_rounded.clone()));
-                    } else {
-                        tmp_gv_rounded.assign(&tmp_gv);
-                        tmp_gv_rounded.abs_mut();
-                        if tmp_gv_rounded <= poly_props.zero_cutoff {
-                            continue;
+                            gv_qn_to_compute.insert(j, tmp_gv_rounded.clone());
                         }
-                        final_gv.insert((j, k), tmp_gv.clone());
-                        let h22list = h22gv_qn_to_compute.entry(j).or_insert_with(|| {
+                        InvariantKind::GW => {
+                            tmp_gv_rounded.assign(&tmp_gv);
+                            tmp_gv_rounded.abs_mut();
+                            if tmp_gv_rounded <= poly_props.zero_cutoff {
+                                continue;
+                            }
+                            final_gv.insert((j, 0), tmp_gv.clone());
                             qn_to_compute.push(j);
-                            Vec::new()
-                        });
-                        h22list.push((k, tmp_gv.clone()));
+                            gv_qn_to_compute.insert(j, tmp_gv.clone());
+                        }
+                    }
+                }
+            }
+            CYKind::Nfold => {
+                for j in vec_deg {
+                    for (k, inst_k) in inst.iter().enumerate() {
+                        let Some(gv_ref) = inst_k.coeffs.get(&(j)) else {
+                            continue;
+                        };
+                        tmp_gv.assign(gv_ref);
+                        match invariant_kind {
+                            InvariantKind::GV => {
+                                tmp_gv_rounded.assign(&tmp_gv);
+                                tmp_gv_rounded.round_mut();
+                                tmp_gv -= &tmp_gv_rounded;
+                                tmp_gv.abs_mut();
+                                if tmp_gv > 1e-3 {
+                                    return Err(SeriesInversionError::NonIntegerGVError);
+                                }
+                                tmp_gv.assign(&tmp_gv_rounded);
+                                tmp_gv.abs_mut();
+                                if tmp_gv < 0.5 {
+                                    continue;
+                                }
+                                final_gv.insert((j, k), tmp_gv_rounded.clone());
+                                let h22list = h22gv_qn_to_compute.entry(j).or_insert_with(|| {
+                                    qn_to_compute.push(j);
+                                    Vec::new()
+                                });
+                                h22list.push((k, tmp_gv_rounded.clone()));
+                            }
+                            InvariantKind::GW => {
+                                tmp_gv_rounded.assign(&tmp_gv);
+                                tmp_gv_rounded.abs_mut();
+                                if tmp_gv_rounded <= poly_props.zero_cutoff {
+                                    continue;
+                                }
+                                final_gv.insert((j, k), tmp_gv.clone());
+                                let h22list = h22gv_qn_to_compute.entry(j).or_insert_with(|| {
+                                    qn_to_compute.push(j);
+                                    Vec::new()
+                                });
+                                h22list.push((k, tmp_gv.clone()));
+                            }
+                        }
                     }
                 }
             }
@@ -309,7 +319,7 @@ where
                         &previous_qn_ind,
                         &expalpha,
                         poly_props,
-                        find_gv,
+                        invariant_kind,
                         np,
                     );
                 });
@@ -321,7 +331,7 @@ where
                     break;
                 };
                 computed_qn.insert(j, qn.clone(main_pool));
-                if is_threefold {
+                if cy_kind.is_threefold() {
                     for (k, inst_k) in inst.iter_mut().enumerate() {
                         if poly_props.semigroup.elements[(k, j)] == 0 {
                             continue;

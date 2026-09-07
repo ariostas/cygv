@@ -2,8 +2,8 @@
 
 use crate::polynomial::coefficient::PolynomialCoeff;
 use crate::{
-    fundamental_period, instanton, misc, series_inversion, NumberPool, PolynomialProperties,
-    Semigroup,
+    fundamental_period, instanton, misc, series_inversion, CYKind, InvariantKind, NumberPool,
+    PolynomialProperties, Semigroup,
 };
 use nalgebra::{DMatrix, DVector, RowDVector};
 use rug::{ops::PowAssign, Float, Integer, Rational};
@@ -16,8 +16,8 @@ pub fn run_hkty<T>(
     generators: DMatrix<i32>,
     grading_vector: RowDVector<i32>,
     zero_cutoff: T,
-    find_gv: bool,
-    is_threefold: bool,
+    invariant_kind: InvariantKind,
+    cy_kind: CYKind,
     max_deg: Option<u32>,
     min_points: Option<u32>,
     target_points: Option<DMatrix<i32>>,
@@ -43,7 +43,7 @@ where
     let poly_props = PolynomialProperties::new(&sg, &zero_cutoff);
 
     let (intnum_dict, intnum_idxpairs, n_indices) =
-        misc::process_int_nums(intnums, is_threefold).unwrap();
+        misc::process_int_nums(intnums, cy_kind).unwrap();
 
     let n_threads = match n_threads {
         None => thread::available_parallelism()
@@ -74,7 +74,7 @@ where
         &intnum_idxpairs,
         n_indices,
         &intnum_dict,
-        is_threefold,
+        cy_kind,
         &mut all_pools,
     )
     .unwrap();
@@ -82,8 +82,8 @@ where
     let gv = series_inversion::invert_series(
         inst_data,
         &poly_props,
-        find_gv,
-        is_threefold,
+        invariant_kind,
+        cy_kind,
         &mut all_pools,
     )
     .unwrap();
@@ -119,8 +119,8 @@ pub fn compute_gvgw_strings(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
-    find_gv: bool,
-    is_threefold: bool,
+    invariant_kind: InvariantKind,
+    cy_kind: CYKind,
     max_deg: Option<u32>,
     min_points: Option<u32>,
     target_points: Option<DMatrix<i32>>,
@@ -135,8 +135,8 @@ pub fn compute_gvgw_strings(
             generators,
             grading_vector,
             zero_cutoff,
-            find_gv,
-            is_threefold,
+            invariant_kind,
+            cy_kind,
             max_deg,
             min_points,
             target_points,
@@ -150,10 +150,9 @@ pub fn compute_gvgw_strings(
             .map(|(k, gvgw)| {
                 (
                     k,
-                    if find_gv {
-                        gvgw.to_integer().unwrap().to_string()
-                    } else {
-                        gvgw.to_string()
+                    match invariant_kind {
+                        InvariantKind::GV => gvgw.to_integer().unwrap().to_string(),
+                        InvariantKind::GW => gvgw.to_string(),
                     },
                 )
             })
@@ -164,8 +163,8 @@ pub fn compute_gvgw_strings(
             generators,
             grading_vector,
             zero_cutoff,
-            find_gv,
-            is_threefold,
+            invariant_kind,
+            cy_kind,
             max_deg,
             min_points,
             target_points,
@@ -179,10 +178,9 @@ pub fn compute_gvgw_strings(
             .map(|(k, gvgw)| {
                 (
                     k,
-                    if find_gv {
-                        gvgw.into_numer_denom().0.to_string()
-                    } else {
-                        gvgw.to_string()
+                    match invariant_kind {
+                        InvariantKind::GV => gvgw.into_numer_denom().0.to_string(),
+                        InvariantKind::GW => gvgw.to_string(),
                     },
                 )
             })
@@ -208,8 +206,8 @@ pub fn compute_gv_rat_threefold(
         generators,
         grading_vector,
         zero_cutoff,
-        true,
-        true,
+        InvariantKind::GV,
+        CYKind::Threefold,
         max_deg,
         min_points,
         target_points,
@@ -244,8 +242,8 @@ pub fn compute_gv_float_threefold(
         generators,
         grading_vector,
         zero_cutoff,
-        true,
-        true,
+        InvariantKind::GV,
+        CYKind::Threefold,
         max_deg,
         min_points,
         target_points,
@@ -278,8 +276,8 @@ pub fn compute_gw_rat_threefold(
         generators,
         grading_vector,
         zero_cutoff,
-        false,
-        true,
+        InvariantKind::GW,
+        CYKind::Threefold,
         max_deg,
         min_points,
         target_points,
@@ -314,8 +312,8 @@ pub fn compute_gw_float_threefold(
         generators,
         grading_vector,
         zero_cutoff,
-        false,
-        true,
+        InvariantKind::GW,
+        CYKind::Threefold,
         max_deg,
         min_points,
         target_points,
@@ -348,8 +346,8 @@ pub fn compute_gv_rat_nfold(
         generators,
         grading_vector,
         zero_cutoff,
-        true,
-        false,
+        InvariantKind::GV,
+        CYKind::Nfold,
         max_deg,
         min_points,
         target_points,
@@ -384,8 +382,8 @@ pub fn compute_gv_float_nfold(
         generators,
         grading_vector,
         zero_cutoff,
-        true,
-        false,
+        InvariantKind::GV,
+        CYKind::Nfold,
         max_deg,
         min_points,
         target_points,
@@ -418,8 +416,8 @@ pub fn compute_gw_rat_nfold(
         generators,
         grading_vector,
         zero_cutoff,
-        false,
-        false,
+        InvariantKind::GW,
+        CYKind::Nfold,
         max_deg,
         min_points,
         target_points,
@@ -451,8 +449,8 @@ pub fn compute_gw_float_nfold(
         generators,
         grading_vector,
         zero_cutoff,
-        false,
-        false,
+        InvariantKind::GW,
+        CYKind::Nfold,
         max_deg,
         min_points,
         target_points,

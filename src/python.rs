@@ -1,4 +1,5 @@
 use crate::hkty::compute_gvgw_strings;
+use crate::{CYKind, InvariantKind};
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -57,6 +58,12 @@ pub fn compute_gvgw(
         .into_iter()
         .map(DVector::from_vec)
         .collect();
+    let invariant_kind = if find_gv {
+        InvariantKind::GV
+    } else {
+        InvariantKind::GW
+    };
+    let cy_kind = CYKind::from_is_threefold(is_threefold);
 
     let res = compute_gvgw_strings(
         generators,
@@ -64,8 +71,8 @@ pub fn compute_gvgw(
         q,
         nefpart,
         intnums,
-        find_gv,
-        is_threefold,
+        invariant_kind,
+        cy_kind,
         max_deg,
         min_points,
         target_points,
