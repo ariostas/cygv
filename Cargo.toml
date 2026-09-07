@@ -66,5 +66,15 @@ harness = false
 name = "memory"
 harness = false
 
+[profile.release]
+# The hot paths are generic over the coefficient type and spread over several
+# modules, so how well they optimize depends on cross-module inlining. With the
+# default 16 codegen units that is decided by how unrelated code happens to be
+# partitioned, and edits that do not touch the hot loops at all have been seen
+# to move the wall clock by ~10% either way. Building as a single unit with LTO
+# roughly doubles the release build time, and makes the timings reflect the code.
+lto = true
+codegen-units = 1
+
 [package.metadata.docs.rs]
 rustdoc-args = [ "--html-in-header", "./docs-header.html" ]
