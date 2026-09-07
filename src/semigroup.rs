@@ -122,10 +122,14 @@ impl Semigroup {
         let mut max_degree = 0;
         while elements_set.len() < min_elements {
             max_degree += 1;
+            // Raising the degree bound can let sums involving any existing element
+            // through, so each round starts from the full set, but afterwards only
+            // the frontier of newly found elements needs to be expanded.
+            let mut starting_elements = elements_set.clone();
             loop {
                 let new_elements = find_new_elements_until_max_deg(
                     &generators,
-                    &elements_set,
+                    &starting_elements,
                     &elements_set,
                     &grading_vector,
                     max_degree,
@@ -136,6 +140,7 @@ impl Semigroup {
                 for c in new_elements.iter() {
                     elements_set.insert(c.clone());
                 }
+                starting_elements = new_elements;
             }
         }
 
