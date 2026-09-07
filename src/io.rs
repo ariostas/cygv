@@ -47,6 +47,7 @@ pub mod error;
 
 use crate::hkty::compute_gvgw_strings;
 use crate::misc::process_int_nums;
+use crate::{CYKind, InvariantKind};
 use error::IoError;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
@@ -93,10 +94,10 @@ pub struct Input {
     pub nefpart: Vec<DVector<i32>>,
     /// The triple intersection numbers.
     pub intnums: HashMap<(usize, usize, usize), i32>,
-    /// Whether to compute GV invariants instead of GW invariants.
-    pub find_gv: bool,
-    /// Whether the CY is a threefold.
-    pub is_threefold: bool,
+    /// Which invariants to compute.
+    pub invariant_kind: InvariantKind,
+    /// The kind of CY the invariants are computed for.
+    pub cy_kind: CYKind,
     /// The maximum degree of the curve classes that are computed.
     pub max_deg: Option<u32>,
     /// The minimum number of curve classes that are computed.
@@ -169,11 +170,11 @@ impl Input {
             Some(y) => as_vectors(y, "nefpart")?,
         };
 
-        let find_gv = match get_field(hash, "invariants") {
-            None => true,
+        let invariant_kind = match get_field(hash, "invariants") {
+            None => InvariantKind::GV,
             Some(y) => match y.as_str().map(str::to_lowercase).as_deref() {
-                Some("gv") => true,
-                Some("gw") => false,
+                Some("gv") => InvariantKind::GV,
+                Some("gw") => InvariantKind::GW,
                 _ => {
                     return Err(IoError::invalid_field(
                         "invariants",
@@ -208,11 +209,12 @@ impl Input {
             .transpose()?
             .unwrap_or(DEFAULT_POOL_SIZE);
 
-        let is_threefold = match get_field(hash, "is_threefold") {
-            None => infer_is_threefold(&q, &nefpart),
-            Some(y) => y
-                .as_bool()
-                .ok_or_else(|| IoError::invalid_field("is_threefold", "expected a boolean"))?,
+        let cy_kind = match get_field(hash, "is_threefold") {
+            None => infer_cy_kind(&q, &nefpart),
+            Some(y) => CYKind::from_is_threefold(
+                y.as_bool()
+                    .ok_or_else(|| IoError::invalid_field("is_threefold", "expected a boolean"))?,
+            ),
         };
         let n_truncations = [
             max_deg.is_some(),
@@ -247,7 +249,7 @@ impl Input {
         }
         // The intersection numbers are canonicalized differently depending on the
         // dimension of the CY, so they can only be checked once it is known.
-        process_int_nums(intnums.clone(), is_threefold)
+        process_int_nums(intnums.clone(), cy_kind)
             .map_err(|e| IoError::invalid_field("intnums", e.to_string()))?;
 
         Ok(Input {
@@ -257,8 +259,8 @@ impl Input {
             q,
             nefpart,
             intnums,
-            find_gv,
-            is_threefold,
+            invariant_kind,
+            cy_kind,
             max_deg,
             min_points,
             target_points,
@@ -303,8 +305,8 @@ impl Input {
             self.q.clone(),
             self.nefpart.clone(),
             self.intnums.clone(),
-            self.find_gv,
-            self.is_threefold,
+            self.invariant_kind,
+            self.cy_kind,
             self.max_deg,
             self.min_points,
             self.target_points.clone(),
@@ -326,13 +328,13 @@ impl Input {
         writer: &mut impl Write,
         results: &[InvariantResult],
     ) -> std::io::Result<()> {
-        let key = if self.find_gv { "gv" } else { "gw" };
+        let key = self.invariant_kind.as_str();
         writeln!(writer, "---")?;
         if let Some(name) = &self.name {
             writeln!(writer, "name: {}", quote_string(name))?;
         }
         writeln!(writer, "invariants: {key}")?;
-        writeln!(writer, "is_threefold: {}", self.is_threefold)?;
+        writeln!(writer, "is_threefold: {}", self.cy_kind.is_threefold())?;
         write!(writer, "grading_vector: ")?;
         write_int_seq(writer, self.grading_vector.iter())?;
         writeln!(writer)?;
@@ -344,29 +346,28 @@ impl Input {
             write!(writer, "  - {{curve_class: ")?;
             write_int_seq(writer, curve.iter())?;
             write!(writer, ", degree: {}", self.degree(curve))?;
-            if !self.is_threefold {
+            if !self.cy_kind.is_threefold() {
                 write!(writer, ", surface_index: {idx}")?;
             }
-            if self.find_gv {
-                writeln!(writer, ", {key}: {value}}}")?;
-            } else {
-                writeln!(writer, ", {key}: '{value}'}}")?;
+            match self.invariant_kind {
+                InvariantKind::GV => writeln!(writer, ", {key}: {value}}}")?,
+                InvariantKind::GW => writeln!(writer, ", {key}: '{value}'}}")?,
             }
         }
         Ok(())
     }
 }
 
-/// Deduce whether the CY is a threefold from the shape of the GLSM charge matrix and
-/// the nef partition.
-fn infer_is_threefold(q: &DMatrix<i32>, nefpart: &[DVector<i32>]) -> bool {
+/// Deduce the kind of CY from the shape of the GLSM charge matrix and the nef
+/// partition.
+fn infer_cy_kind(q: &DMatrix<i32>, nefpart: &[DVector<i32>]) -> CYKind {
     let ambient_dim = q.nrows() as i64 - q.ncols() as i64;
     let cy_codim = if nefpart.is_empty() {
         1
     } else {
         nefpart.len() as i64
     };
-    ambient_dim - cy_codim == 3
+    CYKind::from_is_threefold(ambient_dim - cy_codim == 3)
 }
 
 /// Look up a field, treating an explicitly null value as a missing one.
@@ -646,8 +647,8 @@ min_points: 20
         assert_eq!(input.q[(2, 1)], -1);
         assert_eq!(input.intnums[&(0, 1, 1)], -1);
         assert!(input.nefpart.is_empty());
-        assert!(input.find_gv);
-        assert!(input.is_threefold);
+        assert_eq!(input.invariant_kind, InvariantKind::GV);
+        assert_eq!(input.cy_kind, CYKind::Threefold);
         assert_eq!(input.min_points, Some(20));
         assert_eq!(input.max_deg, None);
         assert_eq!(input.target_points, None);
@@ -660,8 +661,8 @@ min_points: 20
         let data = format!("---\n{THREEFOLD}---\n{THREEFOLD}invariants: gw\n");
         let inputs = Input::load_all(&data).unwrap();
         assert_eq!(inputs.len(), 2);
-        assert!(inputs[0].find_gv);
-        assert!(!inputs[1].find_gv);
+        assert_eq!(inputs[0].invariant_kind, InvariantKind::GV);
+        assert_eq!(inputs[1].invariant_kind, InvariantKind::GW);
     }
 
     #[test]
@@ -694,8 +695,8 @@ min_points: 20
     }
 
     #[test]
-    fn test_infer_is_threefold() {
-        assert!(load_one(THREEFOLD).unwrap().is_threefold);
+    fn test_infer_cy_kind() {
+        assert_eq!(load_one(THREEFOLD).unwrap().cy_kind, CYKind::Threefold);
 
         // Eight rays, two Kähler parameters, and a codimension-two CY, i.e. a fourfold.
         let data = THREEFOLD.replace(
@@ -705,12 +706,13 @@ min_points: 20
         let data = format!("{data}nefpart: [[0, 1], [2, 3, 4, 5, 6, 7]]\n");
         let input = load_one(&data).unwrap();
         assert_eq!(input.nefpart.len(), 2);
-        assert!(!input.is_threefold);
+        assert_eq!(input.cy_kind, CYKind::Nfold);
 
-        assert!(
+        assert_eq!(
             load_one(&format!("{data}is_threefold: true\n"))
                 .unwrap()
-                .is_threefold
+                .cy_kind,
+            CYKind::Threefold
         );
         // The nef partition must consist of indices of the rays.
         assert!(matches!(
@@ -782,8 +784,8 @@ min_points: 20
         );
 
         input.name = None;
-        input.find_gv = false;
-        input.is_threefold = false;
+        input.invariant_kind = InvariantKind::GW;
+        input.cy_kind = CYKind::Nfold;
         let mut buf = Vec::new();
         input.write_results(&mut buf, &results).unwrap();
         assert_eq!(

@@ -2,17 +2,18 @@
 
 pub mod error;
 
+use crate::CYKind;
 use error::MiscError;
 use std::collections::{HashMap, HashSet};
 
 /// Process the input intersection numbers and find the relevant pairs of indices.
 /// For threefolds, the relevant pair of indices are simply all distinct (sorted) pairs.
-/// Othersize, the relevant pairs are the indices in the second and third columns,
+/// Otherwise, the relevant pairs are the indices in the second and third columns,
 /// since indices in the first column correspond to reference surfaces.
 #[allow(clippy::type_complexity)]
 pub fn process_int_nums(
     intnums: HashMap<(usize, usize, usize), i32>,
-    is_threefold: bool,
+    cy_kind: CYKind,
 ) -> Result<
     (
         HashMap<(usize, usize, usize), i32>,
@@ -34,12 +35,13 @@ pub fn process_int_nums(
         }
         let (i, j, k) = *idx;
         let mut tmp_vec = [i, j, k];
-        if is_threefold {
-            tmp_vec.sort_unstable();
-            intnum_idxpairs.insert((tmp_vec[0], tmp_vec[1]));
-            intnum_idxpairs.insert((tmp_vec[0], tmp_vec[2]));
-        } else {
-            tmp_vec[1..=2].sort_unstable();
+        match cy_kind {
+            CYKind::Threefold => {
+                tmp_vec.sort_unstable();
+                intnum_idxpairs.insert((tmp_vec[0], tmp_vec[1]));
+                intnum_idxpairs.insert((tmp_vec[0], tmp_vec[2]));
+            }
+            CYKind::Nfold => tmp_vec[1..=2].sort_unstable(),
         }
         intnum_idxpairs.insert((tmp_vec[1], tmp_vec[2]));
         let tmp_tup = (tmp_vec[0], tmp_vec[1], tmp_vec[2]);
@@ -52,10 +54,9 @@ pub fn process_int_nums(
     if intnum_res.is_empty() {
         return Err(MiscError::EmptyIntNums);
     }
-    let n_indices = if is_threefold {
-        intnum_idxpairs.iter().map(|p| p.1).max().unwrap()
-    } else {
-        intnum_res.keys().map(|p| p.0).max().unwrap()
+    let n_indices = match cy_kind {
+        CYKind::Threefold => intnum_idxpairs.iter().map(|p| p.1).max().unwrap(),
+        CYKind::Nfold => intnum_res.keys().map(|p| p.0).max().unwrap(),
     } + 1;
 
     Ok((intnum_res, intnum_idxpairs, n_indices))
@@ -68,14 +69,14 @@ mod tests {
     #[test]
     fn test_int_nums() {
         let intnums = HashMap::from([((0, 1, 1), -1), ((0, 1, 2), 3), ((0, 2, 3), 2)]);
-        let result = process_int_nums(intnums.clone(), true);
+        let result = process_int_nums(intnums.clone(), CYKind::Threefold);
         assert!(result.is_ok());
         let (intnum_dict, intnum_idxpairs, n_indices) = result.unwrap();
         assert_eq!(intnum_dict.len(), 3);
         assert_eq!(intnum_idxpairs.len(), 6);
         assert_eq!(n_indices, 4);
 
-        let result = process_int_nums(intnums.clone(), false);
+        let result = process_int_nums(intnums.clone(), CYKind::Nfold);
         assert!(result.is_ok());
         let (intnum_dict, intnum_idxpairs, n_indices) = result.unwrap();
         assert_eq!(intnum_dict.len(), 3);
@@ -86,8 +87,8 @@ mod tests {
     #[test]
     fn test_all_zero_int_nums() {
         let intnums = HashMap::from([((0, 1, 1), 0), ((0, 1, 2), 0)]);
-        for is_threefold in [true, false] {
-            let result = process_int_nums(intnums.clone(), is_threefold);
+        for cy_kind in [CYKind::Threefold, CYKind::Nfold] {
+            let result = process_int_nums(intnums.clone(), cy_kind);
             assert!(matches!(result, Err(MiscError::EmptyIntNums)));
         }
     }

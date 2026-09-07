@@ -10,6 +10,7 @@ use cygv::hkty::{
     compute_gv_rat_threefold, compute_gw_float_nfold, compute_gw_float_threefold,
     compute_gw_rat_nfold, compute_gw_rat_threefold,
 };
+use cygv::CYKind;
 use nalgebra::{dmatrix, dvector, DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
 
@@ -40,7 +41,7 @@ pub struct Model {
     pub q: DMatrix<i32>,
     pub nefpart: Vec<DVector<i32>>,
     pub intnums: HashMap<(usize, usize, usize), i32>,
-    pub is_threefold: bool,
+    pub cy_kind: CYKind,
 }
 
 /// Looks up one of the benchmark models by name.
@@ -84,7 +85,7 @@ pub fn threefold() -> Model {
         q,
         nefpart,
         intnums,
-        is_threefold: true,
+        cy_kind: CYKind::Threefold,
     }
 }
 
@@ -202,7 +203,7 @@ pub fn fourfold() -> Model {
         q,
         nefpart,
         intnums,
-        is_threefold: false,
+        cy_kind: CYKind::Nfold,
     }
 }
 
@@ -288,36 +289,36 @@ impl Scenario {
         let threads = n_threads();
         let prec = self.precision;
 
-        match (self.variant, m.is_threefold) {
-            (Variant::GvRat, true) => compute_gv_rat_threefold(
+        match (self.variant, m.cy_kind) {
+            (Variant::GvRat, CYKind::Threefold) => compute_gv_rat_threefold(
                 gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE,
             )
             .len(),
-            (Variant::GwRat, true) => compute_gw_rat_threefold(
+            (Variant::GwRat, CYKind::Threefold) => compute_gw_rat_threefold(
                 gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE,
             )
             .len(),
-            (Variant::GvFloat, true) => compute_gv_float_threefold(
+            (Variant::GvFloat, CYKind::Threefold) => compute_gv_float_threefold(
                 gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE, prec,
             )
             .len(),
-            (Variant::GwFloat, true) => compute_gw_float_threefold(
+            (Variant::GwFloat, CYKind::Threefold) => compute_gw_float_threefold(
                 gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE, prec,
             )
             .len(),
-            (Variant::GvRat, false) => compute_gv_rat_nfold(
+            (Variant::GvRat, CYKind::Nfold) => compute_gv_rat_nfold(
                 gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE,
             )
             .len(),
-            (Variant::GwRat, false) => compute_gw_rat_nfold(
+            (Variant::GwRat, CYKind::Nfold) => compute_gw_rat_nfold(
                 gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE,
             )
             .len(),
-            (Variant::GvFloat, false) => compute_gv_float_nfold(
+            (Variant::GvFloat, CYKind::Nfold) => compute_gv_float_nfold(
                 gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE, prec,
             )
             .len(),
-            (Variant::GwFloat, false) => compute_gw_float_nfold(
+            (Variant::GwFloat, CYKind::Nfold) => compute_gw_float_nfold(
                 gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE, prec,
             )
             .len(),

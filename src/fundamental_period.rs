@@ -462,31 +462,15 @@ where
             }
         }
     });
-    for p in c1.iter_mut() {
-        p.nonzero = p.coeffs.keys().cloned().collect();
-        p.nonzero.sort_unstable();
-        p.clean_up(poly_props, coeff_pool);
-    }
-    for p in c2.values_mut() {
-        p.nonzero = p.coeffs.keys().cloned().collect();
-        p.nonzero.sort_unstable();
-        p.clean_up(poly_props, coeff_pool);
-    }
-
-    for p in c1.iter_mut() {
-        p.nonzero = p.coeffs.keys().cloned().collect();
-        p.nonzero.sort_unstable();
-    }
-    for p in c2.values_mut() {
-        p.nonzero = p.coeffs.keys().cloned().collect();
-        p.nonzero.sort_unstable();
-    }
-
     c0_inv.clean_up(poly_props, coeff_pool);
     for p in c1.iter_mut() {
+        p.nonzero = p.coeffs.keys().cloned().collect();
+        p.nonzero.sort_unstable();
         p.clean_up(poly_props, coeff_pool);
     }
     for p in c2.values_mut() {
+        p.nonzero = p.coeffs.keys().cloned().collect();
+        p.nonzero.sort_unstable();
         p.clean_up(poly_props, coeff_pool);
     }
 

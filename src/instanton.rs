@@ -5,7 +5,7 @@ use crate::polynomial::{
     coefficient::PolynomialCoeff, error::PolynomialError, properties::PolynomialProperties,
     Polynomial,
 };
-use crate::NumberPool;
+use crate::{CYKind, NumberPool};
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -97,7 +97,7 @@ fn compute_inst_thread<T>(
     poly_props: &PolynomialProperties<T>,
     np: &mut NumberPool<T>,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
-    is_threefold: bool,
+    cy_kind: CYKind,
 ) where
     T: PolynomialCoeff<T>,
 {
@@ -118,7 +118,7 @@ fn compute_inst_thread<T>(
                 intnum_ind[0] = t;
                 intnum_ind[1] = a;
                 intnum_ind[2] = b;
-                if is_threefold {
+                if cy_kind.is_threefold() {
                     intnum_ind.sort_unstable();
                 }
                 let Some(x) = intnum_dict.get(&(intnum_ind[0], intnum_ind[1], intnum_ind[2]))
@@ -188,7 +188,7 @@ pub fn compute_instanton_data<T>(
     intnum_idxpairs: &HashSet<(usize, usize)>,
     n_indices: usize,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
-    is_threefold: bool,
+    cy_kind: CYKind,
     all_pools: &mut (NumberPool<T>, Vec<NumberPool<T>>),
 ) -> Result<InstantonData<T>, PolynomialError>
 where
@@ -263,15 +263,7 @@ where
             let tx = tx.clone();
             let tasks = Arc::clone(&tasks_inst_iter);
             s.spawn(|| {
-                compute_inst_thread(
-                    tasks,
-                    tx,
-                    &f_poly,
-                    poly_props,
-                    np,
-                    intnum_dict,
-                    is_threefold,
-                );
+                compute_inst_thread(tasks, tx, &f_poly, poly_props, np, intnum_dict, cy_kind);
             });
         }
         drop(tx);
@@ -356,7 +348,7 @@ mod tests {
             ((0, 1, 1), -1),
             ((1, 1, 1), -5),
         ]);
-        let result = process_int_nums(intnums.clone(), true);
+        let result = process_int_nums(intnums.clone(), CYKind::Threefold);
         assert!(result.is_ok());
         let (intnum_dict, intnum_idxpairs, n_indices) = result.unwrap();
 
@@ -366,7 +358,7 @@ mod tests {
             &intnum_idxpairs,
             n_indices,
             &intnum_dict,
-            true,
+            CYKind::Threefold,
             &mut all_pools,
         );
         assert!(inst_data.is_ok());

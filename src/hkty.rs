@@ -2,8 +2,8 @@
 
 use crate::polynomial::coefficient::PolynomialCoeff;
 use crate::{
-    fundamental_period, instanton, misc, series_inversion, NumberPool, PolynomialProperties,
-    Semigroup,
+    fundamental_period, instanton, misc, series_inversion, CYKind, InvariantKind, NumberPool,
+    PolynomialProperties, Semigroup,
 };
 use nalgebra::{DMatrix, DVector, RowDVector};
 use rug::{ops::PowAssign, Float, Integer, Rational};
@@ -12,10 +12,12 @@ use std::thread;
 
 // TODO: Need to handle errors properly
 #[allow(clippy::too_many_arguments)]
-pub fn run_hkty<T, const FIND_GV: bool, const IS_THREEFOLD: bool>(
+pub fn run_hkty<T>(
     generators: DMatrix<i32>,
     grading_vector: RowDVector<i32>,
     zero_cutoff: T,
+    invariant_kind: InvariantKind,
+    cy_kind: CYKind,
     max_deg: Option<u32>,
     min_points: Option<u32>,
     target_points: Option<DMatrix<i32>>,
@@ -41,7 +43,7 @@ where
     let poly_props = PolynomialProperties::new(&sg, &zero_cutoff);
 
     let (intnum_dict, intnum_idxpairs, n_indices) =
-        misc::process_int_nums(intnums, IS_THREEFOLD).unwrap();
+        misc::process_int_nums(intnums, cy_kind).unwrap();
 
     let n_threads = match n_threads {
         None => thread::available_parallelism()
@@ -72,14 +74,16 @@ where
         &intnum_idxpairs,
         n_indices,
         &intnum_dict,
-        IS_THREEFOLD,
+        cy_kind,
         &mut all_pools,
     )
     .unwrap();
 
-    let gv = series_inversion::invert_series::<T, FIND_GV, IS_THREEFOLD>(
+    let gv = series_inversion::invert_series(
         inst_data,
         &poly_props,
+        invariant_kind,
+        cy_kind,
         &mut all_pools,
     )
     .unwrap();
@@ -102,10 +106,9 @@ where
         .collect()
 }
 
-/// Compute GV or GW invariants, selecting the variant of [`run_hkty`] at runtime and
-/// formatting the resulting invariants as strings.
+/// Compute GV or GW invariants, formatting them as strings.
 ///
-/// This is meant for interfaces that cannot make use of the compile-time variants,
+/// This is meant for interfaces that only learn the coefficient type at runtime,
 /// such as the Python bindings and the command line interface. GV invariants are
 /// formatted as integers, and GW invariants either as fractions or as floating-point
 /// numbers, depending on whether a precision is given.
@@ -116,8 +119,8 @@ pub fn compute_gvgw_strings(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
-    find_gv: bool,
-    is_threefold: bool,
+    invariant_kind: InvariantKind,
+    cy_kind: CYKind,
     max_deg: Option<u32>,
     min_points: Option<u32>,
     target_points: Option<DMatrix<i32>>,
@@ -128,136 +131,56 @@ pub fn compute_gvgw_strings(
     if let Some(n_bits) = prec {
         let mut zero_cutoff = Float::with_val(n_bits, 10);
         zero_cutoff.pow_assign(-(n_bits as i32) / 3);
-        let res = match (find_gv, is_threefold) {
-            (true, true) => run_hkty::<Float, true, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, true) => run_hkty::<Float, false, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (true, false) => run_hkty::<Float, true, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, false) => run_hkty::<Float, false, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-        };
+        let res = run_hkty::<Float>(
+            generators,
+            grading_vector,
+            zero_cutoff,
+            invariant_kind,
+            cy_kind,
+            max_deg,
+            min_points,
+            target_points,
+            q,
+            nefpart,
+            intnums,
+            n_threads,
+            pool_size,
+        );
         res.into_iter()
             .map(|(k, gvgw)| {
                 (
                     k,
-                    if find_gv {
-                        gvgw.to_integer().unwrap().to_string()
-                    } else {
-                        gvgw.to_string()
+                    match invariant_kind {
+                        InvariantKind::GV => gvgw.to_integer().unwrap().to_string(),
+                        InvariantKind::GW => gvgw.to_string(),
                     },
                 )
             })
             .collect()
     } else {
         let zero_cutoff = Rational::new();
-        let res = match (find_gv, is_threefold) {
-            (true, true) => run_hkty::<Rational, true, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, true) => run_hkty::<Rational, false, true>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (true, false) => run_hkty::<Rational, true, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-            (false, false) => run_hkty::<Rational, false, false>(
-                generators,
-                grading_vector,
-                zero_cutoff,
-                max_deg,
-                min_points,
-                target_points,
-                q,
-                nefpart,
-                intnums,
-                n_threads,
-                pool_size,
-            ),
-        };
+        let res = run_hkty::<Rational>(
+            generators,
+            grading_vector,
+            zero_cutoff,
+            invariant_kind,
+            cy_kind,
+            max_deg,
+            min_points,
+            target_points,
+            q,
+            nefpart,
+            intnums,
+            n_threads,
+            pool_size,
+        );
         res.into_iter()
             .map(|(k, gvgw)| {
                 (
                     k,
-                    if find_gv {
-                        gvgw.into_numer_denom().0.to_string()
-                    } else {
-                        gvgw.to_string()
+                    match invariant_kind {
+                        InvariantKind::GV => gvgw.into_numer_denom().0.to_string(),
+                        InvariantKind::GW => gvgw.to_string(),
                     },
                 )
             })
@@ -279,10 +202,12 @@ pub fn compute_gv_rat_threefold(
     pool_size: usize,
 ) -> Vec<(DVector<i32>, Integer)> {
     let zero_cutoff = Rational::new();
-    run_hkty::<Rational, true, true>(
+    run_hkty::<Rational>(
         generators,
         grading_vector,
         zero_cutoff,
+        InvariantKind::GV,
+        CYKind::Threefold,
         max_deg,
         min_points,
         target_points,
@@ -313,10 +238,12 @@ pub fn compute_gv_float_threefold(
 ) -> Vec<(DVector<i32>, Integer)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
     zero_cutoff.pow_assign(-(precision as i32) / 3);
-    run_hkty::<Float, true, true>(
+    run_hkty::<Float>(
         generators,
         grading_vector,
         zero_cutoff,
+        InvariantKind::GV,
+        CYKind::Threefold,
         max_deg,
         min_points,
         target_points,
@@ -345,10 +272,12 @@ pub fn compute_gw_rat_threefold(
     pool_size: usize,
 ) -> Vec<(DVector<i32>, Rational)> {
     let zero_cutoff = Rational::new();
-    run_hkty::<Rational, false, true>(
+    run_hkty::<Rational>(
         generators,
         grading_vector,
         zero_cutoff,
+        InvariantKind::GW,
+        CYKind::Threefold,
         max_deg,
         min_points,
         target_points,
@@ -379,10 +308,12 @@ pub fn compute_gw_float_threefold(
 ) -> Vec<(DVector<i32>, Float)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
     zero_cutoff.pow_assign(-(precision as i32) / 3);
-    run_hkty::<Float, false, true>(
+    run_hkty::<Float>(
         generators,
         grading_vector,
         zero_cutoff,
+        InvariantKind::GW,
+        CYKind::Threefold,
         max_deg,
         min_points,
         target_points,
@@ -411,10 +342,12 @@ pub fn compute_gv_rat_nfold(
     pool_size: usize,
 ) -> Vec<((DVector<i32>, usize), Integer)> {
     let zero_cutoff = Rational::new();
-    run_hkty::<Rational, true, false>(
+    run_hkty::<Rational>(
         generators,
         grading_vector,
         zero_cutoff,
+        InvariantKind::GV,
+        CYKind::Nfold,
         max_deg,
         min_points,
         target_points,
@@ -445,10 +378,12 @@ pub fn compute_gv_float_nfold(
 ) -> Vec<((DVector<i32>, usize), Integer)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
     zero_cutoff.pow_assign(-(precision as i32) / 3);
-    run_hkty::<Float, true, false>(
+    run_hkty::<Float>(
         generators,
         grading_vector,
         zero_cutoff,
+        InvariantKind::GV,
+        CYKind::Nfold,
         max_deg,
         min_points,
         target_points,
@@ -477,10 +412,12 @@ pub fn compute_gw_rat_nfold(
     pool_size: usize,
 ) -> Vec<((DVector<i32>, usize), Rational)> {
     let zero_cutoff = Rational::new();
-    run_hkty::<Rational, false, false>(
+    run_hkty::<Rational>(
         generators,
         grading_vector,
         zero_cutoff,
+        InvariantKind::GW,
+        CYKind::Nfold,
         max_deg,
         min_points,
         target_points,
@@ -508,10 +445,12 @@ pub fn compute_gw_float_nfold(
 ) -> Vec<((DVector<i32>, usize), Float)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
     zero_cutoff.pow_assign(-(precision as i32) / 3);
-    run_hkty::<Float, false, false>(
+    run_hkty::<Float>(
         generators,
         grading_vector,
         zero_cutoff,
+        InvariantKind::GW,
+        CYKind::Nfold,
         max_deg,
         min_points,
         target_points,
