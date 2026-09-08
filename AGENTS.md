@@ -147,19 +147,15 @@ indices differently (the first index is a reference surface in the n-fold case).
   entirely from `*Assign` traits: coefficient arithmetic is done in place to avoid allocating
   bignums. When adding a numeric operation, add it as an in-place trait (see `RecipMut`,
   `RoundMut`, `AbsMut`) rather than a by-value one.
-- **`NumberPool<T>`** (`src/pool.rs`) recycles allocated bignums. Almost every function threads an
-  `&mut NumberPool<T>`, and `Polynomial` has pool-aware `drop`/`clear`/`clone`/`move_into` that
-  return coefficients to the pool instead of freeing them. Do not use `std::mem::drop` or `Clone`
-  on polynomials where the pool-aware version exists. `run_hkty` builds
-  `all_pools: (main_pool, Vec<per-thread pools>)` and passes it down by `&mut`.
 - **`Polynomial<T>`** (`src/polynomial.rs`) is sparse over the fixed monomial set of the semigroup:
   `coeffs: HashMap<monomial index, T>` plus a sorted `nonzero: Vec<usize>` index list. Both must be
   kept consistent — code that inserts into `coeffs` directly (e.g. when assembling from worker
   threads) must rebuild and re-sort `nonzero` afterwards. `PolynomialProperties` carries the
-  semigroup reference, the monomial→index map, and the `zero_cutoff` used by `clean_up` to drop
-  numerically-zero terms.
+  semigroup reference, the monomial→index map, the `zero_cutoff` used by `clean_up` to drop
+  numerically-zero terms, and a `zero` coefficient that new ones are cloned from — for `rug::Float`
+  it is what carries the precision they all have to be created with.
 - **Threading** uses one uniform pattern throughout stages 2–4: `Arc<Mutex<slice::Iter>>` as a work
-  queue, `thread::scope` to spawn one worker per per-thread `NumberPool`, an `mpsc` channel back to
+  queue, `thread::scope` to spawn `n_threads` workers, an `mpsc` channel back to
   the main thread which assembles results, and `drop(tx)` to terminate the receive loop. No rayon.
 
 ### Command line interface

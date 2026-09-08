@@ -47,7 +47,6 @@ def _compute_gvgw_subprocess(
                 target_points,
                 nefpart,
                 None,
-                1000,
                 prec,
             )
         )

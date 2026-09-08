@@ -27,7 +27,7 @@ fn to_matrix(m: Vec<Vec<i32>>, name: &str) -> PyResult<DMatrix<i32>> {
 /// Compute GV or GW invariants
 #[pyfunction]
 #[pyo3(name = "_compute_gvgw")]
-#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, pool_size=1000, prec=None))]
+#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, prec=None))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
@@ -41,7 +41,6 @@ pub fn compute_gvgw(
     target_points: Option<Vec<Vec<i32>>>,
     nefpart: Option<Vec<Vec<i32>>>,
     n_threads: Option<u32>,
-    pool_size: usize,
     prec: Option<u32>,
 ) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
     CTRLC_HANDLER.call_once(|| {
@@ -77,7 +76,6 @@ pub fn compute_gvgw(
         min_points,
         target_points,
         n_threads,
-        pool_size,
         prec,
     );
 

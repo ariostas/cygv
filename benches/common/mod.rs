@@ -14,9 +14,6 @@ use cygv::CYKind;
 use nalgebra::{dmatrix, dvector, DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
 
-/// Size of the [`cygv::NumberPool`]s used by the benchmarks.
-pub const POOL_SIZE: usize = 1000;
-
 /// Number of threads the benchmarks run with.
 ///
 /// Defaults to `None`, i.e. one thread per available core. Set
@@ -291,35 +288,35 @@ impl Scenario {
 
         match (self.variant, m.cy_kind) {
             (Variant::GvRat, CYKind::Threefold) => compute_gv_rat_threefold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE,
+                gens, grading, deg, None, None, q, nefpart, intnums, threads,
             )
             .len(),
             (Variant::GwRat, CYKind::Threefold) => compute_gw_rat_threefold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE,
+                gens, grading, deg, None, None, q, nefpart, intnums, threads,
             )
             .len(),
             (Variant::GvFloat, CYKind::Threefold) => compute_gv_float_threefold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE, prec,
+                gens, grading, deg, None, None, q, nefpart, intnums, threads, prec,
             )
             .len(),
             (Variant::GwFloat, CYKind::Threefold) => compute_gw_float_threefold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE, prec,
+                gens, grading, deg, None, None, q, nefpart, intnums, threads, prec,
             )
             .len(),
-            (Variant::GvRat, CYKind::Nfold) => compute_gv_rat_nfold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE,
-            )
-            .len(),
-            (Variant::GwRat, CYKind::Nfold) => compute_gw_rat_nfold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE,
-            )
-            .len(),
+            (Variant::GvRat, CYKind::Nfold) => {
+                compute_gv_rat_nfold(gens, grading, deg, None, None, q, nefpart, intnums, threads)
+                    .len()
+            }
+            (Variant::GwRat, CYKind::Nfold) => {
+                compute_gw_rat_nfold(gens, grading, deg, None, None, q, nefpart, intnums, threads)
+                    .len()
+            }
             (Variant::GvFloat, CYKind::Nfold) => compute_gv_float_nfold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE, prec,
+                gens, grading, deg, None, None, q, nefpart, intnums, threads, prec,
             )
             .len(),
             (Variant::GwFloat, CYKind::Nfold) => compute_gw_float_nfold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, POOL_SIZE, prec,
+                gens, grading, deg, None, None, q, nefpart, intnums, threads, prec,
             )
             .len(),
         }
@@ -330,7 +327,7 @@ impl Scenario {
 ///
 /// The low-degree cases run fast enough for criterion to sample them properly.
 /// The heavy ones are where the coefficients grow large enough for the bignum
-/// arithmetic, the number pools and the sliding window of the series inversion
+/// arithmetic and the sliding window of the series inversion
 /// to dominate, which is what most changes to this crate are about; they are
 /// skipped unless `CYGV_BENCH_HEAVY` is set, since sampling them takes minutes.
 pub fn scenarios() -> Vec<Scenario> {
