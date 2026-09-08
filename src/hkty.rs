@@ -2,7 +2,7 @@
 
 use crate::polynomial::coefficient::PolynomialCoeff;
 use crate::{
-    fundamental_period, instanton, misc, series_inversion, CYKind, InvariantKind, NumberPool,
+    fundamental_period, instanton, misc, series_inversion, CYKind, InvariantKind,
     PolynomialProperties, Semigroup,
 };
 use nalgebra::{DMatrix, DVector, RowDVector};
@@ -25,7 +25,6 @@ pub fn run_hkty<T>(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     n_threads: Option<u32>,
-    pool_size: usize,
 ) -> Vec<((DVector<i32>, usize), T)>
 where
     T: PolynomialCoeff<T>,
@@ -52,11 +51,6 @@ where
         Some(0) => 1,
         Some(n) => n as usize,
     };
-    let main_pool = NumberPool::new(poly_props.zero_cutoff.clone(), pool_size);
-    let thread_pools: Vec<_> = (0..n_threads)
-        .map(|_| NumberPool::new(poly_props.zero_cutoff.clone(), pool_size))
-        .collect();
-    let mut all_pools = (main_pool, thread_pools);
 
     let fp = fundamental_period::compute_omega(
         &poly_props,
@@ -64,7 +58,7 @@ where
         &q,
         &nefpart,
         &intnum_idxpairs,
-        &mut all_pools,
+        n_threads,
     )
     .unwrap();
 
@@ -75,18 +69,13 @@ where
         n_indices,
         &intnum_dict,
         cy_kind,
-        &mut all_pools,
+        n_threads,
     )
     .unwrap();
 
-    let gv = series_inversion::invert_series(
-        inst_data,
-        &poly_props,
-        invariant_kind,
-        cy_kind,
-        &mut all_pools,
-    )
-    .unwrap();
+    let gv =
+        series_inversion::invert_series(inst_data, &poly_props, invariant_kind, cy_kind, n_threads)
+            .unwrap();
 
     let mut gv_sorted: Vec<_> = gv.into_iter().collect();
     gv_sorted.sort_unstable_by_key(|c| c.0 .0);
@@ -125,7 +114,6 @@ pub fn compute_gvgw_strings(
     min_points: Option<u32>,
     target_points: Option<DMatrix<i32>>,
     n_threads: Option<u32>,
-    pool_size: usize,
     prec: Option<u32>,
 ) -> Vec<((DVector<i32>, usize), String)> {
     if let Some(n_bits) = prec {
@@ -144,7 +132,6 @@ pub fn compute_gvgw_strings(
             nefpart,
             intnums,
             n_threads,
-            pool_size,
         );
         res.into_iter()
             .map(|(k, gvgw)| {
@@ -172,7 +159,6 @@ pub fn compute_gvgw_strings(
             nefpart,
             intnums,
             n_threads,
-            pool_size,
         );
         res.into_iter()
             .map(|(k, gvgw)| {
@@ -199,7 +185,6 @@ pub fn compute_gv_rat_threefold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     n_threads: Option<u32>,
-    pool_size: usize,
 ) -> Vec<(DVector<i32>, Integer)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational>(
@@ -215,7 +200,6 @@ pub fn compute_gv_rat_threefold(
         nefpart,
         intnums,
         n_threads,
-        pool_size,
     )
     .into_iter()
     .map(|((v, _), gv)| (v, gv.into_numer_denom().0))
@@ -233,7 +217,6 @@ pub fn compute_gv_float_threefold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     n_threads: Option<u32>,
-    pool_size: usize,
     precision: u32,
 ) -> Vec<(DVector<i32>, Integer)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -251,7 +234,6 @@ pub fn compute_gv_float_threefold(
         nefpart,
         intnums,
         n_threads,
-        pool_size,
     )
     .into_iter()
     .map(|((v, _), gv)| (v, gv.to_integer().unwrap()))
@@ -269,7 +251,6 @@ pub fn compute_gw_rat_threefold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     n_threads: Option<u32>,
-    pool_size: usize,
 ) -> Vec<(DVector<i32>, Rational)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational>(
@@ -285,7 +266,6 @@ pub fn compute_gw_rat_threefold(
         nefpart,
         intnums,
         n_threads,
-        pool_size,
     )
     .into_iter()
     .map(|((v, _), gv)| (v, gv))
@@ -303,7 +283,6 @@ pub fn compute_gw_float_threefold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     n_threads: Option<u32>,
-    pool_size: usize,
     precision: u32,
 ) -> Vec<(DVector<i32>, Float)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -321,7 +300,6 @@ pub fn compute_gw_float_threefold(
         nefpart,
         intnums,
         n_threads,
-        pool_size,
     )
     .into_iter()
     .map(|((v, _), gv)| (v, gv))
@@ -339,7 +317,6 @@ pub fn compute_gv_rat_nfold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     n_threads: Option<u32>,
-    pool_size: usize,
 ) -> Vec<((DVector<i32>, usize), Integer)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational>(
@@ -355,7 +332,6 @@ pub fn compute_gv_rat_nfold(
         nefpart,
         intnums,
         n_threads,
-        pool_size,
     )
     .into_iter()
     .map(|((v, c), gv)| ((v, c), gv.into_numer_denom().0))
@@ -373,7 +349,6 @@ pub fn compute_gv_float_nfold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     n_threads: Option<u32>,
-    pool_size: usize,
     precision: u32,
 ) -> Vec<((DVector<i32>, usize), Integer)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -391,7 +366,6 @@ pub fn compute_gv_float_nfold(
         nefpart,
         intnums,
         n_threads,
-        pool_size,
     )
     .into_iter()
     .map(|((v, c), gv)| ((v, c), gv.to_integer().unwrap()))
@@ -409,7 +383,6 @@ pub fn compute_gw_rat_nfold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     n_threads: Option<u32>,
-    pool_size: usize,
 ) -> Vec<((DVector<i32>, usize), Rational)> {
     let zero_cutoff = Rational::new();
     run_hkty::<Rational>(
@@ -425,7 +398,6 @@ pub fn compute_gw_rat_nfold(
         nefpart,
         intnums,
         n_threads,
-        pool_size,
     )
 }
 
@@ -440,7 +412,6 @@ pub fn compute_gw_float_nfold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     n_threads: Option<u32>,
-    pool_size: usize,
     precision: u32,
 ) -> Vec<((DVector<i32>, usize), Float)> {
     let mut zero_cutoff = Float::with_val(precision, 10);
@@ -458,6 +429,5 @@ pub fn compute_gw_float_nfold(
         nefpart,
         intnums,
         n_threads,
-        pool_size,
     )
 }

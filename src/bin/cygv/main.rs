@@ -40,7 +40,6 @@ The optional fields are the following.
                  rational arithmetic is used when it is not given.
   n_threads      The number of threads to use. It defaults to the number of
                  threads that are available.
-  pool_size      The number of coefficients kept in the number pools.
 
 At most one of max_deg, min_points, and target_points may be given. When none of
 them is given, the generators are taken to be the complete list of curve classes

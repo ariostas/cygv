@@ -8,7 +8,6 @@ pub mod instanton;
 pub mod io;
 pub mod misc;
 pub mod polynomial;
-pub mod pool;
 #[cfg(feature = "python")]
 pub mod python;
 pub mod semigroup;
@@ -70,7 +69,6 @@ pub use polynomial::{
     prettyprint::PrettyPrintPolynomial, properties::PolynomialProperties, Polynomial,
 };
 #[doc(inline)]
-pub use pool::NumberPool;
 #[doc(inline)]
 pub use semigroup::Semigroup;
 

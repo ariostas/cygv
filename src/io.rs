@@ -55,11 +55,8 @@ use std::io::Write;
 use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
-/// The default number of coefficients that are kept in the number pools.
-pub const DEFAULT_POOL_SIZE: usize = 1000;
-
 /// The fields that are accepted in an input document.
-const INPUT_FIELDS: [&str; 14] = [
+const INPUT_FIELDS: [&str; 13] = [
     "name",
     "generators",
     "grading_vector",
@@ -73,7 +70,6 @@ const INPUT_FIELDS: [&str; 14] = [
     "is_threefold",
     "prec",
     "n_threads",
-    "pool_size",
 ];
 
 /// The specification of a single computation of GV or GW invariants.
@@ -109,8 +105,6 @@ pub struct Input {
     pub prec: Option<u32>,
     /// The number of threads to use. It is deduced from the machine when [`None`].
     pub n_threads: Option<u32>,
-    /// The number of coefficients that are kept in the number pools.
-    pub pool_size: usize,
 }
 
 /// A computed invariant, consisting of a curve class, a reference surface index that
@@ -204,10 +198,6 @@ impl Input {
         let n_threads = get_field(hash, "n_threads")
             .map(|y| as_u32(y, "n_threads"))
             .transpose()?;
-        let pool_size = get_field(hash, "pool_size")
-            .map(|y| as_usize(y, "pool_size"))
-            .transpose()?
-            .unwrap_or(DEFAULT_POOL_SIZE);
 
         let cy_kind = match get_field(hash, "is_threefold") {
             None => infer_cy_kind(&q, &nefpart),
@@ -266,7 +256,6 @@ impl Input {
             target_points,
             prec,
             n_threads,
-            pool_size,
         })
     }
 
@@ -311,7 +300,6 @@ impl Input {
             self.min_points,
             self.target_points.clone(),
             self.n_threads,
-            self.pool_size,
             self.prec,
         )
     }
@@ -398,12 +386,6 @@ fn as_i32(data: &Yaml, field: &str) -> Result<i32, IoError> {
 /// Read a value that must be a non-negative 32-bit integer.
 fn as_u32(data: &Yaml, field: &str) -> Result<u32, IoError> {
     u32::try_from(as_i64(data, field)?)
-        .map_err(|_| IoError::invalid_field(field, "expected a non-negative integer"))
-}
-
-/// Read a value that must be a non-negative integer.
-fn as_usize(data: &Yaml, field: &str) -> Result<usize, IoError> {
-    usize::try_from(as_i64(data, field)?)
         .map_err(|_| IoError::invalid_field(field, "expected a non-negative integer"))
 }
 
@@ -653,7 +635,6 @@ min_points: 20
         assert_eq!(input.max_deg, None);
         assert_eq!(input.target_points, None);
         assert_eq!(input.prec, None);
-        assert_eq!(input.pool_size, DEFAULT_POOL_SIZE);
     }
 
     #[test]

@@ -3,9 +3,7 @@
 pub mod error;
 
 use crate::polynomial::{coefficient::PolynomialCoeff, error::PolynomialError};
-use crate::{
-    instanton::InstantonData, CYKind, InvariantKind, NumberPool, Polynomial, PolynomialProperties,
-};
+use crate::{instanton::InstantonData, CYKind, InvariantKind, Polynomial, PolynomialProperties};
 use core::cmp::Ordering;
 use core::slice::Iter;
 use error::SeriesInversionError;
@@ -21,24 +19,22 @@ fn compute_qn<T>(
     closest_curve_diff: &DVector<i32>,
     expalpha: &[(Polynomial<T>, Polynomial<T>)],
     poly_props: &PolynomialProperties<T>,
-    np: &mut NumberPool<T>,
 ) -> Polynomial<T>
 where
     T: PolynomialCoeff<T>,
 {
-    let mut res = closest_curve.clone(np);
+    let mut res = closest_curve.clone(&poly_props.zero);
     for (i, diff) in closest_curve_diff.iter().enumerate() {
         let tmp_poly = match diff.cmp(&0) {
-            Ordering::Greater => expalpha[i].0.pow(*diff, poly_props, np).unwrap(),
-            Ordering::Less => expalpha[i].1.pow(-*diff, poly_props, np).unwrap(),
+            Ordering::Greater => expalpha[i].0.pow(*diff, poly_props).unwrap(),
+            Ordering::Less => expalpha[i].1.pow(-*diff, poly_props).unwrap(),
             _ => {
                 continue;
             }
         };
-        let tmp_poly2 = res.mul(&tmp_poly, poly_props, np);
-        res.clear(np);
-        tmp_poly2.move_into(&mut res, np);
-        tmp_poly.drop(np);
+        let tmp_poly2 = res.mul(&tmp_poly, poly_props);
+        res.clear();
+        tmp_poly2.move_into(&mut res);
     }
     res
 }
@@ -53,7 +49,6 @@ fn compute_li2qn_thread<T>(
     expalpha: &[(Polynomial<T>, Polynomial<T>)],
     poly_props: &PolynomialProperties<T>,
     invariant_kind: InvariantKind,
-    np: &mut NumberPool<T>,
 ) where
     T: PolynomialCoeff<T>,
 {
@@ -71,8 +66,8 @@ fn compute_li2qn_thread<T>(
             };
             t = *i;
         }
-        closest_curve.clear(np);
-        let mut tmp_num = np.pop();
+        closest_curve.clear();
+        let mut tmp_num = poly_props.zero.clone();
         tmp_num.assign(1);
         closest_curve.coeffs.insert(t, tmp_num);
         closest_curve.nonzero.push(t);
@@ -116,13 +111,12 @@ fn compute_li2qn_thread<T>(
                         continue;
                     };
                     let mut tmp_poly = Polynomial::new();
-                    let mut tmp_num = np.pop();
+                    let mut tmp_num = poly_props.zero.clone();
                     tmp_num.assign(1);
                     tmp_poly.coeffs.insert(*ind, tmp_num);
                     tmp_poly.nonzero.push(*ind);
-                    closest_curve.clear(np);
-                    closest_curve = prev_qns[i].mul(&tmp_poly, poly_props, np);
-                    tmp_poly.drop(np);
+                    closest_curve.clear();
+                    closest_curve = prev_qns[i].mul(&tmp_poly, poly_props);
                     closest_dist = tmp_dist;
                     closest_curve_diff
                         .iter_mut()
@@ -132,16 +126,10 @@ fn compute_li2qn_thread<T>(
             }
         }
         // Now we compute qN and Li2(qN)
-        let tmp_qn = compute_qn(
-            &closest_curve,
-            &closest_curve_diff,
-            expalpha,
-            poly_props,
-            np,
-        );
+        let tmp_qn = compute_qn(&closest_curve, &closest_curve_diff, expalpha, poly_props);
         let tmp_li2qn = match invariant_kind {
-            InvariantKind::GV => tmp_qn.li_2(poly_props, np),
-            InvariantKind::GW => Ok(tmp_qn.clone(np)),
+            InvariantKind::GV => tmp_qn.li_2(poly_props),
+            InvariantKind::GW => Ok(tmp_qn.clone(&poly_props.zero)),
         };
         // The receiver hangs up early when another worker reports an error, so a
         // failed send just means that there is nothing left to do.
@@ -157,7 +145,7 @@ pub fn invert_series<T>(
     poly_props: &PolynomialProperties<T>,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
-    all_pools: &mut (NumberPool<T>, Vec<NumberPool<T>>),
+    n_threads: usize,
 ) -> Result<HashMap<(usize, usize), T>, SeriesInversionError>
 where
     T: PolynomialCoeff<T>,
@@ -176,8 +164,6 @@ where
     let mut tmp_gv_rounded = poly_props.zero_cutoff.clone();
     let mut previous_qn: VecDeque<_> = (1..=n_previous_levels).map(|_| HashMap::new()).collect();
     let mut previous_qn_ind: VecDeque<_> = (1..=n_previous_levels).map(|_| Vec::new()).collect();
-
-    let (main_pool, pools) = all_pools;
 
     let InstantonData { mut inst, expalpha } = inst_data;
 
@@ -308,7 +294,7 @@ where
         let mut error = None;
         thread::scope(|s| {
             let (tx, rx) = channel();
-            for np in pools.iter_mut() {
+            for _ in 0..n_threads {
                 let tx = tx.clone();
                 let tasks = Arc::clone(&tasks_iter);
                 s.spawn(|| {
@@ -320,7 +306,6 @@ where
                         &expalpha,
                         poly_props,
                         invariant_kind,
-                        np,
                     );
                 });
             }
@@ -330,25 +315,23 @@ where
                     error = li2qn_r.err();
                     break;
                 };
-                computed_qn.insert(j, qn.clone(main_pool));
+                computed_qn.insert(j, qn.clone(&poly_props.zero));
                 if cy_kind.is_threefold() {
                     for (k, inst_k) in inst.iter_mut().enumerate() {
                         if poly_props.semigroup.elements[(k, j)] == 0 {
                             continue;
                         }
-                        let mut tmp_poly = li2qn.clone(main_pool);
+                        let mut tmp_poly = li2qn.clone(&poly_props.zero);
                         tmp_gv.assign(&gv_qn_to_compute[&j]);
                         tmp_gv *= poly_props.semigroup.elements[(k, j)];
                         tmp_poly.mul_scalar_assign(&tmp_gv);
-                        inst_k.sub_assign(&tmp_poly, main_pool);
-                        tmp_poly.drop(main_pool);
+                        inst_k.sub_assign(&tmp_poly, &poly_props.zero);
                     }
                 } else {
                     for kk in h22gv_qn_to_compute[&j].iter() {
-                        let mut tmp_poly = li2qn.clone(main_pool);
+                        let mut tmp_poly = li2qn.clone(&poly_props.zero);
                         tmp_poly.mul_scalar_assign(&kk.1);
-                        inst[kk.0].sub_assign(&tmp_poly, main_pool);
-                        tmp_poly.drop(main_pool);
+                        inst[kk.0].sub_assign(&tmp_poly, &poly_props.zero);
                     }
                 }
             }

@@ -51,7 +51,6 @@ impl<'a, T: fmt::Display> fmt::Display for PrettyPrintPolynomial<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pool::NumberPool;
     use crate::semigroup::Semigroup;
     use nalgebra::{DMatrix, DVector, RowDVector};
     use rug::{Assign, Rational};
@@ -76,7 +75,7 @@ mod tests {
         let sg = Semigroup::from_data(elements, grading_vector).unwrap();
         let tmp_rational = Rational::new();
         let poly_props = PolynomialProperties::new(&sg, &tmp_rational);
-        let mut coeff_pool = NumberPool::new(tmp_rational.clone(), 10);
+        let zero = Rational::new();
 
         let index_of = |monomial: &[i32]| {
             let monomial = DVector::from_column_slice(monomial);
@@ -92,16 +91,16 @@ mod tests {
             )
         };
 
-        let mut p = Polynomial::one(&mut coeff_pool);
+        let mut p = Polynomial::one(&zero);
         assert_eq!(display(&p), "1");
 
-        let mut coeff = coeff_pool.pop();
+        let mut coeff = zero.clone();
         coeff.assign(2);
         p.coeffs.insert(index_of(&[1, 1]), coeff);
         p.nonzero.push(index_of(&[1, 1]));
         assert_eq!(display(&p), "1 + 2*x*y");
 
-        let mut coeff = coeff_pool.pop();
+        let mut coeff = zero.clone();
         coeff.assign(3);
         p.coeffs.insert(index_of(&[3, 0]), coeff);
         p.nonzero.push(index_of(&[3, 0]));
