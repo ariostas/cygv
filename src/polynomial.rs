@@ -8,9 +8,8 @@ pub mod properties;
 use coefficient::PolynomialCoeff;
 use core::ops::{DivAssign, MulAssign};
 use error::PolynomialError;
-use nalgebra::DVector;
 use properties::PolynomialProperties;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 /// A polynomial structure.
 ///
@@ -40,14 +39,14 @@ where
     /// Create a new polynomial.
     pub fn new() -> Self {
         Self {
-            coeffs: HashMap::new(),
+            coeffs: HashMap::default(),
             nonzero: Vec::new(),
         }
     }
 
     /// Create a new polynomial with one as its constant term.
     pub fn one(zero: &T) -> Self {
-        let mut coeffs = HashMap::new();
+        let mut coeffs = HashMap::default();
         let mut one = zero.clone();
         one.assign(1i32);
         coeffs.insert(0, one);
@@ -168,9 +167,6 @@ where
         let mut deg1;
         let mut deg2;
         let max_deg = poly_props.semigroup.max_degree;
-        // Reuse a single buffer for the monomial sums to avoid allocating in the
-        // innermost loop.
-        let mut tmp_vec = DVector::<i32>::zeros(poly_props.semigroup.elements.nrows());
         let (pshort, plong) = if self.nonzero.len() < rhs.nonzero.len() {
             (self, rhs)
         } else {
@@ -179,21 +175,38 @@ where
         let mut tmp_var = poly_props.zero.clone();
         for &i in pshort.nonzero.iter() {
             deg1 = poly_props.semigroup.degrees[i];
+            // The fingerprint of the product monomial is the sum of the two
+            // fingerprints, so the product itself is never assembled.
+            let fingerprint_i = poly_props.fingerprints[i];
+            let col_i = poly_props
+                .verify_products
+                .then(|| poly_props.semigroup.elements.column(i));
+            let coeff_i = pshort.coeffs.get(&i).unwrap();
             for &j in plong.nonzero.iter() {
                 deg2 = poly_props.semigroup.degrees[j];
                 if deg1 + deg2 > max_deg {
                     break;
                 }
-                tmp_vec.copy_from(&poly_props.semigroup.elements.column(i));
-                tmp_vec += poly_props.semigroup.elements.column(j);
-                let Some(mon) = poly_props.monomial_map.get(&tmp_vec.as_view()) else {
+                let fingerprint = fingerprint_i.wrapping_add(poly_props.fingerprints[j]);
+                let Some(mon) = poly_props.index_of_fingerprint(fingerprint) else {
                     continue;
                 };
-                let c = res.coeffs.entry(*mon).or_insert_with(|| {
-                    res.nonzero.push(*mon);
+                if let Some(col_i) = &col_i {
+                    let col_j = poly_props.semigroup.elements.column(j);
+                    let col_mon = poly_props.semigroup.elements.column(mon);
+                    if col_mon
+                        .iter()
+                        .zip(col_i.iter().zip(col_j.iter()))
+                        .any(|(&m, (&a, &b))| m != a + b)
+                    {
+                        continue;
+                    }
+                }
+                let c = res.coeffs.entry(mon).or_insert_with(|| {
+                    res.nonzero.push(mon);
                     poly_props.zero.clone()
                 });
-                tmp_var.assign(pshort.coeffs.get(&i).unwrap());
+                tmp_var.assign(coeff_i);
                 tmp_var *= plong.coeffs.get(&j).unwrap();
                 *c += &tmp_var;
             }
@@ -399,7 +412,7 @@ macro_rules! polynomial {
     ( $t:expr, $( ($k:expr, $v:expr) ),* ) => {
         {
             let mut nonzero = Vec::new();
-            let mut coeffs = HashMap::new();
+            let mut coeffs = HashMap::default();
             $(
                 let mut c = $t.clone();
                 c.assign($v);
