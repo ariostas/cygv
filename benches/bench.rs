@@ -31,7 +31,7 @@ fn benchmark_hkty(c: &mut Criterion) {
     for (name, cases) in groups {
         let model = common::model(cases[0].model);
         let mut group = c.benchmark_group(&name);
-        // A run allocates its own number pools, so there is little state for a
+        // A run builds all of its state from scratch, so there is little for a
         // long warm-up to settle; spend the budget on the samples instead.
         group.warm_up_time(Duration::from_secs(1));
 
