@@ -40,7 +40,9 @@ of which at most one may be given. When none of them is given, the generators ar
 complete list of curve classes to use. Complete intersections are specified by passing the nef
 partition as `nefpart`. The computation is done with exact rational arithmetic by default; passing
 a number of bits as `prec` switches it to floating-point arithmetic, which is much faster for large
-computations.
+computations. Rational arithmetic is nevertheless the recommended choice, as there is no way to
+know beforehand how much precision a given computation needs, and too low a `prec` silently gives
+wrong invariants.
 
 The results are returned as a list of `(curve_class, invariant)` pairs, in no particular order. GV
 invariants are Python `int`s, and GW invariants are `fractions.Fraction`s, or `mpmath.mpf`s when
