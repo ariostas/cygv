@@ -74,14 +74,28 @@ where
                 .for_each(|((s1, s2), d)| *d = s1 - s2);
             let tmp_dist: f32 = tmp_curve_diff.iter().map(curve_diff_cost).sum();
             if tmp_dist < closest_dist {
-                let Some(ind) = poly_props.monomial_map.get(&tmp_curve_diff.as_view()) else {
+                // The fingerprint is linear, so the one of the difference of two
+                // curve classes is the difference of their fingerprints.
+                let fingerprint =
+                    poly_props.fingerprints[t].wrapping_sub(poly_props.fingerprints[*i]);
+                let Some(ind) = poly_props.index_of_fingerprint(fingerprint) else {
                     continue;
                 };
+                // Unlike the products in `Polynomial::mul`, a difference of two
+                // curve classes is usually not an element of the semigroup at
+                // all, so the fingerprint may well be that of an unrelated
+                // element. The difference is at hand anyway, so the answer is
+                // checked against it. This runs once per improvement of the
+                // closest curve, which is rare enough for the comparison not to
+                // show up in a profile.
+                if poly_props.semigroup.elements.column(ind) != tmp_curve_diff {
+                    continue;
+                }
                 let mut tmp_poly = Polynomial::new();
                 let mut tmp_num = poly_props.zero.clone();
                 tmp_num.assign(1);
-                tmp_poly.coeffs.insert(*ind, tmp_num);
-                tmp_poly.nonzero.push(*ind);
+                tmp_poly.coeffs.insert(ind, tmp_num);
+                tmp_poly.nonzero.push(ind);
                 closest_curve = prev_qns[i].mul(&tmp_poly, poly_props);
                 closest_dist = tmp_dist;
                 closest_curve_diff.copy_from(&tmp_curve_diff);
