@@ -1,0 +1,7 @@
+# build products
+cgv/*.o
+cgv/cgv
+cgv/cgv_gpu
+cgv/cgv_hip
+cgv/cgv_maj
+cgv/**/__pycache__/
