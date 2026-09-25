@@ -45,6 +45,12 @@
 - **I table (the running answer) kept 70-85% full instead of 40-50%**: same speed, one fewer table
   doubling on deep runs (max_deg 36: peak GPU memory 29.6 -> 21.1 GB; max_deg 32: 13.7-16.8 ->
   10.6 GB). `CGV_I_TGT` / `CGV_I_CAPF` override.
+- **Host memory at the end of a run about halved** (CPU and GPU paths; the peak is in the final stages:
+  multicover, CRT, output). Residues are stored per prime in flat arrays (was a 256-byte row per GV
+  plus a second map of all keys); the multicover maps hold 4-byte point indices instead of a second
+  copy of every key and value; the results are compacted in place; the output is written in groups of
+  chunks. Identical output. Peak host RSS (h11 = 10 geometry, GPU path): max_deg 30 3.7 -> 2.1 GB,
+  32 7.0 -> 3.6 GB, 36 18.2 -> 9.1 GB; run time unchanged.
 
 ## Portability
 - **AMD GPUs** via HIP from the same `gpu.cu` (`gpu_compat.h`, `make cgv_hip HIP_ARCH=...`). Tested on
