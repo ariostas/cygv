@@ -1343,9 +1343,42 @@ static void ifold_fn(void *vctx, int sh, int tid) {
 typedef struct { int n; u128 *key; int *deg; Co *gv; } PassResult;
 
 /* ---- parallel multicover ---- */
+/* index map (host-memory step 2): key -> point index, 4 bytes per slot; the keys and values stay in the
+ * MC arrays (key[i], gv[i]), so the map holds no second copy of them */
+typedef struct { int *hv; u64 mask; int n; } IM;
+static void im_init(IM *t, int cap) {
+    u64 c = 16;
+    while (c < 2 * (u64)cap) c <<= 1;
+    t->hv = xmalloc(c * sizeof(int)); memset(t->hv, 0xff, c * sizeof(int)); t->mask = c - 1; t->n = 0;
+}
+static inline int im_get(const IM *t, const u128 *key, u128 k) {
+    u64 h = hash128(k) & t->mask;
+    for (;;) {
+        int v = t->hv[h];
+        if (v < 0) return -1;
+        if (key[v] == k) return v;
+        h = (h + 1) & t->mask;
+    }
+}
+/* insert index i (key[i] must already hold its key); the key must not be in the map yet */
+static void im_put(IM *t, const u128 *key, int i) {
+    if (2 * (u64)(t->n + 1) > t->mask) {
+        u64 c = (t->mask + 1) * 2; int *old = t->hv; u64 om = t->mask;
+        t->hv = xmalloc(c * sizeof(int)); memset(t->hv, 0xff, c * sizeof(int)); t->mask = c - 1;
+        for (u64 h = 0; h <= om; h++) if (old[h] >= 0) {
+            u64 g = hash128(key[old[h]]) & t->mask;
+            while (t->hv[g] >= 0) g = (g + 1) & t->mask;
+            t->hv[g] = old[h];
+        }
+        free(old);
+    }
+    u64 h = hash128(key[i]) & t->mask;
+    while (t->hv[h] >= 0) h = (h + 1) & t->mask;
+    t->hv[h] = i; t->n++;
+}
 typedef struct {
-    u128 *key; int *deg; Co *gv; int *gcd; int *sh; int *slot; int n, cap;
-    SM *GS; int ng;              /* sharded key -> slot, val = A then GV */
+    u128 *key; int *deg; Co *gv; int *gcd; int *sh; int n, cap;
+    IM *GS; int ng;              /* sharded key -> point index (values: gv[i] = A, then GV once its gcd level is done) */
     Co *inv3;
     const int *lst; int nl;      /* current gcd level */
     int g;
@@ -1365,13 +1398,8 @@ static void mc_prep(void *vctx, int ch, int tid) {
 }
 typedef struct { MC *m; int **idx; int *cnt; } MCIns;
 static void mc_insert(void *vctx, int k, int tid) {
-    MCIns *c = vctx; MC *m = c->m; int cr;
-    for (int z = 0; z < c->cnt[k]; z++) {
-        int i = c->idx[k][z];
-        int s = sm_add(&m->GS[k], m->key[i], m->deg[i], &cr);
-        m->GS[k].val[s] = m->gv[i];
-        m->slot[i] = s;
-    }
+    MCIns *c = vctx; MC *m = c->m;
+    for (int z = 0; z < c->cnt[k]; z++) im_put(&m->GS[k], m->key, c->idx[k][z]);   /* points are distinct */
 }
 static void mc_level(void *vctx, int ch, int tid) {
     MC *m = vctx;
@@ -1386,18 +1414,17 @@ static void mc_level(void *vctx, int ch, int tid) {
                 if (m->g % n) continue;
                 for (int t = 0; t < h11; t++) Cn[t] = C[t] / n;
                 u128 kn = pack(Cn);
-                int k = sm_get(&m->GS[shard_n(kn, m->ng)], kn);
+                int k = im_get(&m->GS[shard_n(kn, m->ng)], m->key, kn);
                 if (k < 0) continue;
-                Co v = m->GS[shard_n(kn, m->ng)].val[k];
+                Co v = m->gv[k];   /* a divisor: lower gcd level, already final */
                 if (!co_isz(v)) g = co_sub(g, co_mul(v, m->inv3[n]));
             }
-            m->GS[m->sh[i]].val[m->slot[i]] = g;
         }
         m->gv[i] = g;
         if (co_isz(g)) continue;
         for (int j = 2; (i64)j * m->deg[i] <= maxdeg; j++) {
             u128 kj = m->key[i] * (u128)j;
-            if (sm_get(&m->GS[shard_n(kj, m->ng)], kj) >= 0) continue;
+            if (im_get(&m->GS[shard_n(kj, m->ng)], m->key, kj) >= 0) continue;
             if (m->nn[tid] == m->ncap[tid]) { m->ncap[tid] = m->ncap[tid] ? 2 * m->ncap[tid] : 256; m->nk[tid] = xrealloc(m->nk[tid], m->ncap[tid] * sizeof(u128)); m->nd[tid] = xrealloc(m->nd[tid], m->ncap[tid] * 2 * sizeof(int)); }
             m->nk[tid][m->nn[tid]] = kj;
             m->nd[tid][2 * m->nn[tid]] = j * m->deg[i];
@@ -1409,7 +1436,7 @@ static void mc_level(void *vctx, int ch, int tid) {
 static PassResult multicover(u128 *rkey, int *rdeg, Co *rA, int nord) {
     MC m; memset(&m, 0, sizeof(m));
     m.key = rkey; m.deg = rdeg; m.gv = rA; m.n = nord; m.cap = nord;
-    m.gcd = xmalloc((nord ? nord : 1) * sizeof(int)); m.sh = xmalloc((nord ? nord : 1) * sizeof(int)); m.slot = xmalloc((nord ? nord : 1) * sizeof(int));
+    m.gcd = xmalloc((nord ? nord : 1) * sizeof(int)); m.sh = xmalloc((nord ? nord : 1) * sizeof(int));
     m.ng = 4 * nthreads;
     parallel_for(256, nthreads, mc_prep, &m);
     /* bucket by shard, insert in parallel */
@@ -1417,8 +1444,8 @@ static PassResult multicover(u128 *rkey, int *rdeg, Co *rA, int nord) {
     for (int i = 0; i < nord; i++) cnt[m.sh[i]]++;
     for (int k = 0; k < m.ng; k++) { idx[k] = xmalloc((cnt[k] ? cnt[k] : 1) * sizeof(int)); cnt[k] = 0; }
     for (int i = 0; i < nord; i++) idx[m.sh[i]][cnt[m.sh[i]]++] = i;
-    m.GS = xmalloc(m.ng * sizeof(SM));
-    for (int k = 0; k < m.ng; k++) sm_init(&m.GS[k], cnt[k] + 16);
+    m.GS = xmalloc(m.ng * sizeof(IM));
+    for (int k = 0; k < m.ng; k++) im_init(&m.GS[k], cnt[k] + 16);
     MCIns ins = {&m, idx, cnt};
     parallel_for(m.ng, nthreads, mc_insert, &ins);
     for (int k = 0; k < m.ng; k++) free(idx[k]);
@@ -1431,7 +1458,6 @@ static PassResult multicover(u128 *rkey, int *rdeg, Co *rA, int nord) {
     for (int i = 0; i < nord; i++) if (m.deg[i] > 0) iv_push(&lv[m.gcd[i] <= maxg ? m.gcd[i] : maxg], i);
     m.nk = xcalloc(nthreads, sizeof(u128 *)); m.nd = xcalloc(nthreads, sizeof(int *));
     m.nn = xcalloc(nthreads, sizeof(int)); m.ncap = xcalloc(nthreads, sizeof(int));
-    int cr;
     for (int g = 1; g <= maxg; g++) {
         if (!lv[g].n) continue;
         m.g = g; m.lst = lv[g].v; m.nl = lv[g].n;
@@ -1441,31 +1467,32 @@ static PassResult multicover(u128 *rkey, int *rdeg, Co *rA, int nord) {
             for (int z = 0; z < m.nn[t]; z++) {
                 u128 kj = m.nk[t][z]; int dj = m.nd[t][2 * z], gj = m.nd[t][2 * z + 1];
                 int k = shard_n(kj, m.ng);
-                int s = sm_add(&m.GS[k], kj, dj, &cr);
-                if (!cr) continue;
-                m.GS[k].val[s] = co_zero();
+                if (im_get(&m.GS[k], m.key, kj) >= 0) continue;   /* found by another point or thread */
                 if (m.n == m.cap) {
-                    m.cap *= 2;
+                    m.cap += m.cap / 2 + 1024;   /* 1.5x (host-memory step 3; was 2x) */
                     m.key = xrealloc(m.key, m.cap * sizeof(u128)); m.deg = xrealloc(m.deg, m.cap * sizeof(int)); m.gv = xrealloc(m.gv, m.cap * sizeof(Co));
-                    m.gcd = xrealloc(m.gcd, m.cap * sizeof(int)); m.sh = xrealloc(m.sh, m.cap * sizeof(int)); m.slot = xrealloc(m.slot, m.cap * sizeof(int));
+                    m.gcd = xrealloc(m.gcd, m.cap * sizeof(int)); m.sh = xrealloc(m.sh, m.cap * sizeof(int));
                 }
                 int i = m.n++;
-                m.key[i] = kj; m.deg[i] = dj; m.gv[i] = co_zero(); m.gcd[i] = gj; m.sh[i] = k; m.slot[i] = s;
+                m.key[i] = kj; m.deg[i] = dj; m.gv[i] = co_zero(); m.gcd[i] = gj; m.sh[i] = k;
+                im_put(&m.GS[k], m.key, i);
                 iv_push(&lv[gj <= maxg ? gj : maxg], i);
             }
             m.nn[t] = 0;
         }
     }
+    for (int k = 0; k < m.ng; k++) free(m.GS[k].hv);
+    free(m.gcd); free(m.sh); m.gcd = NULL; m.sh = NULL;
+    /* nonzero GVs, compacted in place (host-memory step 3; was a copy into new arrays) */
     PassResult R; R.n = 0;
-    int nz = 0;
-    for (int i = 0; i < m.n; i++) nz += m.deg[i] > 0 && !co_isz(m.gv[i]);
-    R.key = xmalloc((nz ? nz : 1) * sizeof(u128)); R.deg = xmalloc((nz ? nz : 1) * sizeof(int)); R.gv = xmalloc((nz ? nz : 1) * sizeof(Co));
-    for (int i = 0; i < m.n; i++) if (m.deg[i] > 0 && !co_isz(m.gv[i])) { R.key[R.n] = m.key[i]; R.deg[R.n] = m.deg[i]; R.gv[R.n] = m.gv[i]; R.n++; }
-    for (int k = 0; k < m.ng; k++) sm_free(&m.GS[k]);
+    for (int i = 0; i < m.n; i++) if (m.deg[i] > 0 && !co_isz(m.gv[i])) { m.key[R.n] = m.key[i]; m.deg[R.n] = m.deg[i]; m.gv[R.n] = m.gv[i]; R.n++; }
+    int nz = R.n ? R.n : 1;
+    R.key = xrealloc(m.key, nz * sizeof(u128)); R.deg = xrealloc(m.deg, nz * sizeof(int)); R.gv = xrealloc(m.gv, nz * sizeof(Co));
+    m.key = NULL; m.deg = NULL; m.gv = NULL;
     for (int g = 0; g <= maxg; g++) free(lv[g].v);
     for (int t = 0; t < nthreads; t++) { free(m.nk[t]); free(m.nd[t]); }
     free(lv); free(m.GS); free(m.inv3); free(m.nk); free(m.nd); free(m.nn); free(m.ncap);
-    free(m.key); free(m.deg); free(m.gv); free(m.gcd); free(m.sh); free(m.slot);
+    free(m.key); free(m.deg); free(m.gv); free(m.gcd); free(m.sh);
     return R;
 }
 
@@ -1935,14 +1962,16 @@ static int fmt_i128(i128 x, char *out) {
     out[k] = 0;
     return k;
 }
-typedef struct { u64 **res; int n, np; const u64 *primes; int *bad; } CrtCtx;
+/* residues are stored by column: resv[j][s] = residue of slot s modulo prime j (host-memory step 1) */
+typedef struct { u64 **resv; int n, np; const u64 *primes; int *bad; } CrtCtx;
 static void crt_check_chunk(void *vctx, int ch, int tid) {
     CrtCtx *c = vctx;
     int lo = (int)((i64)c->n * ch / CRT_CHUNKS), hi = (int)((i64)c->n * (ch + 1) / CRT_CHUNKS);
     int k = c->np - 1;
     char a[1024], b[1024];
+    u64 r[MAX_PASSES * NL];
     for (int s = lo; s < hi && !c->bad[ch]; s++) {
-        const u64 *r = c->res[s];
+        for (int j = 0; j < c->np; j++) r[j] = c->resv[j][s];
         if (k <= 2) {
             i128 S = lift128(k, c->primes, r);
             if (i128_mod(S, c->primes[k]) != r[k] % c->primes[k]) c->bad[ch] = 1;
@@ -1953,27 +1982,31 @@ static void crt_check_chunk(void *vctx, int ch, int tid) {
         }
     }
 }
-typedef struct { u64 **res; const SM *R; int np; const u64 *primes; char **buf; size_t *len; int *cnt; } OutCtx;
+typedef struct { u64 **resv; const u128 *key; int n; int np; const u64 *primes; char **buf; size_t *len; int *cnt; } OutCtx;
 static void out_chunk(void *vctx, int ch, int tid) {
     OutCtx *c = vctx;
-    int n = c->R->n;
+    int n = c->n;
     int lo = (int)((i64)n * ch / CRT_CHUNKS), hi = (int)((i64)n * (ch + 1) / CRT_CHUNKS);
     size_t cap = 4096, len = 0;
     char *buf = xmalloc(cap);
     int C[64]; char num[1024];
     int k = c->np - 1;
+    u64 r[MAX_PASSES * NL];
     for (int s = lo; s < hi; s++) {
-        const u64 *r = c->res[s];
+        for (int j = 0; j < c->np; j++) r[j] = c->resv[j][s];
         if (k <= 2) { i128 S = lift128(k, c->primes, r); if (S == 0) continue; fmt_i128(S, num); }
         else { crt_symmetric(c->np, c->primes, r, num); if (!strcmp(num, "0")) continue; }
         if (len + 16 * 64 + 128 > cap) { cap *= 2; buf = xrealloc(buf, cap); }
-        unpack(c->R->key[s], C);
+        unpack(c->key[s], C);
         for (int t = 0; t < h11; t++) len += fmt_i128(C[t], buf + len), buf[len++] = ' ';
         size_t m = strlen(num); memcpy(buf + len, num, m); len += m; buf[len++] = '\n';
         c->cnt[ch]++;
     }
     c->buf[ch] = buf; c->len[ch] = len;
 }
+/* one group of output chunks: task k of the group is chunk c0 + k */
+typedef struct { OutCtx *oc; int c0; } OutGrp;
+static void out_chunk_grp(void *vctx, int k, int tid) { OutGrp *g = vctx; out_chunk(g->oc, g->c0 + k, tid); }
 
 #include "cgv.h"
 #ifndef CGV_ENTRY
@@ -2040,26 +2073,55 @@ int CGV_ENTRY(int argc, char **argv, CgvProbe *probe) {
     /* distributed runs: CGV_PRIME0 = index of the first prime; CGV_RESIDUES=1 = one pass,
      * write raw residues (combined by tools/crt_combine.py) */
     int prime0 = getenv("CGV_PRIME0") ? atoi(getenv("CGV_PRIME0")) : 0, resid = getenv("CGV_RESIDUES") != NULL && !probe;
-    SM RES; sm_init(&RES, 1024); /* key -> row of residues */
-    u64 **res = NULL; int rcap = 0;
+    /* slots: key rk[s], degree rd[s], residues resv[j][s] (0 for primes whose pass had GV = 0 there).
+     * The first pass's result becomes the slot list as is; the key -> slot map RES is only built if a
+     * later pass is needed (it can add keys that were 0 modulo the earlier primes). */
+    SM RES; int res_map = 0;
+    u128 *rk = NULL; int *rd = NULL; int rn = 0, rcap = 0;
+    u64 *resv[MAX_PASSES * NL]; memset(resv, 0, sizeof(resv));
     int cr;
     int minp = getenv("CGV_MIN_PRIMES") ? atoi(getenv("CGV_MIN_PRIMES")) : 0; /* e.g. from certify.py */
     for (int pass = 0; pass < MAX_PASSES && (!stable || np < minp); pass++) {
         for (int l = 0; l < NL; l++) { primes[np + l] = nth_prime(prime0 + np + l); field_init(&FL[l], primes[np + l]); }
         LOG("pass %d: primes %d..%d\n", pass, np, np + NL - 1);
         PassResult R = run_pass();
-        for (int z = 0; z < R.n; z++) {
-            int s = sm_add(&RES, R.key[z], R.deg[z], &cr);
-            if (s >= rcap) { int nc = rcap ? 2 * rcap : 4096; while (nc <= s) nc *= 2; res = xrealloc(res, nc * sizeof(u64 *)); for (int q = rcap; q < nc; q++) res[q] = NULL; rcap = nc; }
-            if (!res[s]) res[s] = xcalloc(MAX_PASSES * NL, sizeof(u64));
-            for (int l = 0; l < NL; l++) res[s][np + l] = ffrom(&FL[l], R.gv[z].v[l]);
+        if (np == 0) {
+            rk = R.key; rd = R.deg; rn = R.n; rcap = R.n ? R.n : 1;
+            for (int l = 0; l < NL; l++) {
+                resv[l] = xmalloc((size_t)rcap * sizeof(u64));
+                for (int z = 0; z < R.n; z++) resv[l][z] = ffrom(&FL[l], R.gv[z].v[l]);
+            }
+            free(R.gv);
+        } else {
+            if (!res_map) {
+                sm_init(&RES, rn + 16);
+                for (int s = 0; s < rn; s++) sm_add(&RES, rk[s], rd[s], &cr);
+                res_map = 1;
+            }
+            for (int l = 0; l < NL; l++) resv[np + l] = xcalloc(rcap, sizeof(u64));
+            for (int z = 0; z < R.n; z++) {
+                int s = sm_add(&RES, R.key[z], R.deg[z], &cr);
+                if (cr) {
+                    if (s >= rcap) {
+                        int nc = rcap + rcap / 2 + 16;
+                        rk = xrealloc(rk, (size_t)nc * sizeof(u128)); rd = xrealloc(rd, (size_t)nc * sizeof(int));
+                        for (int j = 0; j < np + NL; j++) {
+                            resv[j] = xrealloc(resv[j], (size_t)nc * sizeof(u64));
+                            memset(resv[j] + rcap, 0, (size_t)(nc - rcap) * sizeof(u64));
+                        }
+                        rcap = nc;
+                    }
+                    rk[s] = R.key[z]; rd[s] = R.deg[z]; rn = s + 1;
+                }
+                for (int l = 0; l < NL; l++) resv[np + l][s] = ffrom(&FL[l], R.gv[z].v[l]);
+            }
+            free(R.key); free(R.deg); free(R.gv);
         }
-        free(R.key); free(R.deg); free(R.gv);
         np += NL;
         if (resid) break;
         double tc = now();
         crt_setup(np, primes);
-        CrtCtx cc = {res, RES.n, np, primes, xcalloc(CRT_CHUNKS, sizeof(int))};
+        CrtCtx cc = {resv, rn, np, primes, xcalloc(CRT_CHUNKS, sizeof(int))};
         parallel_for(CRT_CHUNKS, nthreads, crt_check_chunk, &cc);
         stable = 1;
         for (int c = 0; c < CRT_CHUNKS; c++) stable &= !cc.bad[c];
@@ -2071,11 +2133,10 @@ int CGV_ENTRY(int argc, char **argv, CgvProbe *probe) {
         for (int l = 0; l < np; l++) printf(" %llu", (unsigned long long)primes[l]);
         printf("\n");
         int C[64];
-        for (int s = 0; s < RES.n; s++) {
-            if (!res[s]) continue;
-            unpack(RES.key[s], C);
+        for (int s = 0; s < rn; s++) {
+            unpack(rk[s], C);
             for (int t = 0; t < h11; t++) printf("%d ", C[t]);
-            for (int l = 0; l < np; l++) printf(l ? " %llu" : "%llu", (unsigned long long)res[s][l]);
+            for (int l = 0; l < np; l++) printf(l ? " %llu" : "%llu", (unsigned long long)resv[l][s]);
             printf("\n");
         }
         fflush(stdout);
@@ -2087,20 +2148,28 @@ int CGV_ENTRY(int argc, char **argv, CgvProbe *probe) {
         probe->maxbits = xmalloc((maxdeg + 1) * sizeof(double));
         for (int d = 0; d <= maxdeg; d++) probe->maxbits[d] = -1;
         char num[1024];
-        for (int s = 0; s < RES.n; s++) {
+        u64 row[MAX_PASSES * NL];
+        for (int s = 0; s < rn; s++) {
             double b;
-            if (np - 1 <= 2) { i128 S = lift128(np - 1, primes, res[s]); if (!S) continue; u128 a = S < 0 ? (u128)(-S) : (u128)S; b = 0; while (a >>= 1) b++; }
-            else { crt_symmetric(np, primes, res[s], num); if (!strcmp(num, "0")) continue; b = (strlen(num) - (num[0] == '-')) * 3.3219; }
-            int d = RES.deg[s];
+            for (int j = 0; j < np; j++) row[j] = resv[j][s];
+            if (np - 1 <= 2) { i128 S = lift128(np - 1, primes, row); if (!S) continue; u128 a = S < 0 ? (u128)(-S) : (u128)S; b = 0; while (a >>= 1) b++; }
+            else { crt_symmetric(np, primes, row, num); if (!strcmp(num, "0")) continue; b = (strlen(num) - (num[0] == '-')) * 3.3219; }
+            int d = rd[s];
             if (b > probe->maxbits[d]) probe->maxbits[d] = b;
         }
         return 0;
     }
     double tw = now();
-    OutCtx oc = {res, &RES, np, primes, xcalloc(CRT_CHUNKS, sizeof(char *)), xcalloc(CRT_CHUNKS, sizeof(size_t)), xcalloc(CRT_CHUNKS, sizeof(int))};
-    parallel_for(CRT_CHUNKS, nthreads, out_chunk, &oc);
-    int nout = 0;
-    for (int c = 0; c < CRT_CHUNKS; c++) { fwrite(oc.buf[c], 1, oc.len[c], stdout); free(oc.buf[c]); nout += oc.cnt[c]; }
+    OutCtx oc = {resv, rk, rn, np, primes, xcalloc(CRT_CHUNKS, sizeof(char *)), xcalloc(CRT_CHUNKS, sizeof(size_t)), xcalloc(CRT_CHUNKS, sizeof(int))};
+    /* in groups of chunks, written as each group finishes, so at most one group's text is in memory
+     * (host-memory step 3; was all 256 chunks) */
+    int nout = 0, grp = 4 * nthreads;
+    for (int c0 = 0; c0 < CRT_CHUNKS; c0 += grp) {
+        int c1 = c0 + grp < CRT_CHUNKS ? c0 + grp : CRT_CHUNKS;
+        OutGrp gg = {&oc, c0};
+        parallel_for(c1 - c0, nthreads, out_chunk_grp, &gg);
+        for (int c = c0; c < c1; c++) { fwrite(oc.buf[c], 1, oc.len[c], stdout); free(oc.buf[c]); nout += oc.cnt[c]; }
+    }
     fflush(stdout);
     LOG("%d nonzero GVs, output %.2fs, total %.2fs\n", nout, now() - tw, now() - t0);
     return 0;
