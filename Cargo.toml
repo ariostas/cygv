@@ -35,7 +35,6 @@ python = ["dep:pyo3", "dep:ctrlc"]
 [dependencies]
 clap = { version = "4.5.16", features = ["derive"], optional = true }
 ctrlc = { version = "3.4.4", optional = true }
-itertools = "0.15.0"
 nalgebra = "0.35.0"
 rug = "1.25.0"
 yaml-rust2 = { version = "0.12", optional = true }
