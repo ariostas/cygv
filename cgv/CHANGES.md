@@ -51,6 +51,10 @@
   copy of every key and value; the results are compacted in place; the output is written in groups of
   chunks. Identical output. Peak host RSS (h11 = 10 geometry, GPU path): max_deg 30 3.7 -> 2.1 GB,
   32 7.0 -> 3.6 GB, 36 18.2 -> 9.1 GB; run time unchanged.
+- **Low-memory switch** `CGV_LOW_MEM=1` / `compute_gvs(..., low_memory=True)` (Linux/glibc): allocations
+  of 1 MB or more get their own mapping and are returned to the system when freed, instead of staying in
+  glibc's pools as fragmentation. CPU path, max_deg 26-28, 24 threads: peak host memory -22% to -30% for
+  about +10% time. Off by default; no effect on macOS.
 
 ## Portability
 - **AMD GPUs** via HIP from the same `gpu.cu` (`gpu_compat.h`, `make cgv_hip HIP_ARCH=...`). Tested on

@@ -45,6 +45,9 @@
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #ifdef USE_GPU
 #include "gpu.h"
 #endif
@@ -2013,6 +2016,27 @@ static void out_chunk_grp(void *vctx, int k, int tid) { OutGrp *g = vctx; out_ch
 #define CGV_ENTRY cgv_entry_single
 #define CGV_STANDALONE
 #endif
+/* Low-memory mode (CGV_LOW_MEM=1): with glibc, every allocation of at least LOW_MEM_MB gets its own memory
+ * mapping, returned to the system as soon as it is freed. By default glibc raises this threshold on its own
+ * after big blocks are freed, so the arrays cgv grows and frees in the first layers end up in shared pools that
+ * keep the freed space (measured: ~2.5-2.9 GB held at max_deg 28 on 24 threads, CPU path). Costs some time
+ * (the kernel zero-fills fresh pages); no effect with other allocators (e.g. macOS). CGV_LOW_MEM_MB sets the
+ * threshold. */
+#define LOW_MEM_MB 1
+static void low_mem_setup(void) {
+    const char *v = getenv("CGV_LOW_MEM");
+    if (!v || !*v || !strcmp(v, "0")) return;
+    double mb = getenv("CGV_LOW_MEM_MB") ? atof(getenv("CGV_LOW_MEM_MB")) : LOW_MEM_MB;
+    if (mb < 0.125) mb = 0.125;
+    if (mb > 32) mb = 32;   /* glibc's upper limit on 64-bit */
+#ifdef __GLIBC__
+    if (mallopt(M_MMAP_THRESHOLD, (int)(mb * (1 << 20))) == 1) LOG("low-memory mode: allocations >= %g MB mapped separately\n", mb);
+    else LOG("cgv: note: low-memory mode could not be set (mallopt failed)\n");
+#else
+    LOG("cgv: note: low-memory mode (CGV_LOW_MEM) only has an effect with glibc (Linux); ignored\n");
+#endif
+}
+
 int CGV_ENTRY(int argc, char **argv, CgvProbe *probe) {
     const char *in = NULL;
     verbose = 1; nthreads = 1; use_gpu = 0; gpu_device = 0; /* settings are per call */
@@ -2023,6 +2047,7 @@ int CGV_ENTRY(int argc, char **argv, CgvProbe *probe) {
         else in = argv[i];
     }
     if (nthreads < 1) nthreads = 1;
+    low_mem_setup();
     FILE *f = in ? fopen(in, "r") : stdin;
     if (!f) die("cannot open input");
     double t0 = now();
