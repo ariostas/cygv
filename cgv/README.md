@@ -37,6 +37,11 @@ through Claude Code, including two rounds of agent-driven kernel evolution on th
 AMD: `make cgv_hip HIP_ARCH=gfx1151` (hipcc; same source through `gpu_compat.h`; needs 32-lane waves, i.e. RDNA).
 Integrated GPUs (shared memory) size their tables from a 24 GB budget; `CGV_GPU_MEM_GB` sets it on any GPU.
 
+Low on memory? `CGV_LOW_MEM=1` (or `compute_gvs(..., low_memory=True)`) makes glibc give every allocation of
+1 MB or more its own mapping, returned to the system as soon as it is freed (`CGV_LOW_MEM_MB` sets the size).
+CPU path, max_deg 26-28, 24 threads: peak host memory -22% to -30% for about +10% time. Linux (glibc) only;
+it has no effect on macOS, whose allocator already maps large blocks separately.
+
 ## Exactness certificate
 
 The default run checks its CRT lift with one extra prime, which is strong evidence but not a

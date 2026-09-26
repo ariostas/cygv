@@ -78,12 +78,13 @@ def write_input(d, max_deg, path, cones=True):
     open(path, "w").write("\n".join(lines) + "\n")
 
 
-def run_cgv(d, max_deg, threads=1, extra=(), cones=True):
+def run_cgv(d, max_deg, threads=1, extra=(), cones=True, env=None):
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
         path = f.name
     write_input(d, max_deg, path, cones)
     t0 = time.time()
-    p = subprocess.run([BIN, "-t", str(threads), *extra, path], capture_output=True, text=True)
+    p = subprocess.run([BIN, "-t", str(threads), *extra, path], capture_output=True, text=True,
+                       env=dict(os.environ, **env) if env else None)
     if p.returncode:
         raise RuntimeError(p.stderr[-2000:])
     dt = time.time() - t0
@@ -116,7 +117,8 @@ def cy_input(cy, grading_vec=None, min_points=None):
     )
 
 
-def compute_gvs(cy_or_input, max_deg, grading_vec=None, device="auto", threads=None, lanes=None, verbose=False):
+def compute_gvs(cy_or_input, max_deg, grading_vec=None, device="auto", threads=None, lanes=None, verbose=False,
+                low_memory=False):
     """GV invariants with cgv. Returns {curve tuple: int GV} (nonzero only), like
     cytools' cy.compute_gvs(...).dok, i.e. the same as cygv.
 
@@ -124,6 +126,8 @@ def compute_gvs(cy_or_input, max_deg, grading_vec=None, device="auto", threads=N
     device: "cpu", "gpu" (GPU 0), "gpu:N", or "auto" (GPU if a CUDA build and GPU are
             present; cgv itself keeps small or sparse-degree problems on the CPU).
     lanes:  number of ~62-bit primes per pass (default: chosen by a cheap probe).
+    low_memory: return freed memory to the system at once (Linux/glibc; CGV_LOW_MEM=1): lower peak host
+            memory for somewhat more time. No effect on macOS.
     """
     global BIN
     d = cy_or_input if isinstance(cy_or_input, dict) else cy_input(cy_or_input, grading_vec)
@@ -158,7 +162,8 @@ def compute_gvs(cy_or_input, max_deg, grading_vec=None, device="auto", threads=N
     old = BIN
     BIN = binary
     try:
-        out, dt, err = run_cgv(d, max_deg, threads or os.cpu_count(), extra=extra)
+        out, dt, err = run_cgv(d, max_deg, threads or os.cpu_count(), extra=extra,
+                               env={"CGV_LOW_MEM": "1"} if low_memory else None)
     finally:
         BIN = old
     if verbose:
