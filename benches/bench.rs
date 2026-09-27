@@ -9,10 +9,13 @@
 //!   each to sample but are the ones dominated by bignum arithmetic.
 //! - `CYGV_BENCH_THREADS=n` pins the number of worker threads, which makes
 //!   results less noisy and comparable across machines.
+//!
+//! The cases enabled by `CYGV_BENCH_HUGE` are never run here, since a single
+//! run of each takes minutes; `cargo bench --bench memory` runs them once.
 
 mod common;
 
-use common::Scenario;
+use common::{Scenario, Tier};
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 use std::time::Duration;
@@ -21,7 +24,10 @@ fn benchmark_hkty(c: &mut Criterion) {
     // Scenarios of the same group are emitted contiguously, so a running fold
     // is enough to collect them.
     let mut groups: Vec<(String, Vec<Scenario>)> = Vec::new();
-    for scenario in common::scenarios() {
+    for scenario in common::scenarios()
+        .into_iter()
+        .filter(|s| s.tier != Tier::Huge)
+    {
         match groups.last_mut() {
             Some((name, cases)) if *name == scenario.group() => cases.push(scenario),
             _ => groups.push((scenario.group(), vec![scenario])),

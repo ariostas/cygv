@@ -6,6 +6,10 @@
 //! benchmarks apply. Each scenario is run exactly once, so enabling the heavy
 //! cases here is much cheaper than it is there.
 //!
+//! `CYGV_BENCH_HUGE=1` adds the largest cases, which only this benchmark runs.
+//! Together they take about 45 minutes on 16 cores, and the largest one needs
+//! about 12 GB of memory.
+//!
 //! Almost all of the memory this crate uses is held by GMP/MPFR numbers, which
 //! are allocated by C code and therefore never reach Rust's global allocator.
 //! To account for them, this benchmark installs its own allocation functions

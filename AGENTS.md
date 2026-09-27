@@ -30,6 +30,7 @@ cargo bench --bench bench             # wall clock (criterion)
 cargo bench --bench memory            # allocations and peak memory
 cargo bench -- fourfold               # only the scenarios whose id contains "fourfold"
 CYGV_BENCH_HEAVY=1 cargo bench        # add the high-degree scenarios
+CYGV_BENCH_HUGE=1 cargo bench --bench memory  # add the largest ones (~45 min, ~12 GB peak)
 CYGV_BENCH_THREADS=1 cargo bench      # pin the worker thread count
 
 # Python (builds the Rust extension via maturin)
@@ -195,13 +196,26 @@ takes row-oriented lists (`to_matrix` in `src/python.rs` treats each inner list 
 ## Benchmarks
 
 Both bench targets are driven by the same scenario list in `benches/common/mod.rs`: a model
-(`threefold`, $h^{1,1} = 2$ hypersurface; `fourfold`, $h^{1,1} = 6$ CICY) crossed with the four
-`Variant`s (GV/GW × rational/float), at a couple of maximum degrees. A scenario id looks like
-`fourfold/deg15/gw-float`, and any argument after `--` that is not a flag filters on it. Adding a
-model or a degree means adding a row to `scenarios()`; nothing else has to change.
+crossed with some of the four `Variant`s (GV/GW × rational/float), at a couple of maximum degrees.
+A scenario id looks like `fourfold/deg15/gw-float`, and any argument after `--` that is not a flag
+filters on it. Adding a model or a degree means adding a row to `scenarios()`; nothing else has to
+change.
+
+There are two kinds of model. `threefold` ($h^{1,1} = 2$ hypersurface) and `fourfold` ($h^{1,1} = 6$
+CICY) are small, hardcoded, and run all four variants. `h11_8`, `h11_9`, `h11_10` and `h11_11`
+(named after their $h^{1,1}$) are realistic threefold hypersurfaces loaded from
+`benches/data/*.yaml`, which are ordinary CLI inputs (so the benches need the `cli` feature, and
+each file also runs with `cygv --file`). Their generators are thousands of Mori cone lattice points,
+the way CYTools passes them, so they also exercise semigroup construction at scale; that is what
+catches something like an accidentally cubic `find_generators`. `h11_9_plike` is `h11_9` under a
+sparse grading vector with large entries, which spreads the curve classes over hundreds of degree
+levels and stresses the series inversion rather than the bignum arithmetic. The realistic models
+only run `gv-rational`. Their data comes from an external project's test set and was cross-checked
+against an independent HKTY implementation; the files record where each geometry comes from, and
+some drop generators above the highest degree any scenario reaches.
 
 - `benches/bench.rs` measures wall clock with criterion. Each scenario carries a `sample_size` and
-  an `expected_secs` (measured on a 6-core machine) that only sizes criterion's measurement window;
+  an `expected_secs` that only sizes criterion's measurement window;
   criterion will suggest raising the target time, which is expected — the window is deliberately
   set just under one run per sample so slow cases are not sampled twice over.
 - `benches/memory.rs` measures allocations. `cargo bench --bench memory` prints peak live bytes,
@@ -221,8 +235,11 @@ Cargo fingerprints feature *names*, not what they expand to, so enabling `defaul
 resolves to the very same two features — splits it into a second build unit and compiles GMP and
 MPFR from source a second time, doubling every cold CI build.
 
-The high-degree scenarios are gated behind `CYGV_BENCH_HEAVY` because criterion has to run each of
-them ten or more times; the memory target runs everything once, so enabling them there is cheap.
+Scenarios come in three `Tier`s. The high-degree ones are gated behind `CYGV_BENCH_HEAVY` because
+criterion has to run each of them ten or more times; the memory target runs everything once, so
+enabling them there is cheap. The `Huge` ones, behind `CYGV_BENCH_HUGE`, take minutes and several
+GB each even for a single run, so only the memory target runs them; they are what to check when a
+change is meant to reduce peak memory.
 `CYGV_BENCH_THREADS` pins the worker count (default: one thread per core), which cuts the noise
 when comparing two revisions.
 
