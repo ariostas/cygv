@@ -10,7 +10,6 @@ pub mod error;
 
 use core::cmp::Ordering;
 use error::SemigroupError;
-use itertools::Itertools;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use std::collections::HashSet;
 
@@ -328,11 +327,11 @@ fn trim_by_max_deg(
 fn find_generators(elements: &DMatrix<i32>) -> DMatrix<i32> {
     // TODO: Need to check if it is worth to do this in parallel.
 
-    // Elements that are the sum of up to this many other elements are discarded.
-    // TODO: Need to check if this is reasonable. The original code used sums of
-    // up to 4 elements, but that was probably too high.
-    let max_sum_elements = 3;
-
+    // Only elements that are the sum of two others are discarded. Checking sums
+    // of three as well makes this cubic in the number of elements, which takes
+    // hours on inputs with thousands of lattice points, like the ones CYTools
+    // produces, while on such inputs it discards at most a couple more elements
+    // out of the thousands that pairs already do.
     let dim = elements.nrows();
     let zero_vec = DVector::<i32>::zeros(dim);
     let mut tmp_vec = zero_vec.clone();
@@ -342,12 +341,11 @@ fn find_generators(elements: &DMatrix<i32>) -> DMatrix<i32> {
 
     let mut to_remove = HashSet::new();
 
-    for n in 2..=max_sum_elements {
-        for v in generators.iter().combinations_with_replacement(n) {
-            tmp_vec.copy_from(&zero_vec);
-            for c in v.into_iter() {
-                tmp_vec += *c;
-            }
+    let candidates: Vec<_> = generators.iter().collect();
+    for (i, c1) in candidates.iter().enumerate() {
+        for c2 in candidates[i..].iter() {
+            tmp_vec.copy_from(*c1);
+            tmp_vec += **c2;
             let view = tmp_vec.column(0);
             if generators.contains(&view) {
                 to_remove.insert(tmp_vec.clone());
