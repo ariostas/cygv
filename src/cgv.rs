@@ -14,9 +14,15 @@ static CGV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cgv.exe"));
 /// Path to the bundled cgv program, written to the cache directory on first use.
 pub fn executable() -> io::Result<PathBuf> {
     // FNV-1a of the program: a new build never reuses an old file
-    let hash = CGV.iter().fold(0xcbf29ce484222325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    let hash = CGV.iter().fold(0xcbf29ce484222325u64, |h, &b| {
+        (h ^ b as u64).wrapping_mul(0x100000001b3)
+    });
     let dir = cache_dir().join("cygv");
-    let name = format!("cgv-{}-{hash:016x}{}", env!("CARGO_PKG_VERSION"), std::env::consts::EXE_SUFFIX);
+    let name = format!(
+        "cgv-{}-{hash:016x}{}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::EXE_SUFFIX
+    );
     let path = dir.join(&name);
     if !path.exists() {
         fs::create_dir_all(&dir)?;
@@ -33,10 +39,16 @@ pub fn executable() -> io::Result<PathBuf> {
 }
 
 fn cache_dir() -> PathBuf {
-    let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let var = |k: &str| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
     if cfg!(windows) {
         var("LOCALAPPDATA").unwrap_or_else(std::env::temp_dir)
     } else {
-        var("XDG_CACHE_HOME").or_else(|| var("HOME").map(|h| h.join(".cache"))).unwrap_or_else(std::env::temp_dir)
+        var("XDG_CACHE_HOME")
+            .or_else(|| var("HOME").map(|h| h.join(".cache")))
+            .unwrap_or_else(std::env::temp_dir)
     }
 }

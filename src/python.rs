@@ -92,7 +92,9 @@ pub fn compute_gvgw(
 fn cgv_executable() -> PyResult<String> {
     crate::cgv::executable()
         .map(|p| p.to_string_lossy().into_owned())
-        .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("cannot write the cgv program: {e}")))
+        .map_err(|e| {
+            pyo3::exceptions::PyOSError::new_err(format!("cannot write the cgv program: {e}"))
+        })
 }
 
 /// A Python module implemented in Rust.

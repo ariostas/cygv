@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -27,26 +28,29 @@ def test_bundled_cgv_run_is_a_copy() -> None:
     assert bundled.read_bytes() == tools.read_bytes()
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["quintic_D10", "h10_72_3998_0_default_K5", "h10_92_226_0_plike_K7", "h10_52_8839_0_default_K8"],
-)
-def test_cgv_backend_matches(name: str) -> None:
+def test_cgv_backend_matches() -> None:
     """backend='cgv' gives cygv's GV and GW invariants exactly."""
-    path = REFS / f"{name}.json.gz"
-    if not path.exists():
-        pytest.skip("not a repository checkout")
-    ref = json.load(gzip.open(path))
-    d = ref["input"]
-    kw = {
-        "generators": d["generators"],
-        "grading_vector": d["grading_vector"],
-        "q": d["q"],
-        "intnums": {(i, j, k): x for i, j, k, x in d["intnums"]},
-        "max_deg": ref["max_deg"],
-    }
-    assert dict(compute_gv(**kw, backend="cgv")) == dict(compute_gv(**kw))
-    assert dict(compute_gw(**kw, backend="cgv")) == dict(compute_gw(**kw))
+    for name in [
+        "quintic_D10",
+        "h10_72_3998_0_default_K5",
+        "h10_92_226_0_plike_K7",
+        "h10_52_8839_0_default_K8",
+    ]:
+        path = REFS / f"{name}.json.gz"
+        if not path.exists():
+            pytest.skip("not a repository checkout")
+        with gzip.open(path) as f:
+            ref = json.load(f)
+        d = ref["input"]
+        kw: dict[str, Any] = {
+            "generators": d["generators"],
+            "grading_vector": d["grading_vector"],
+            "q": d["q"],
+            "intnums": {(i, j, k): x for i, j, k, x in d["intnums"]},
+            "max_deg": ref["max_deg"],
+        }
+        assert dict(compute_gv(**kw, backend="cgv")) == dict(compute_gv(**kw)), name
+        assert dict(compute_gw(**kw, backend="cgv")) == dict(compute_gw(**kw)), name
 
 
 def test_cgv_backend_two_parameter_model() -> None:
@@ -56,7 +60,7 @@ def test_cgv_backend_two_parameter_model() -> None:
     geometry, and cgv, which combines the h11 instanton series weighted by the grading vector,
     then depends on the grading vector. On real geometries both backends agree.
     """
-    kw = {
+    kw: dict[str, Any] = {
         "generators": [[1, 0], [0, 1]],
         "grading_vector": [1, 1],
         "q": [[1, 0, 0, 0, 1, -2], [0, 1, 1, 1, 0, 1]],
@@ -71,7 +75,7 @@ def test_cgv_backend_two_parameter_model() -> None:
 
 
 def test_cgv_backend_rejects_unsupported() -> None:
-    kw = {
+    kw: dict[str, Any] = {
         "generators": [[0, -1], [1, 2]],
         "grading_vector": [3, -1],
         "q": [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]],

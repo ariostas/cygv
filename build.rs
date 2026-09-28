@@ -21,22 +21,43 @@ fn main() {
     if compiler.is_like_msvc() {
         panic!("the cgv feature needs gcc or clang (cgv uses 128-bit integers, which MSVC lacks); build with MinGW, or disable the feature");
     }
-    let flags: &[&str] = if x86_64 { &["-O3", "-march=x86-64-v2"] } else { &["-O3"] };
+    let flags: &[&str] = if x86_64 {
+        &["-O3", "-march=x86-64-v2"]
+    } else {
+        &["-O3"]
+    };
     let run = |args: &[String]| {
         let mut cmd = compiler.to_command();
         cmd.args(flags).args(args);
-        let status = cmd.status().unwrap_or_else(|e| panic!("cannot run the C compiler: {e}"));
+        let status = cmd
+            .status()
+            .unwrap_or_else(|e| panic!("cannot run the C compiler: {e}"));
         assert!(status.success(), "building cgv failed: {cmd:?}");
     };
     let mut objects = vec![];
     for nl in [2, 3, 4] {
         let obj = out.join(format!("gv_nl{nl}.o"));
-        run(&[format!("-DNL={nl}"), format!("-DCGV_ENTRY=cgv_entry_nl{nl}"), "-c".into(), "cgv/gv.c".into(), "-o".into(), obj.display().to_string()]);
+        run(&[
+            format!("-DNL={nl}"),
+            format!("-DCGV_ENTRY=cgv_entry_nl{nl}"),
+            "-c".into(),
+            "cgv/gv.c".into(),
+            "-o".into(),
+            obj.display().to_string(),
+        ]);
         objects.push(obj.display().to_string());
     }
     let main_obj = out.join("main.o").display().to_string();
-    run(&["-c".into(), "cgv/main.c".into(), "-o".into(), main_obj.clone()]);
-    let exe = out.join(if windows { "cgv.exe" } else { "cgv" }).display().to_string();
+    run(&[
+        "-c".into(),
+        "cgv/main.c".into(),
+        "-o".into(),
+        main_obj.clone(),
+    ]);
+    let exe = out
+        .join(if windows { "cgv.exe" } else { "cgv" })
+        .display()
+        .to_string();
     let mut link = vec!["-o".to_string(), exe, main_obj];
     link.extend(objects);
     link.extend(["-lpthread".to_string(), "-lm".to_string()]);
