@@ -312,6 +312,7 @@ dependencies = [
 name = "cygv"
 version = "0.2.3"
 dependencies = [
+ "cc",
  "clap",
  "criterion",
  "ctrlc",
