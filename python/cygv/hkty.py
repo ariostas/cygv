@@ -166,15 +166,18 @@ def _cgv_gvs(
         "generators": [[int(x) for x in g] for g in np.array(generators, dtype=int)],
         "grading_vector": [int(x) for x in np.array(grading_vector, dtype=int)],
         "q": [[int(x) for x in r] for r in np.array(q, dtype=int)],
-        "intnums": [[int(i), int(j), int(k), int(v)] for (i, j, k), v in intnums.items()],
+        "intnums": [
+            [int(i), int(j), int(k), int(v)] for (i, j, k), v in intnums.items()
+        ],
     }
     _cgv_run.BIN = _cgv_executable()
     threads = os.cpu_count() or 1
     try:
-        gvs, _, _ = _cgv_run.run_cgv(d, int(max_deg), threads)
+        out = _cgv_run.run_cgv(d, int(max_deg), threads)  # type: ignore[no-untyped-call]
     except FileNotFoundError:
         # no normaliz for the cone data: cgv enumerates the cone itself (same result, slower)
-        gvs, _, _ = _cgv_run.run_cgv(d, int(max_deg), threads, cones=False)
+        out = _cgv_run.run_cgv(d, int(max_deg), threads, cones=False)  # type: ignore[no-untyped-call]
+    gvs: dict[tuple[int, ...], int] = out[0]
     return gvs
 
 
@@ -209,7 +212,16 @@ def compute_gv(
 ) -> list[Any]:
     if backend == "cgv":
         return list(
-            _cgv_gvs(generators, grading_vector, q, intnums, max_deg, min_points, target_points, nefpart).items()
+            _cgv_gvs(
+                generators,
+                grading_vector,
+                q,
+                intnums,
+                max_deg,
+                min_points,
+                target_points,
+                nefpart,
+            ).items()
         )
     if backend != "cygv":
         msg = f"unknown backend {backend!r} (use 'cygv' or 'cgv')"
@@ -254,9 +266,22 @@ def compute_gw(
     if prec is not None:
         mp.mp.prec = prec
     if backend == "cgv":
-        gvs = _cgv_gvs(generators, grading_vector, q, intnums, max_deg, min_points, target_points, nefpart)
-        gws = _gw_from_gv(gvs, grading_vector, int(max_deg))  # type: ignore[arg-type]
-        return [(b, (x if prec is None else mp.mpf(x.numerator) / x.denominator)) for b, x in gws.items()]
+        gvs = _cgv_gvs(
+            generators,
+            grading_vector,
+            q,
+            intnums,
+            max_deg,
+            min_points,
+            target_points,
+            nefpart,
+        )
+        assert max_deg is not None  # checked by _cgv_gvs
+        gws = _gw_from_gv(gvs, grading_vector, max_deg)
+        return [
+            (b, (x if prec is None else mp.mpf(x.numerator) / x.denominator))
+            for b, x in gws.items()
+        ]
     if backend != "cygv":
         msg = f"unknown backend {backend!r} (use 'cygv' or 'cgv')"
         raise ValueError(msg)
