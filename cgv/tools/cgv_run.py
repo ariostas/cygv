@@ -125,6 +125,8 @@ def compute_gvs(cy_or_input, max_deg, grading_vec=None, device="auto", threads=N
     cy_or_input: a cytools CalabiYau, or an input dict (see cy_input).
     device: "cpu", "gpu" (GPU 0), "gpu:N", or "auto" (GPU if a CUDA build and GPU are
             present; cgv itself keeps small or sparse-degree problems on the CPU).
+    threads: CPU threads (default: all cores). Fewer threads use proportionally less host memory
+            (each thread keeps its own working tables) and take longer.
     lanes:  number of ~62-bit primes per pass (default: chosen by a cheap probe).
     low_memory: return freed memory to the system at once (Linux/glibc; CGV_LOW_MEM=1): lower peak host
             memory for somewhat more time. No effect on macOS.
