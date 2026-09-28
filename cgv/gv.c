@@ -45,6 +45,7 @@
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
+#include <unistd.h>
 #ifdef __GLIBC__
 #include <malloc.h>
 #endif
@@ -201,6 +202,7 @@ static int in_probe; /* set during the lane probe: no duplicate notes */
 static int have_cones, nmhb, *mhb, ncones, *cone_n, **cone_g, (*cone_T)[2];
 static int keybits;
 static u128 fieldmask;
+static u128 LT_XK;   /* level-table key marker: pack(-e_t) with W_t > 0 has negative degree, so it is never a level key */
 
 static inline int dot(const int *a, const int *b) { int s = 0; for (int t = 0; t < h11; t++) s += a[t] * b[t]; return s; }
 static inline u128 pack(const int *v) {
@@ -277,6 +279,10 @@ static void setup_keys(void) {
     }
     double bound = ratio * maxdeg;
     if (bound >= (double)((i64)1 << (keybits - 1)) - 1) die("coordinates too large for 128-bit key packing");
+    int v[64] = {0}, t0 = -1;
+    for (int t = 0; t < h11 && t0 < 0; t++) if (W[t] > 0) t0 = t;
+    if (t0 < 0) die("grading vector has no positive entry");
+    v[t0] = -1; LT_XK = pack(v);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -996,7 +1002,8 @@ static inline void emit_out(OutBuf *out, u128 k, int d, Co v) {
  * same time, so they are scattered together, one target degree g at a time;
  * each (e, g) sweep then works inside the single level-g table, which (unlike
  * the whole curve's support) mostly fits in L2. */
-typedef struct { u128 key; int occ; int pad; Co val; } LEnt;
+/* entries store key ^ LT_XK, so an empty (zeroed) slot is xkey == 0 and needs no occupied flag */
+typedef struct { u128 xkey; Co val; } LEnt;
 typedef struct { LEnt *tab; u64 mask; int n; int *used; int ucap; } LT;
 typedef struct {
     LT **lt;                          /* per degree 0..maxdeg, allocated on first use */
@@ -1011,7 +1018,7 @@ typedef struct {
     unsigned char *inh;               /* CS mode: level already in the heap */
 } WS;
 static void lt_alloc(LT *t, u64 cap) {
-    t->tab = xcalloc(cap, sizeof(LEnt)); t->mask = cap - 1; /* occ = 0: empty */
+    t->tab = xcalloc(cap, sizeof(LEnt)); t->mask = cap - 1; /* xkey = 0: empty */
 }
 static void ws_init_sized(WS *w, int nlterms) {
     memset(w, 0, sizeof(*w));
@@ -1055,8 +1062,8 @@ static void lt_grow(LT *t) {
     lt_alloc(t, 2 * ocap);
     for (int z = 0; z < t->n; z++) {
         LEnt *e = &old[t->used[z]];
-        u64 h = hash128(e->key) & t->mask;
-        while (t->tab[h].occ) h = (h + 1) & t->mask;
+        u64 h = hash128(e->xkey ^ LT_XK) & t->mask;
+        while (t->tab[h].xkey) h = (h + 1) & t->mask;
         t->tab[h] = *e;
         t->used[z] = (int)h;
     }
@@ -1066,16 +1073,20 @@ static inline LEnt *lt_find(WS *w, int d, u128 k) {
     LT *t = w->lt[d];
     if (!t) { t = w->lt[d] = xcalloc(1, sizeof(LT)); }
     if (!t->tab) { lt_alloc(t, 256); t->ucap = 128; t->used = xmalloc(t->ucap * sizeof(int)); }
-    u64 h = hash128(k) & t->mask;
+    u64 h = hash128(k) & t->mask; u128 xk = k ^ LT_XK;
     for (;;) {
         LEnt *e = &t->tab[h];
-        if (!e->occ) break;
-        if (e->key == k) return e;
+        if (!e->xkey) break;
+        if (e->xkey == xk) return e;
         h = (h + 1) & t->mask;
     }
-    if (2 * (u64)(t->n + 1) > t->mask) { lt_grow(t); return lt_find(w, d, k); }
+#ifndef LT_LFN
+#define LT_LFN 3   /* level tables grow above LT_LFN/LT_LFD full: 3/4 (was 1/2; fuller tables stay in cache) */
+#define LT_LFD 4
+#endif
+    if (LT_LFD * (u64)(t->n + 1) > LT_LFN * (u64)t->mask) { lt_grow(t); return lt_find(w, d, k); }
     LEnt *e = &t->tab[h];
-    e->key = k; e->occ = 1; e->val = co_zero();
+    e->xkey = xk; e->val = co_zero();
     if (t->n == 0 && !w->nopush) {
         if (w->nact == w->actcap) { w->actcap *= 2; w->act = xrealloc(w->act, w->actcap * sizeof(int)); }
         w->act[w->nact++] = d;
@@ -1085,6 +1096,9 @@ static inline LEnt *lt_find(WS *w, int d, u128 k) {
     t->used[t->n++] = (int)h;
     return e;
 }
+#ifndef LT_PF
+#define LT_PF 4   /* prefetch distance in the scatter loop (0 = off) */
+#endif
 #ifndef LT_KEEP
 #define LT_KEEP 32768 /* level tables larger than this are released after each curve */
 #endif
@@ -1093,7 +1107,7 @@ static void ws_clear(WS *w) {
         LT *t = w->lt[w->act[a]];
         if (!t) continue;
         if (t->mask + 1 > LT_KEEP) { free(t->tab); free(t->used); memset(t, 0, sizeof(*t)); continue; }
-        for (int z = 0; z < t->n; z++) t->tab[t->used[z]].occ = 0;
+        for (int z = 0; z < t->n; z++) t->tab[t->used[z]].xkey = 0;
         t->n = 0;
     }
     w->nact = 0; w->nlvh = 0;
@@ -1136,9 +1150,9 @@ static void apply_curve(WS *w, u128 kc, int dC, Co s) {
             LEnt *x = &le->tab[le->used[z]];
             Co f = e == 0 ? x->val : co_mul(x->val, INV[e]);
             if (co_isz(f)) continue;
-            u128 ko = kc + x->key;
+            u128 xk0 = x->xkey ^ LT_XK, ko = kc + xk0;
             emit_out(w->out, ko, dC + e, co_mul(s, f));
-            w->skey[ns] = x->key; w->sval[ns] = f; ns++;
+            w->skey[ns] = xk0; w->sval[ns] = f; ns++;
         }
         /* scatter into each higher level g = e + k, over the degrees k present in L */
         for (int q = 0; q < w->ng && w->gdeg[q] <= T - e; q++) {
@@ -1147,7 +1161,7 @@ static void apply_curve(WS *w, u128 kc, int dC, Co s) {
             for (int z = 0; z < ns; z++) {
                 u128 kb = w->skey[z]; Co fb = w->sval[z];
                 for (int j = j0; j < j1; j++) {
-#ifdef LT_PF
+#if LT_PF > 0
                     { LT *pt = w->lt[g]; if (j + LT_PF < j1 && pt && pt->tab) __builtin_prefetch(&pt->tab[hash128(kb + lkey[j + LT_PF]) & pt->mask], 1, 1); }
 #endif
                     LEnt *t = lt_find(w, g, kb + lkey[j]);
@@ -1205,9 +1219,9 @@ static void cs_finalize(CS *c, int e) {
         LEnt *x = &le->tab[le->used[z]];
         Co f = e == 0 ? x->val : co_mul(x->val, INV[e]);
         if (co_isz(f)) continue;
-        u128 ko = c->kc + x->key;
+        u128 xk0 = x->xkey ^ LT_XK, ko = c->kc + xk0;
         emit_out(w->out, ko, c->dC + e, co_mul(c->s, f));
-        w->skey[ns] = x->key; w->sval[ns] = f; ns++;
+        w->skey[ns] = xk0; w->sval[ns] = f; ns++;
     }
     c->ns = ns;
     /* this level is done: free its table (it is never touched again) */
@@ -1223,7 +1237,7 @@ static void cs_scatter(CS *c, int e, int q) {
     for (int z = 0; z < c->ns; z++) {
         u128 kb = w->skey[z]; Co fb = w->sval[z];
         for (int j = j0; j < j1; j++) {
-#ifdef LT_PF
+#if LT_PF > 0
             { LT *pt = w->lt[g]; if (j + LT_PF < j1 && pt && pt->tab) __builtin_prefetch(&pt->tab[hash128(kb + lkey[j + LT_PF]) & pt->mask], 1, 1); }
 #endif
             LEnt *t = lt_find(w, g, kb + lkey[j]);
@@ -2039,14 +2053,14 @@ static void low_mem_setup(void) {
 
 int CGV_ENTRY(int argc, char **argv, CgvProbe *probe) {
     const char *in = NULL;
-    verbose = 1; nthreads = 1; use_gpu = 0; gpu_device = 0; /* settings are per call */
+    verbose = 1; nthreads = 0; use_gpu = 0; gpu_device = 0; /* settings are per call */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-t") && i + 1 < argc) nthreads = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-q")) verbose = 0;
         else if (!strcmp(argv[i], "-g")) { use_gpu = 1; if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9' && strlen(argv[i + 1]) == 1) gpu_device = atoi(argv[++i]); }
         else in = argv[i];
     }
-    if (nthreads < 1) nthreads = 1;
+    if (nthreads < 1) { long nc = sysconf(_SC_NPROCESSORS_ONLN); nthreads = nc > 0 ? (int)nc : 1; }   /* default: all cores */
     low_mem_setup();
     FILE *f = in ? fopen(in, "r") : stdin;
     if (!f) die("cannot open input");
