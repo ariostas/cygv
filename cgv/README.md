@@ -31,7 +31,7 @@ Build: `make cgv cgv_gpu` (the GPU build needs nvcc; `CUDA_ARCH` defaults to sm_
 `make cgv_hip HIP_ARCH=gfx1100` for AMD (hipcc, 32-lane waves). Tests: `python tests/regress.py`
 (38 frozen cygv 0.2.3 outputs). Changes since the 2026-09-23 snapshot: `CHANGES.md`.
 
-This directory lives on the `cgv` branch of a fork of [cygv](https://github.com/ariostas/cygv) and is
+This directory is part of [cygv](https://github.com/ariostas/cygv) and is
 licensed like cygv (GPL-3.0-or-later, see `../LICENSE`). It was developed with Claude (Anthropic)
 through Claude Code, including two rounds of agent-driven kernel evolution on the GPU code.
 AMD: `make cgv_hip HIP_ARCH=gfx1151` (hipcc; same source through `gpu_compat.h`; needs 32-lane waves, i.e. RDNA).
@@ -110,5 +110,3 @@ gradings), and the h11=9 case pfv 2d7b127a at max_deg 10..20 (deg 20 from a 67-m
 `CGV_XTARGET` (GPU batch size); `CGV_LSYNC`, `CGV_CS_NU` (CPU small-layer mode).
 
 Run one GPU job per device at a time (each sizes its tables to the free memory).
-
-Notes, timings and history: `../NOTES.md`.
