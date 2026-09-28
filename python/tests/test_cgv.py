@@ -74,6 +74,29 @@ def test_cgv_backend_two_parameter_model() -> None:
     assert dict(compute_gw(**kw, backend="cgv")) == dict(compute_gw(**kw))
 
 
+def test_cgv_backend_devices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """device='cpu' always; device='gpu' if this cygv was built with cgv's GPU variant."""
+    from cygv.cygv import _cgv_gpu_executable  # noqa: PLC0415
+
+    kw: dict[str, Any] = {
+        "generators": [[1, 0], [0, 1]],
+        "grading_vector": [1, 1],
+        "q": [[1, 0, 0, 0, 1, -2], [0, 1, 1, 1, 0, 1]],
+        "intnums": {(0, 1, 1): 4, (1, 1, 1): 8},
+        "max_deg": 12,
+    }
+    ref = dict(compute_gv(**kw))
+    assert dict(compute_gv(**kw, backend="cgv", device="cpu")) == ref
+    if _cgv_gpu_executable() is None:
+        with pytest.raises(ValueError, match="without cgv's GPU variant"):
+            compute_gv(**kw, backend="cgv", device="gpu")
+    else:
+        monkeypatch.setenv(
+            "CGV_GPU_MIN", "0"
+        )  # else cgv keeps a problem this small on the CPU
+        assert dict(compute_gv(**kw, backend="cgv", device="gpu")) == ref
+
+
 def test_cgv_backend_rejects_unsupported() -> None:
     kw: dict[str, Any] = {
         "generators": [[0, -1], [1, 2]],

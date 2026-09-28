@@ -147,9 +147,13 @@ def _cgv_gvs(
     min_points: int | None,
     target_points: ArrayLike | None,
     nefpart: Sized | None,
+    device: str,
 ) -> dict[tuple[int, ...], int]:
     """GV invariants with the bundled cgv program (cgv/ in the repository), through
-    the same code as its standalone Python interface (cgv/tools/cgv_run.py)."""
+    the same code as its standalone Python interface (cgv/tools/cgv_run.py).
+
+    device: "cpu", "gpu" (GPU 0), "gpu:N", or "auto" (a suitable GPU if this cygv was
+    built with cgv's GPU variant, else the CPU); see cgv_run.pick_device."""
     if nefpart is not None and len(nefpart) > 0:
         msg = "backend='cgv' supports hypersurfaces only (no nefpart)"
         raise NotImplementedError(msg)
@@ -160,7 +164,7 @@ def _cgv_gvs(
         msg = "backend='cgv' needs max_deg (min_points and target_points are not supported)"
         raise NotImplementedError(msg)
     from cygv import _cgv_run  # noqa: PLC0415
-    from cygv.cygv import _cgv_executable  # noqa: PLC0415
+    from cygv.cygv import _cgv_executable, _cgv_gpu_executable  # noqa: PLC0415
 
     d = {
         "generators": [[int(x) for x in g] for g in np.array(generators, dtype=int)],
@@ -170,13 +174,22 @@ def _cgv_gvs(
             [int(i), int(j), int(k), int(v)] for (i, j, k), v in intnums.items()
         ],
     }
-    _cgv_run.BIN = _cgv_executable()
+    gpu = _cgv_gpu_executable()
+    gpu_bin, hip = gpu if gpu is not None else (None, False)
+    extra = _cgv_run.pick_device(device, gpu_bin, hip=hip)  # type: ignore[no-untyped-call]
+    if extra:
+        if gpu_bin is None:
+            msg = "this cygv was built without cgv's GPU variant (build from source with nvcc or hipcc)"
+            raise ValueError(msg)
+        _cgv_run.BIN = gpu_bin
+    else:
+        _cgv_run.BIN = _cgv_executable()
     threads = os.cpu_count() or 1
     try:
-        out = _cgv_run.run_cgv(d, int(max_deg), threads)  # type: ignore[no-untyped-call]
+        out = _cgv_run.run_cgv(d, int(max_deg), threads, extra=extra)  # type: ignore[no-untyped-call]
     except FileNotFoundError:
         # no normaliz for the cone data: cgv enumerates the cone itself (same result, slower)
-        out = _cgv_run.run_cgv(d, int(max_deg), threads, cones=False)  # type: ignore[no-untyped-call]
+        out = _cgv_run.run_cgv(d, int(max_deg), threads, extra=extra, cones=False)  # type: ignore[no-untyped-call]
     gvs: dict[tuple[int, ...], int] = out[0]
     return gvs
 
@@ -209,6 +222,7 @@ def compute_gv(
     nefpart: Sized | None = None,
     prec: int | None = None,
     backend: str = "cygv",
+    device: str = "auto",
 ) -> list[Any]:
     if backend == "cgv":
         return list(
@@ -221,6 +235,7 @@ def compute_gv(
                 min_points,
                 target_points,
                 nefpart,
+                device,
             ).items()
         )
     if backend != "cygv":
@@ -262,6 +277,7 @@ def compute_gw(
     nefpart: Sized | None = None,
     prec: int | None = None,
     backend: str = "cygv",
+    device: str = "auto",
 ) -> list[Any]:
     if prec is not None:
         mp.mp.prec = prec
@@ -275,6 +291,7 @@ def compute_gw(
             min_points,
             target_points,
             nefpart,
+            device,
         )
         assert max_deg is not None  # checked by _cgv_gvs
         gws = _gw_from_gv(gvs, grading_vector, max_deg)

@@ -117,6 +117,37 @@ def cy_input(cy, grading_vec=None, min_points=None):
     )
 
 
+def pick_device(device, gpu_bin, hip=False):
+    """cgv's device arguments: ["-g", "N"] for GPU N, [] for the CPU.
+
+    device: "cpu", "gpu" (GPU 0), "gpu:N", or "auto": the NVIDIA GPU with the most free memory (more than
+    4 GB) that does not drive a display, if the GPU build gpu_bin exists, else the CPU. With hip=True (gpu_bin
+    is an AMD build, which nvidia-smi cannot see) "auto" means GPU 0; cgv itself falls back to the CPU when
+    the GPU is busy, too small or drives a display.
+    """
+    if device == "auto":
+        device = "cpu"
+        if gpu_bin and os.path.exists(gpu_bin) and hip:
+            device = "gpu:0"
+        elif gpu_bin and os.path.exists(gpu_bin) and shutil.which("nvidia-smi"):
+            # the GPU with the most free memory (cgv_gpu itself falls back to the CPU if it is too busy)
+            try:
+                # never pick a GPU that drives a display: filling its memory can black out the desktop
+                q = subprocess.run(["nvidia-smi", "--query-gpu=index,memory.free,display_active", "--format=csv,noheader,nounits"],
+                                   capture_output=True, text=True, check=True).stdout
+                free = [(int(r[0]), int(r[1])) for r in (l.split(", ") for l in q.strip().splitlines())
+                        if r[2].strip() != "Enabled"]
+                if free:
+                    best = max(free, key=lambda r: r[1])
+                    if best[1] > 4000:
+                        device = f"gpu:{best[0]}"
+            except (subprocess.CalledProcessError, ValueError):
+                pass
+    if device.startswith("gpu"):
+        return ["-g", device.split(":")[1] if ":" in device else "0"]
+    return []
+
+
 def compute_gvs(cy_or_input, max_deg, grading_vec=None, device="auto", threads=None, lanes=None, verbose=False,
                 low_memory=False):
     """GV invariants with cgv. Returns {curve tuple: int GV} (nonzero only), like
@@ -135,30 +166,9 @@ def compute_gvs(cy_or_input, max_deg, grading_vec=None, device="auto", threads=N
     d = cy_or_input if isinstance(cy_or_input, dict) else cy_input(cy_or_input, grading_vec)
     if grading_vec is not None and isinstance(cy_or_input, dict):
         d = dict(d, grading_vector=[int(x) for x in grading_vec])
-    extra = []
     gpu_bin = os.path.join(HERE, "..", "cgv_gpu")
-    if device == "auto":
-        device = "cpu"
-        if os.path.exists(gpu_bin) and shutil.which("nvidia-smi"):
-            # the GPU with the most free memory (cgv_gpu itself falls back to the CPU if it is too busy)
-            try:
-                # never pick a GPU that drives a display: filling its memory can black out the desktop
-                q = subprocess.run(["nvidia-smi", "--query-gpu=index,memory.free,display_active", "--format=csv,noheader,nounits"],
-                                   capture_output=True, text=True, check=True).stdout
-                free = [(int(r[0]), int(r[1])) for r in (l.split(", ") for l in q.strip().splitlines())
-                        if r[2].strip() != "Enabled"]
-                if free:
-                    best = max(free, key=lambda r: r[1])
-                    if best[1] > 4000:
-                        device = f"gpu:{best[0]}"
-            except (subprocess.CalledProcessError, ValueError):
-                pass
-    if device.startswith("gpu"):
-        dev = device.split(":")[1] if ":" in device else "0"
-        extra = ["-g", dev]
-        binary = gpu_bin
-    else:
-        binary = os.path.join(HERE, "..", "cgv")
+    extra = pick_device(device, gpu_bin)
+    binary = gpu_bin if extra else os.path.join(HERE, "..", "cgv")
     if lanes:
         extra += ["-l", str(lanes)]
     old = BIN

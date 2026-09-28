@@ -97,11 +97,31 @@ fn cgv_executable() -> PyResult<String> {
         })
 }
 
+/// Path to the bundled GPU variant of cgv and whether it is a HIP (AMD) build, or None if none was
+/// built (see `crate::cgv`).
+#[cfg(feature = "cgv")]
+#[pyfunction]
+#[pyo3(name = "_cgv_gpu_executable")]
+fn cgv_gpu_executable() -> PyResult<Option<(String, bool)>> {
+    match crate::cgv::gpu_executable() {
+        None => Ok(None),
+        Some(Ok(p)) => Ok(Some((
+            p.to_string_lossy().into_owned(),
+            crate::cgv::GPU_IS_HIP,
+        ))),
+        Some(Err(e)) => Err(pyo3::exceptions::PyOSError::new_err(format!(
+            "cannot write the cgv GPU program: {e}"
+        ))),
+    }
+}
+
 /// A Python module implemented in Rust.
 #[pymodule(gil_used = false)]
 pub fn cygv(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_gvgw, m)?)?;
     #[cfg(feature = "cgv")]
     m.add_function(wrap_pyfunction!(cgv_executable, m)?)?;
+    #[cfg(feature = "cgv")]
+    m.add_function(wrap_pyfunction!(cgv_gpu_executable, m)?)?;
     Ok(())
 }
