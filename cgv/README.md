@@ -19,7 +19,7 @@ gvs = compute_gvs(cy, max_deg=24, device="cpu")         # or "gpu", "gpu:1", "au
 From the shell (input written by `tools/cgv_run.py`'s `write_input`):
 
 ```
-./cgv     -t 24 input.txt          # CPU
+./cgv     input.txt                # CPU, all cores (-t N: N threads)
 ./cgv_gpu -t 24 -g 0 input.txt     # CUDA GPU 0 (small, sparse-degree, or GPU-busy cases stay on the CPU)
           -l N                     # force N prime lanes (default: chosen by a probe run)
           -q                       # quiet
@@ -37,10 +37,14 @@ through Claude Code, including two rounds of agent-driven kernel evolution on th
 AMD: `make cgv_hip HIP_ARCH=gfx1151` (hipcc; same source through `gpu_compat.h`; needs 32-lane waves, i.e. RDNA).
 Integrated GPUs (shared memory) size their tables from a 24 GB budget; `CGV_GPU_MEM_GB` sets it on any GPU.
 
-Low on memory? `CGV_LOW_MEM=1` (or `compute_gvs(..., low_memory=True)`) makes glibc give every allocation of
-1 MB or more its own mapping, returned to the system as soon as it is freed (`CGV_LOW_MEM_MB` sets the size).
-CPU path, max_deg 26-28, 24 threads: peak host memory -22% to -30% for about +10% time. Linux (glibc) only;
-it has no effect on macOS, whose allocator already maps large blocks separately.
+Low on memory? Two levers, which stack:
+- **Fewer threads** (`-t N`, or `compute_gvs(..., threads=N)`; default: all cores). Each thread keeps its own
+  working tables, so peak host memory drops with the thread count (on top of a fixed part), at the cost of time.
+  CPU path, 24 -> 6 threads: max_deg 28 (h11 = 10) 6.1 -> 3.0 GB, 118 -> 192 s; max_deg 26 (h11 = 11) 5.5 -> 2.8 GB,
+  62 -> 95 s. Works on every OS (MacBook Pro, 6 threads: the same cases in 3.2 GB).
+- **`CGV_LOW_MEM=1`** (or `compute_gvs(..., low_memory=True)`), Linux/glibc only: every allocation of 1 MB or more
+  gets its own mapping, returned to the system as soon as it is freed (`CGV_LOW_MEM_MB` sets the size).
+  CPU path, max_deg 26-28, 24 threads: peak host memory -22% to -30% for about +10% time. No effect on macOS.
 
 ## Exactness certificate
 
