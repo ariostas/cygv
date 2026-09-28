@@ -35,6 +35,8 @@ This directory is part of [cygv](https://github.com/ariostas/cygv) and is
 licensed like cygv (GPL-3.0-or-later, see `../LICENSE`). It was developed with Claude (Anthropic)
 through Claude Code, including two rounds of agent-driven kernel evolution on the GPU code.
 AMD: `make cgv_hip HIP_ARCH=gfx1151` (hipcc; same source through `gpu_compat.h`; needs 32-lane waves, i.e. RDNA).
+GPUs that ROCm does not officially support: build for the nearest supported target and set
+`HSA_OVERRIDE_GFX_VERSION` when running (RX 6700 XT, gfx1031: `HIP_ARCH=gfx1030`, `HSA_OVERRIDE_GFX_VERSION=10.3.0`).
 Integrated GPUs (shared memory) size their tables from a 24 GB budget; `CGV_GPU_MEM_GB` sets it on any GPU.
 
 Low on memory? Two levers, which stack:
