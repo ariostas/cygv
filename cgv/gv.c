@@ -46,6 +46,9 @@
 #include <time.h>
 #include <pthread.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>   /* GetActiveProcessorCount */
+#endif
 #ifdef __GLIBC__
 #include <malloc.h>
 #endif
@@ -2060,7 +2063,11 @@ int CGV_ENTRY(int argc, char **argv, CgvProbe *probe) {
         else if (!strcmp(argv[i], "-g")) { use_gpu = 1; if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9' && strlen(argv[i + 1]) == 1) gpu_device = atoi(argv[++i]); }
         else in = argv[i];
     }
+#ifdef _WIN32
+    if (nthreads < 1) { long nc = (long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS); nthreads = nc > 0 ? (int)nc : 1; }   /* default: all cores */
+#else
     if (nthreads < 1) { long nc = sysconf(_SC_NPROCESSORS_ONLN); nthreads = nc > 0 ? (int)nc : 1; }   /* default: all cores */
+#endif
     low_mem_setup();
     FILE *f = in ? fopen(in, "r") : stdin;
     if (!f) die("cannot open input");
