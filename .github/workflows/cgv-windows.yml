@@ -13,11 +13,12 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
+          suppress-deprecation-warnings: msystem-mingw64   # same environment as cygv's own Windows builds
           install: >-
             make
             mingw-w64-x86_64-gcc
