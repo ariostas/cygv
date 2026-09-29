@@ -270,29 +270,33 @@ where
             })
             .collect::<Result<_, PolynomialError>>()?;
 
-        let mut computed_qn = HashMap::with_capacity(computed.len());
-        for (j, qn, li2qn) in computed {
-            let li2qn = li2qn.as_ref().unwrap_or(&qn);
-            if cy_kind.is_threefold() {
-                for (k, inst_k) in inst.iter_mut().enumerate() {
-                    if poly_props.semigroup.elements[(k, j)] == 0 {
+        // Every instanton correction is updated independently of the others, so
+        // the subtraction is parallelized over them. Each one walks the curves
+        // in the same order, which keeps the result independent of scheduling.
+        inst.par_iter_mut().enumerate().for_each(|(k, inst_k)| {
+            let mut tmp_gv = poly_props.zero.clone();
+            for (j, qn, li2qn) in computed.iter() {
+                let li2qn = li2qn.as_ref().unwrap_or(qn);
+                if cy_kind.is_threefold() {
+                    let e = poly_props.semigroup.elements[(k, *j)];
+                    if e == 0 {
                         continue;
                     }
                     let mut tmp_poly = li2qn.clone(&poly_props.zero);
-                    tmp_gv.assign(&gv_qn_to_compute[&j]);
-                    tmp_gv *= poly_props.semigroup.elements[(k, j)];
+                    tmp_gv.assign(&gv_qn_to_compute[j]);
+                    tmp_gv *= e;
                     tmp_poly.mul_scalar_assign(&tmp_gv);
                     inst_k.sub_assign(&tmp_poly, &poly_props.zero);
-                }
-            } else {
-                for kk in h22gv_qn_to_compute[&j].iter() {
-                    let mut tmp_poly = li2qn.clone(&poly_props.zero);
-                    tmp_poly.mul_scalar_assign(&kk.1);
-                    inst[kk.0].sub_assign(&tmp_poly, &poly_props.zero);
+                } else {
+                    for kk in h22gv_qn_to_compute[j].iter().filter(|kk| kk.0 == k) {
+                        let mut tmp_poly = li2qn.clone(&poly_props.zero);
+                        tmp_poly.mul_scalar_assign(&kk.1);
+                        inst_k.sub_assign(&tmp_poly, &poly_props.zero);
+                    }
                 }
             }
-            computed_qn.insert(j, qn);
-        }
+        });
+        let computed_qn: HashMap<_, _> = computed.into_iter().map(|(j, qn, _)| (j, qn)).collect();
         // Now we update the cache of previous qN
         previous_qn.pop_front();
         previous_qn_ind.pop_front();
