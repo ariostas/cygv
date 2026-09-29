@@ -10,6 +10,7 @@ use cygv::hkty::{
     compute_gv_rat_threefold, compute_gw_float_nfold, compute_gw_float_threefold,
     compute_gw_rat_nfold, compute_gw_rat_threefold,
 };
+use cygv::io::Input;
 use cygv::CYKind;
 use nalgebra::{dmatrix, dvector, DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
@@ -46,7 +47,57 @@ pub fn model(name: &str) -> Model {
     match name {
         "threefold" => threefold(),
         "fourfold" => fourfold(),
+        "h11_8" => fixture("h11_8", include_str!("../data/h11_8.yaml")),
+        "h11_9" => h11_9(),
+        "h11_9_plike" => h11_9_plike(),
+        "h11_10" => fixture("h11_10", include_str!("../data/h11_10.yaml")),
+        "h11_11" => fixture("h11_11", include_str!("../data/h11_11.yaml")),
         _ => panic!("unknown model {name:?}"),
+    }
+}
+
+/// Loads a model from one of the files in `benches/data`, which are ordinary
+/// inputs to the command line interface, so each of them can also be run with
+/// `cygv --file`. See the comments at the top of each file for where it comes
+/// from.
+///
+/// These are the realistic models: CY threefold hypersurfaces with
+/// $h^{1,1}$ between 8 and 11, whose generators include thousands of lattice
+/// points of the Mori cone, the way CYTools passes them.
+fn fixture(name: &'static str, data: &str) -> Model {
+    let mut inputs =
+        Input::load_all(data).unwrap_or_else(|e| panic!("invalid fixture {name:?}: {e}"));
+    assert_eq!(inputs.len(), 1, "fixture {name:?} must hold one document");
+    let input = inputs.remove(0);
+    Model {
+        name,
+        generators: input.generators,
+        grading_vector: input.grading_vector,
+        q: input.q,
+        nefpart: input.nefpart,
+        intnums: input.intnums,
+        cy_kind: input.cy_kind,
+    }
+}
+
+/// A CY threefold hypersurface with $h^{1,1} = 9$ whose semigroup grows
+/// quickly with the degree.
+pub fn h11_9() -> Model {
+    fixture("h11_9", include_str!("../data/h11_9.yaml"))
+}
+
+/// The [`h11_9`] model under a grading vector with large entries of both signs.
+///
+/// The curve classes are the same, but their degrees are spread over hundreds
+/// of values, so the series inversion walks through many more degree levels,
+/// each holding only a few classes.
+pub fn h11_9_plike() -> Model {
+    Model {
+        name: "h11_9_plike",
+        grading_vector: RowDVector::from_row_slice(&[
+            148, -121, -108, -29, -147, -114, -89, -141, -136,
+        ]),
+        ..h11_9()
     }
 }
 
@@ -231,6 +282,19 @@ impl Variant {
     }
 }
 
+/// How expensive a scenario is, which decides when it is run.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tier {
+    /// Always run.
+    Quick,
+    /// Run when `CYGV_BENCH_HEAVY` is set. Sampling each of these takes minutes.
+    Heavy,
+    /// Run when `CYGV_BENCH_HUGE` is set, and only by the memory benchmark: a
+    /// single run takes several minutes and gigabytes of memory, which is too
+    /// much for criterion to sample repeatedly.
+    Huge,
+}
+
 /// A single benchmark case: one model, up to one degree, with one variant.
 pub struct Scenario {
     pub model: &'static str,
@@ -241,12 +305,12 @@ pub struct Scenario {
     pub precision: u32,
     /// Number of samples criterion should collect for this case.
     pub sample_size: usize,
-    /// Rough time of a single run, in seconds, measured on a 6-core machine.
-    /// Only used to size criterion's measurement window; being off by a factor
-    /// of a few costs time but does not affect what is reported.
+    /// Rough time of a single run, in seconds. Only used to size criterion's
+    /// measurement window; being off by a factor of a few costs time but does
+    /// not affect what is reported.
     pub expected_secs: f64,
-    /// Whether this case is only run when `CYGV_BENCH_HEAVY` is set.
-    pub heavy: bool,
+    /// When this case is run.
+    pub tier: Tier,
 }
 
 impl Scenario {
@@ -325,46 +389,74 @@ impl Scenario {
 
 /// All benchmark cases, in the order they should be run.
 ///
-/// The low-degree cases run fast enough for criterion to sample them properly.
-/// The heavy ones are where the coefficients grow large enough for the bignum
-/// arithmetic and the sliding window of the series inversion
-/// to dominate, which is what most changes to this crate are about; they are
-/// skipped unless `CYGV_BENCH_HEAVY` is set, since sampling them takes minutes.
+/// The quick cases run fast enough for criterion to sample them properly. The
+/// heavy ones are where the coefficients grow large enough for the bignum
+/// arithmetic and the sliding window of the series inversion to dominate,
+/// which is what most changes to this crate are about. The huge ones are there
+/// to track peak memory at the scale real computations reach.
 pub fn scenarios() -> Vec<Scenario> {
-    // Per-run times are for one variant on a 6-core machine, in the order of
-    // `Variant::ALL`. The `gw-float` n-fold case is the outlier: without an
-    // exact zero to compare against it keeps every near-zero invariant, so it
-    // computes two orders of magnitude more of them than its rational
-    // counterpart.
+    use Tier::{Heavy, Huge, Quick};
+
+    // Per-run times are for one variant, in the order of `Variant::ALL`, and
+    // `None` skips that variant. The `threefold` and `fourfold` times were
+    // measured on a 6-core machine, the rest on a 16-core one. The `gw-float`
+    // n-fold case is the outlier: without an exact zero to compare against it
+    // keeps every near-zero invariant, so it computes two orders of magnitude
+    // more of them than its rational counterpart.
     //
-    //  model,       deg, prec, samples, per-run secs,             heavy
+    // The realistic models only run `gv-rational`, which is what they are used
+    // for in practice; the other variants would multiply their cost for little
+    // extra coverage, since the toy models already exercise them.
+    let all = |t: [f64; 4]| t.map(Some);
+    let gv_rat = |t: f64| [Some(t), None, None, None];
+    //   model,         deg, prec, samples, per-run secs,                   tier
+    #[rustfmt::skip]
     let cases = [
-        ("threefold", 10, 200, 100, [0.01, 0.01, 0.01, 0.01], false),
-        ("threefold", 30, 500, 10, [0.76, 0.66, 0.75, 0.59], false),
-        ("fourfold", 10, 200, 20, [0.09, 0.11, 0.08, 0.33], false),
-        ("threefold", 50, 500, 10, [9.6, 7.8, 8.1, 6.2], true),
-        ("fourfold", 15, 500, 10, [1.13, 1.50, 1.16, 15.07], true),
+        ("threefold",    10,  200,     100, all([0.01, 0.01, 0.01, 0.01]),  Quick),
+        ("threefold",    30,  500,      10, all([0.76, 0.66, 0.75, 0.59]),  Quick),
+        ("fourfold",     10,  200,      20, all([0.09, 0.11, 0.08, 0.33]),  Quick),
+        ("h11_9",        10,    0,      10, gv_rat(1.1),                    Quick),
+        ("h11_9_plike", 200,    0,      10, gv_rat(3.1),                    Quick),
+        ("h11_10",        8,    0,      10, gv_rat(2.2),                    Quick),
+        ("h11_11",       10,    0,      10, gv_rat(1.9),                    Quick),
+        ("threefold",    50,  500,      10, all([9.6, 7.8, 8.1, 6.2]),      Heavy),
+        ("fourfold",     15,  500,      10, all([1.13, 1.50, 1.16, 15.07]), Heavy),
+        ("h11_8",        14,    0,      10, gv_rat(11.0),                   Heavy),
+        ("h11_9",        14,    0,      10, gv_rat(23.0),                   Heavy),
+        ("h11_9_plike", 240,    0,      10, gv_rat(14.0),                   Heavy),
+        ("h11_10",       10,    0,      10, gv_rat(8.5),                    Heavy),
+        ("h11_11",       12,    0,      10, gv_rat(12.0),                   Heavy),
+        ("h11_8",        20,    0,       1, gv_rat(1600.0),                 Huge),
+        ("h11_9",        18,    0,       1, gv_rat(800.0),                  Huge),
+        ("h11_9_plike", 300,    0,       1, gv_rat(123.0),                  Huge),
+        ("h11_11",       16,    0,       1, gv_rat(240.0),                  Huge),
     ];
 
     let heavy_enabled = std::env::var_os("CYGV_BENCH_HEAVY").is_some();
+    let huge_enabled = std::env::var_os("CYGV_BENCH_HUGE").is_some();
 
     cases
         .into_iter()
-        .filter(|(_, _, _, _, _, heavy)| heavy_enabled || !heavy)
+        .filter(|&(_, _, _, _, _, tier)| match tier {
+            Quick => true,
+            Heavy => heavy_enabled,
+            Huge => huge_enabled,
+        })
         .flat_map(
-            |(model, max_deg, precision, sample_size, expected_secs, heavy)| {
-                Variant::ALL
-                    .into_iter()
-                    .zip(expected_secs)
-                    .map(move |(variant, expected_secs)| Scenario {
-                        model,
-                        max_deg,
-                        variant,
-                        precision,
-                        sample_size,
-                        expected_secs,
-                        heavy,
-                    })
+            |(model, max_deg, precision, sample_size, expected_secs, tier)| {
+                Variant::ALL.into_iter().zip(expected_secs).filter_map(
+                    move |(variant, expected_secs)| {
+                        Some(Scenario {
+                            model,
+                            max_deg,
+                            variant,
+                            precision,
+                            sample_size,
+                            expected_secs: expected_secs?,
+                            tier,
+                        })
+                    },
+                )
             },
         )
         .collect()

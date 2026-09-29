@@ -57,13 +57,17 @@ gmp-mpfr-sys = { version = "1.7", default-features = false, features = [
   "mpfr",
 ] }
 
+# Both benchmarks load their larger models from `benches/data` through the `io`
+# module, which is part of the `cli` feature.
 [[bench]]
 name = "bench"
 harness = false
+required-features = ["cli"]
 
 [[bench]]
 name = "memory"
 harness = false
+required-features = ["cli"]
 
 [profile.release]
 # The hot paths are generic over the coefficient type and spread over several
