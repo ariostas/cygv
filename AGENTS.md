@@ -155,9 +155,16 @@ indices differently (the first index is a reference surface in the n-fold case).
   semigroup reference, the monomial→index map, the `zero_cutoff` used by `clean_up` to drop
   numerically-zero terms, and a `zero` coefficient that new ones are cloned from — for `rug::Float`
   it is what carries the precision they all have to be created with.
-- **Threading** uses one uniform pattern throughout stages 2–4: `Arc<Mutex<slice::Iter>>` as a work
-  queue, `thread::scope` to spawn `n_threads` workers, an `mpsc` channel back to
-  the main thread which assembles results, and `drop(tx)` to terminate the receive loop. No rayon.
+- **Threading** uses rayon throughout stages 2–4. `run_hkty` builds a private `ThreadPool` with
+  `n_threads` workers and `install`s the pipeline in it, so the stage functions take no thread
+  count and simply run in whatever pool they are called from (the global one, when called
+  directly as the unit tests do). Deliberately not the global pool: that would ignore `n_threads`
+  and share workers with any rayon use of a library consumer. Results are `collect`ed and then
+  assembled on the calling thread — collecting a `Vec` from an indexed iterator keeps its order,
+  so `alpha[t]` and friends stay put. Where a worker needs bignum scratch space it gets it from
+  `fold`, which builds it once per rayon job instead of once per item (see `CScratch` in
+  `src/fundamental_period.rs`). Errors are propagated by collecting into a `Result`, which
+  stops the remaining items early.
 
 ### Command line interface
 
