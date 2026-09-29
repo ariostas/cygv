@@ -10,6 +10,8 @@ use error::FundamentalPeriodError;
 use nalgebra::{DMatrix, DMatrixView, DVector};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{sync_channel, SyncSender};
+use std::thread;
 
 /// Group curves by the number of negative intersections with the GLSM
 /// basis.
@@ -295,55 +297,91 @@ pub struct FundamentalPeriod<T> {
     pub c0_inv: Polynomial<T>,
 }
 
-/// Runs one of the `compute_c_*neg` routines over a set of curves in parallel.
+/// Runs one of the `compute_c_*neg` routines over a set of curves in parallel,
+/// sending the coefficients of each curve down `tx` as soon as they are ready.
 ///
-/// The coefficients come back as one flat list per rayon job. The scratch space
-/// and the list are both built once per job rather than once per curve, and the
-/// caller files the coefficients into their polynomials afterwards.
-fn compute_c<T, F>(
+/// The scratch space is built once per rayon job rather than once per curve.
+fn send_c<T, F>(
     curves: &[usize],
     poly_props: &PolynomialProperties<T>,
     h11: usize,
+    tx: &SyncSender<Vec<CCoeff<T>>>,
     compute: F,
-) -> Vec<Vec<CCoeff<T>>>
-where
+) where
     T: PolynomialCoeff<T>,
     F: Fn(usize, &mut CScratch<T>, &mut Vec<CCoeff<T>>) + Sync,
 {
-    curves
-        .par_iter()
-        .fold(
-            || (CScratch::new(&poly_props.zero_cutoff, h11), Vec::new()),
-            |(mut scratch, mut out), &t| {
-                compute(t, &mut scratch, &mut out);
-                (scratch, out)
-            },
-        )
-        .map(|(_, out)| out)
-        .collect()
+    curves.par_iter().for_each_init(
+        || CScratch::new(&poly_props.zero_cutoff, h11),
+        |scratch, &t| {
+            let mut out = Vec::new();
+            compute(t, scratch, &mut out);
+            // The receiver only goes away early if filing panicked, in which
+            // case that panic is the one worth reporting.
+            let _ = tx.send(out);
+        },
+    );
 }
 
-/// Files the coefficients that `compute_c` produced into the polynomials they
-/// belong to.
-fn file_away<T>(
-    coeffs: Vec<Vec<CCoeff<T>>>,
-    c0: &mut Polynomial<T>,
+/// Runs `produce`, which sends coefficients down the channel it is given, while
+/// a separate thread files them into their polynomials with `file` as they
+/// arrive.
+///
+/// Filing the coefficients as they arrive, rather than collecting them all and
+/// filing them afterwards, is what keeps the memory of this stage down: the
+/// collected lists would hold every coefficient at once while the polynomials
+/// fill up, which puts the peak up by half on the realistic models, and the
+/// filing would become a serial tail. The filing thread sits outside the rayon
+/// pool, so that waiting on the channel can never take a worker away from the
+/// producers, even when the pool only has one.
+///
+/// The channel is bounded, so that the producers wait for the filing thread
+/// whenever it falls behind, e.g. because the machine is busy, rather than
+/// piling up coefficients faster than they can be filed. It never waits on the
+/// producers, so this cannot deadlock.
+fn file_while<T, R>(
+    mut file: impl FnMut(CCoeff<T>) + Send,
+    produce: impl FnOnce(&SyncSender<Vec<CCoeff<T>>>) -> R,
+) -> R
+where
+    T: PolynomialCoeff<T>,
+{
+    // A few curves' worth per worker is plenty to smooth out the jitter.
+    let (tx, rx) = sync_channel::<Vec<CCoeff<T>>>(8 * rayon::current_num_threads());
+    thread::scope(|s| {
+        s.spawn(move || {
+            for coeffs in rx {
+                coeffs.into_iter().for_each(&mut file);
+            }
+        });
+        let res = produce(&tx);
+        // Hang up, so that the filing thread stops once the channel is drained.
+        drop(tx);
+        res
+    })
+}
+
+/// Files a coefficient that a `compute_c_*neg` routine produced into the
+/// polynomial it belongs to. `c0` is only needed while it is being computed.
+fn file_coeff<T>(
+    (i, a, b, c): CCoeff<T>,
+    c0: Option<&mut Polynomial<T>>,
     c1: &mut [Polynomial<T>],
     c2: &mut HashMap<(usize, usize), Polynomial<T>>,
 ) where
     T: PolynomialCoeff<T>,
 {
-    for (i, a, b, c) in coeffs.into_iter().flatten() {
-        match (a, b) {
-            (None, _) => {
-                c0.coeffs.insert(i, c);
-            }
-            (Some(a), None) => {
-                c1[a].coeffs.insert(i, c);
-            }
-            (Some(a), Some(b)) => {
-                c2.get_mut(&(a, b)).unwrap().coeffs.insert(i, c);
-            }
+    match (a, b) {
+        (None, _) => {
+            c0.expect("a coefficient of c0 arrived after c0 was complete")
+                .coeffs
+                .insert(i, c);
+        }
+        (Some(a), None) => {
+            c1[a].coeffs.insert(i, c);
+        }
+        (Some(a), Some(b)) => {
+            c2.get_mut(&(a, b)).unwrap().coeffs.insert(i, c);
         }
     }
 }
@@ -405,61 +443,68 @@ where
         .collect();
 
     // Start by using curves with zero negative intersections.
-    let coeffs_c0 = compute_c(&neg0, poly_props, h11, |t, scratch, out| {
-        compute_c_0neg(
-            t,
-            scratch,
-            out,
-            q.as_view(),
-            q0.as_view(),
-            curves_dot_q.as_view(),
-            curves_dot_q0.as_view(),
-            &beta_pairs,
-        )
-    });
-    file_away(coeffs_c0, &mut c0, &mut c1, &mut c2);
+    file_while(
+        |coeff| file_coeff(coeff, Some(&mut c0), &mut c1, &mut c2),
+        |tx| {
+            send_c(&neg0, poly_props, h11, tx, |t, scratch, out| {
+                compute_c_0neg(
+                    t,
+                    scratch,
+                    out,
+                    q.as_view(),
+                    q0.as_view(),
+                    curves_dot_q.as_view(),
+                    curves_dot_q0.as_view(),
+                    &beta_pairs,
+                )
+            })
+        },
+    );
 
     c0.nonzero = c0.coeffs.keys().cloned().collect();
     c0.nonzero.sort_unstable();
     c0.clean_up(poly_props);
 
     // Now compute the inverse and the derivatives in parallel.
-    let (mut c0_inv, (coeffs_c1, coeffs_c2)) = rayon::join(
-        || c0.recipr(poly_props).unwrap(),
-        || {
+    let (mut c0_inv, _) = file_while(
+        |coeff| file_coeff(coeff, None, &mut c1, &mut c2),
+        |tx| {
             rayon::join(
+                || c0.recipr(poly_props).unwrap(),
                 || {
-                    compute_c(&neg1, poly_props, h11, |t, scratch, out| {
-                        compute_c_1neg(
-                            t,
-                            scratch,
-                            out,
-                            q.as_view(),
-                            q0.as_view(),
-                            curves_dot_q.as_view(),
-                            curves_dot_q0.as_view(),
-                            &beta_pairs,
-                        )
-                    })
-                },
-                || {
-                    compute_c(&neg2, poly_props, h11, |t, scratch, out| {
-                        compute_c_2neg(
-                            t,
-                            scratch,
-                            out,
-                            q.as_view(),
-                            curves_dot_q.as_view(),
-                            curves_dot_q0.as_view(),
-                            &beta_pairs,
-                        )
-                    })
+                    rayon::join(
+                        || {
+                            send_c(&neg1, poly_props, h11, tx, |t, scratch, out| {
+                                compute_c_1neg(
+                                    t,
+                                    scratch,
+                                    out,
+                                    q.as_view(),
+                                    q0.as_view(),
+                                    curves_dot_q.as_view(),
+                                    curves_dot_q0.as_view(),
+                                    &beta_pairs,
+                                )
+                            })
+                        },
+                        || {
+                            send_c(&neg2, poly_props, h11, tx, |t, scratch, out| {
+                                compute_c_2neg(
+                                    t,
+                                    scratch,
+                                    out,
+                                    q.as_view(),
+                                    curves_dot_q.as_view(),
+                                    curves_dot_q0.as_view(),
+                                    &beta_pairs,
+                                )
+                            })
+                        },
+                    )
                 },
             )
         },
     );
-    file_away(coeffs_c1, &mut c0, &mut c1, &mut c2);
-    file_away(coeffs_c2, &mut c0, &mut c1, &mut c2);
 
     c0_inv.clean_up(poly_props);
     for p in c1.iter_mut() {

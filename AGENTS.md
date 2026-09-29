@@ -159,12 +159,19 @@ indices differently (the first index is a reference surface in the n-fold case).
   `n_threads` workers and `install`s the pipeline in it, so the stage functions take no thread
   count and simply run in whatever pool they are called from (the global one, when called
   directly as the unit tests do). Deliberately not the global pool: that would ignore `n_threads`
-  and share workers with any rayon use of a library consumer. Results are `collect`ed and then
-  assembled on the calling thread — collecting a `Vec` from an indexed iterator keeps its order,
-  so `alpha[t]` and friends stay put. Where a worker needs bignum scratch space it gets it from
-  `fold`, which builds it once per rayon job instead of once per item (see `CScratch` in
-  `src/fundamental_period.rs`). Errors are propagated by collecting into a `Result`, which
-  stops the remaining items early.
+  and share workers with any rayon use of a library consumer. Results are mostly `collect`ed and
+  then assembled on the calling thread — collecting a `Vec` from an indexed iterator keeps its
+  order, so `alpha[t]` and friends stay put. Errors are propagated by collecting into a `Result`,
+  which stops the remaining items early. The exception is `compute_omega`, which produces far
+  more, smaller results than the other stages: collecting all of its coefficients before filing
+  them into their polynomials raised its peak memory by half, so `file_while` streams them over
+  a bounded `mpsc` channel to a filing thread instead. That thread is a plain `std` thread outside
+  the pool on purpose; a pool worker blocked on the channel could starve the producers, and
+  deadlocks outright with `n_threads = 1`. The bound makes the producers wait whenever the filing
+  thread falls behind (a busy machine is enough), which keeps the peak at its floor instead of
+  swinging by tens of MiB from run to run. Where a worker needs bignum scratch space it gets it from
+  `for_each_init`, which builds it once per rayon job instead of once per item (see `CScratch` in
+  `src/fundamental_period.rs`).
 
 ### Command line interface
 
