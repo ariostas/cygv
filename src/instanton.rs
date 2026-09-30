@@ -6,172 +6,53 @@ use crate::polynomial::{
     Polynomial,
 };
 use crate::CYKind;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{channel, Sender};
-use std::sync::{Arc, Mutex};
-use std::thread;
 
 pub struct InstantonData<T> {
     pub inst: Vec<Polynomial<T>>,
     pub expalpha: Vec<(Polynomial<T>, Polynomial<T>)>,
 }
 
-fn compute_alpha_thread<T>(
-    tasks: Arc<Mutex<core::slice::Iter<usize>>>,
-    tx: Sender<(usize, Polynomial<T>)>,
-    fp: &FundamentalPeriod<T>,
-    poly_props: &PolynomialProperties<T>,
-) where
-    T: PolynomialCoeff<T>,
-{
-    loop {
-        let t;
-        {
-            let Some(i) = tasks.lock().unwrap().next() else {
-                break;
-            };
-            t = *i;
-        }
-        let mut a = fp.c0_inv.mul(&fp.c1[t], poly_props);
-        a.clean_up(poly_props);
-        tx.send((t, a)).unwrap();
-    }
-}
-
-fn compute_beta_thread<T>(
-    tasks: Arc<Mutex<std::collections::hash_set::Iter<(usize, usize)>>>,
-    tx: Sender<((usize, usize), Polynomial<T>)>,
-    fp: &FundamentalPeriod<T>,
-    poly_props: &PolynomialProperties<T>,
-) where
-    T: PolynomialCoeff<T>,
-{
-    loop {
-        let (t0, t1);
-        {
-            let Some(i) = tasks.lock().unwrap().next() else {
-                break;
-            };
-            t0 = i.0;
-            t1 = i.1;
-        }
-        let mut a = fp.c0_inv.mul(&fp.c2[&(t0, t1)], poly_props);
-        a.clean_up(poly_props);
-        tx.send(((t0, t1), a)).unwrap();
-    }
-}
-
-fn compute_f_thread<T>(
-    tasks: Arc<Mutex<std::collections::hash_set::Iter<(usize, usize)>>>,
-    tx: Sender<((usize, usize), Polynomial<T>)>,
-    alpha: &[Polynomial<T>],
-    beta: &HashMap<(usize, usize), Polynomial<T>>,
-    poly_props: &PolynomialProperties<T>,
-) where
-    T: PolynomialCoeff<T>,
-{
-    loop {
-        let (t0, t1);
-        {
-            let Some(i) = tasks.lock().unwrap().next() else {
-                break;
-            };
-            t0 = i.0;
-            t1 = i.1;
-        }
-        let mut p = alpha[t0].mul(&alpha[t1], poly_props);
-        p.sub_assign(&beta[&(t0, t1)], &poly_props.zero);
-        p.mul_scalar_assign(-1);
-        p.clean_up(poly_props);
-        tx.send(((t0, t1), p)).unwrap();
-    }
-}
-
-fn compute_inst_thread<T>(
-    tasks: Arc<Mutex<core::slice::Iter<usize>>>,
-    tx: Sender<(usize, Polynomial<T>)>,
+/// Computes one instanton correction, i.e. one entry of `InstantonData::inst`.
+fn compute_inst<T>(
+    t: usize,
     f_poly: &HashMap<(usize, usize), Polynomial<T>>,
     poly_props: &PolynomialProperties<T>,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
     cy_kind: CYKind,
-) where
+) -> Polynomial<T>
+where
     T: PolynomialCoeff<T>,
 {
     let h11 = poly_props.semigroup.elements.nrows();
     let mut intnum_ind = [0_usize; 3];
     let mut tmp_num = poly_props.zero.clone();
-    loop {
-        let t;
-        {
-            let Some(i) = tasks.lock().unwrap().next() else {
-                break;
-            };
-            t = *i;
-        }
-        let mut p = Polynomial::new();
-        for a in 0..h11 {
-            for b in a..h11 {
-                intnum_ind[0] = t;
-                intnum_ind[1] = a;
-                intnum_ind[2] = b;
-                if cy_kind.is_threefold() {
-                    intnum_ind.sort_unstable();
-                }
-                let Some(x) = intnum_dict.get(&(intnum_ind[0], intnum_ind[1], intnum_ind[2]))
-                else {
-                    continue;
-                };
-                let mut tmp_poly = f_poly[&(a, b)].clone(&poly_props.zero);
-                if a != b {
-                    tmp_poly.mul_scalar_assign(*x);
-                } else {
-                    tmp_num.assign(*x);
-                    tmp_num /= 2;
-                    tmp_poly.mul_scalar_assign(&tmp_num);
-                }
-                p.add_assign(&tmp_poly, &poly_props.zero);
+    let mut p = Polynomial::new();
+    for a in 0..h11 {
+        for b in a..h11 {
+            intnum_ind[0] = t;
+            intnum_ind[1] = a;
+            intnum_ind[2] = b;
+            if cy_kind.is_threefold() {
+                intnum_ind.sort_unstable();
             }
-        }
-        p.clean_up(poly_props);
-        tx.send((t, p)).unwrap();
-    }
-}
-
-#[allow(clippy::type_complexity)]
-fn compute_expalpha_thread<T>(
-    tasks: Arc<Mutex<core::slice::Iter<usize>>>,
-    tx: Sender<(
-        usize,
-        Result<(Polynomial<T>, Polynomial<T>), PolynomialError>,
-    )>,
-    alpha: &[Polynomial<T>],
-    poly_props: &PolynomialProperties<T>,
-) where
-    T: PolynomialCoeff<T>,
-{
-    loop {
-        let t;
-        {
-            let Some(i) = tasks.lock().unwrap().next() else {
-                break;
+            let Some(x) = intnum_dict.get(&(intnum_ind[0], intnum_ind[1], intnum_ind[2])) else {
+                continue;
             };
-            t = *i;
-        }
-        let p = alpha[t].exp_pos_neg(poly_props);
-        let p = match p {
-            Ok(mut pp) => {
-                pp.0.clean_up(poly_props);
-                pp.1.clean_up(poly_props);
-                Ok(pp)
+            let mut tmp_poly = f_poly[&(a, b)].clone(&poly_props.zero);
+            if a != b {
+                tmp_poly.mul_scalar_assign(*x);
+            } else {
+                tmp_num.assign(*x);
+                tmp_num /= 2;
+                tmp_poly.mul_scalar_assign(&tmp_num);
             }
-            Err(e) => Err(e),
-        };
-        // The receiver hangs up early when another worker reports an error, so a
-        // failed send just means that there is nothing left to do.
-        if tx.send((t, p)).is_err() {
-            break;
+            p.add_assign(&tmp_poly, &poly_props.zero);
         }
     }
+    p.clean_up(poly_props);
+    p
 }
 
 /// Compute instanton corrections, as well as other objects needed for the series inversion.
@@ -182,7 +63,6 @@ pub fn compute_instanton_data<T>(
     n_indices: usize,
     intnum_dict: &HashMap<(usize, usize, usize), i32>,
     cy_kind: CYKind,
-    n_threads: usize,
 ) -> Result<InstantonData<T>, PolynomialError>
 where
     T: PolynomialCoeff<T>,
@@ -190,110 +70,54 @@ where
     let h11 = poly_props.semigroup.elements.nrows();
 
     // Compute alpha polynomials
-    let mut alpha: Vec<_> = (0..h11).map(|_| Polynomial::<T>::new()).collect();
-    let tasks_alpha: Vec<_> = (0..h11).collect();
-    let tasks_alpha_iter = Arc::new(Mutex::new(tasks_alpha.iter()));
-    thread::scope(|s| {
-        let (tx, rx) = channel();
-        for _ in 0..n_threads {
-            let tx = tx.clone();
-            let tasks = Arc::clone(&tasks_alpha_iter);
-            s.spawn(|| {
-                compute_alpha_thread(tasks, tx, &fp, poly_props);
-            });
-        }
-        drop(tx);
-        while let Ok((t, p)) = rx.recv() {
-            alpha[t] = p;
-        }
-    });
+    let alpha: Vec<Polynomial<T>> = (0..h11)
+        .into_par_iter()
+        .map(|t| {
+            let mut a = fp.c0_inv.mul(&fp.c1[t], poly_props);
+            a.clean_up(poly_props);
+            a
+        })
+        .collect();
 
     // Compute beta polynomials
-    let mut beta = HashMap::new();
-    let tasks_beta_iter = Arc::new(Mutex::new(intnum_idxpairs.iter()));
-    thread::scope(|s| {
-        let (tx, rx) = channel();
-        for _ in 0..n_threads {
-            let tx = tx.clone();
-            let tasks = Arc::clone(&tasks_beta_iter);
-            s.spawn(|| {
-                compute_beta_thread(tasks, tx, &fp, poly_props);
-            });
-        }
-        drop(tx);
-        while let Ok((t, p)) = rx.recv() {
-            beta.insert(t, p);
-        }
-    });
+    let beta: HashMap<(usize, usize), Polynomial<T>> = intnum_idxpairs
+        .par_iter()
+        .map(|&(t0, t1)| {
+            let mut a = fp.c0_inv.mul(&fp.c2[&(t0, t1)], poly_props);
+            a.clean_up(poly_props);
+            ((t0, t1), a)
+        })
+        .collect();
 
     // Compute F polynomials
-    let mut f_poly = HashMap::new();
-    let tasks_f_iter = Arc::new(Mutex::new(intnum_idxpairs.iter()));
-    thread::scope(|s| {
-        let (tx, rx) = channel();
-        for _ in 0..n_threads {
-            let tx = tx.clone();
-            let tasks = Arc::clone(&tasks_f_iter);
-            s.spawn(|| {
-                compute_f_thread(tasks, tx, &alpha, &beta, poly_props);
-            });
-        }
-        drop(tx);
-        while let Ok((t, p)) = rx.recv() {
-            f_poly.insert(t, p);
-        }
-    });
+    let f_poly: HashMap<(usize, usize), Polynomial<T>> = intnum_idxpairs
+        .par_iter()
+        .map(|&(t0, t1)| {
+            let mut p = alpha[t0].mul(&alpha[t1], poly_props);
+            p.sub_assign(&beta[&(t0, t1)], &poly_props.zero);
+            p.mul_scalar_assign(-1);
+            p.clean_up(poly_props);
+            ((t0, t1), p)
+        })
+        .collect();
 
     // Compute instanton corrections
-    let mut inst: Vec<_> = (0..n_indices).map(|_| Polynomial::<T>::new()).collect();
-    let tasks_inst: Vec<_> = (0..n_indices).collect();
-    let tasks_inst_iter = Arc::new(Mutex::new(tasks_inst.iter()));
-    thread::scope(|s| {
-        let (tx, rx) = channel();
-        for _ in 0..n_threads {
-            let tx = tx.clone();
-            let tasks = Arc::clone(&tasks_inst_iter);
-            s.spawn(|| {
-                compute_inst_thread(tasks, tx, &f_poly, poly_props, intnum_dict, cy_kind);
-            });
-        }
-        drop(tx);
-        while let Ok((t, p)) = rx.recv() {
-            inst[t] = p;
-        }
-    });
-
-    // Compute expalpha polynomials
-    let mut expalpha: Vec<_> = (0..h11)
-        .map(|_| (Polynomial::<T>::new(), Polynomial::<T>::new()))
+    let inst: Vec<Polynomial<T>> = (0..n_indices)
+        .into_par_iter()
+        .map(|t| compute_inst(t, &f_poly, poly_props, intnum_dict, cy_kind))
         .collect();
-    let tasks_expalpha: Vec<_> = (0..h11).collect();
-    let tasks_expalpha_iter = Arc::new(Mutex::new(tasks_expalpha.iter()));
-    let mut error = None;
-    thread::scope(|s| {
-        let (tx, rx) = channel();
-        for _ in 0..n_threads {
-            let tx = tx.clone();
-            let tasks = Arc::clone(&tasks_expalpha_iter);
-            s.spawn(|| {
-                compute_expalpha_thread(tasks, tx, &alpha, poly_props);
-            });
-        }
-        drop(tx);
-        while let Ok((t, p)) = rx.recv() {
-            match p {
-                Ok(pp) => expalpha[t] = pp,
-                Err(e) => {
-                    error = Some(e);
-                    break;
-                }
-            }
-        }
-    });
 
-    if let Some(e) = error {
-        return Err(e);
-    }
+    // Compute expalpha polynomials. Collecting into a `Result` stops the
+    // remaining curves as soon as one of them fails.
+    let expalpha: Vec<(Polynomial<T>, Polynomial<T>)> = (0..h11)
+        .into_par_iter()
+        .map(|t| {
+            let mut p = alpha[t].exp_pos_neg(poly_props)?;
+            p.0.clean_up(poly_props);
+            p.1.clean_up(poly_props);
+            Ok(p)
+        })
+        .collect::<Result<_, PolynomialError>>()?;
 
     Ok(InstantonData { inst, expalpha })
 }
@@ -317,7 +141,7 @@ mod tests {
         let nefpart = Vec::new();
         let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
-        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs, 1);
+        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs);
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 
@@ -338,7 +162,6 @@ mod tests {
             n_indices,
             &intnum_dict,
             CYKind::Threefold,
-            1,
         );
         assert!(inst_data.is_ok());
         let inst_data = inst_data.unwrap();

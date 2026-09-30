@@ -52,30 +52,32 @@ where
         Some(n) => n as usize,
     };
 
-    let fp = fundamental_period::compute_omega(
-        &poly_props,
-        &sg,
-        &q,
-        &nefpart,
-        &intnum_idxpairs,
-        n_threads,
-    )
-    .unwrap();
+    // The stages parallelize with rayon and so run in whichever pool they are
+    // installed in. A private pool is built here rather than reaching for the
+    // global one, both to honour `n_threads` and to keep a library consumer's
+    // own use of rayon out of the picture.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(n_threads)
+        .build()
+        .expect("failed to build the worker thread pool");
 
-    let inst_data = instanton::compute_instanton_data(
-        fp,
-        &poly_props,
-        &intnum_idxpairs,
-        n_indices,
-        &intnum_dict,
-        cy_kind,
-        n_threads,
-    )
-    .unwrap();
+    let gv = pool.install(|| {
+        let fp =
+            fundamental_period::compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs)
+                .unwrap();
 
-    let gv =
-        series_inversion::invert_series(inst_data, &poly_props, invariant_kind, cy_kind, n_threads)
-            .unwrap();
+        let inst_data = instanton::compute_instanton_data(
+            fp,
+            &poly_props,
+            &intnum_idxpairs,
+            n_indices,
+            &intnum_dict,
+            cy_kind,
+        )
+        .unwrap();
+
+        series_inversion::invert_series(inst_data, &poly_props, invariant_kind, cy_kind).unwrap()
+    });
 
     let mut gv_sorted: Vec<_> = gv.into_iter().collect();
     gv_sorted.sort_unstable_by_key(|c| c.0 .0);

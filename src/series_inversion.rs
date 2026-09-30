@@ -5,13 +5,10 @@ pub mod error;
 use crate::polynomial::{coefficient::PolynomialCoeff, error::PolynomialError};
 use crate::{instanton::InstantonData, CYKind, InvariantKind, Polynomial, PolynomialProperties};
 use core::cmp::Ordering;
-use core::slice::Iter;
 use error::SeriesInversionError;
 use nalgebra::DVector;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::mpsc::{channel, Sender};
-use std::sync::{Arc, Mutex};
-use std::thread;
 
 /// Computes qN for generator curves
 fn compute_qn<T>(
@@ -39,103 +36,68 @@ where
     res
 }
 
-/// Computes qN and Li2(qN)
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-fn compute_li2qn_thread<T>(
-    tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(usize, Polynomial<T>, Result<Polynomial<T>, PolynomialError>)>,
+/// Computes qN for a single curve, starting from whichever of the qN of the
+/// previous levels is closest to it.
+fn compute_qn_from_previous<T>(
+    t: usize,
     previous_qn: &VecDeque<HashMap<usize, Polynomial<T>>>,
     previous_qn_ind: &VecDeque<Vec<usize>>,
     expalpha: &[(Polynomial<T>, Polynomial<T>)],
     poly_props: &PolynomialProperties<T>,
-    invariant_kind: InvariantKind,
-) where
+) -> Polynomial<T>
+where
     T: PolynomialCoeff<T>,
 {
     let h11 = poly_props.semigroup.elements.nrows();
     let mut closest_curve = Polynomial::new();
     let mut closest_curve_diff = DVector::zeros(h11);
     let mut tmp_curve_diff = DVector::zeros(h11);
-    let mut closest_dist: f32;
-    let mut tmp_dist: f32;
-    loop {
-        let t;
-        {
-            let Some(i) = tasks.lock().unwrap().next() else {
-                break;
-            };
-            t = *i;
-        }
-        closest_curve.clear();
-        let mut tmp_num = poly_props.zero.clone();
-        tmp_num.assign(1);
-        closest_curve.coeffs.insert(t, tmp_num);
-        closest_curve.nonzero.push(t);
-        closest_curve_diff
-            .iter_mut()
-            .zip(poly_props.semigroup.elements.column(t).iter())
-            .for_each(|(d, s)| *d = *s);
-        closest_dist = closest_curve_diff
-            .iter()
-            .map(|d| {
-                if *d == 0 {
-                    0_f32
-                } else {
-                    (*d as f32).abs().log2() + 1_f32
-                }
-            })
-            .sum();
-        // Now check to see if there is a better starting curve
-        for (prev_inds, prev_qns) in previous_qn_ind.iter().zip(previous_qn.iter()) {
-            for i in prev_inds {
-                poly_props
-                    .semigroup
-                    .elements
-                    .column(t)
-                    .iter()
-                    .zip(poly_props.semigroup.elements.column(*i).iter())
-                    .zip(tmp_curve_diff.iter_mut())
-                    .for_each(|((s1, s2), d)| *d = s1 - s2);
-                tmp_dist = tmp_curve_diff
-                    .iter()
-                    .map(|d| {
-                        if *d == 0 {
-                            0_f32
-                        } else {
-                            (*d as f32).abs().log2() + 1_f32
-                        }
-                    })
-                    .sum();
-                if tmp_dist < closest_dist {
-                    let Some(ind) = poly_props.monomial_map.get(&tmp_curve_diff.as_view()) else {
-                        continue;
-                    };
-                    let mut tmp_poly = Polynomial::new();
-                    let mut tmp_num = poly_props.zero.clone();
-                    tmp_num.assign(1);
-                    tmp_poly.coeffs.insert(*ind, tmp_num);
-                    tmp_poly.nonzero.push(*ind);
-                    closest_curve.clear();
-                    closest_curve = prev_qns[i].mul(&tmp_poly, poly_props);
-                    closest_dist = tmp_dist;
-                    closest_curve_diff
-                        .iter_mut()
-                        .zip(tmp_curve_diff.iter())
-                        .for_each(|(d, s)| *d = *s);
-                }
+    let mut tmp_num = poly_props.zero.clone();
+    tmp_num.assign(1);
+    closest_curve.coeffs.insert(t, tmp_num);
+    closest_curve.nonzero.push(t);
+    closest_curve_diff
+        .iter_mut()
+        .zip(poly_props.semigroup.elements.column(t).iter())
+        .for_each(|(d, s)| *d = *s);
+    let mut closest_dist: f32 = closest_curve_diff.iter().map(curve_diff_cost).sum();
+    // Now check to see if there is a better starting curve
+    for (prev_inds, prev_qns) in previous_qn_ind.iter().zip(previous_qn.iter()) {
+        for i in prev_inds {
+            poly_props
+                .semigroup
+                .elements
+                .column(t)
+                .iter()
+                .zip(poly_props.semigroup.elements.column(*i).iter())
+                .zip(tmp_curve_diff.iter_mut())
+                .for_each(|((s1, s2), d)| *d = s1 - s2);
+            let tmp_dist: f32 = tmp_curve_diff.iter().map(curve_diff_cost).sum();
+            if tmp_dist < closest_dist {
+                let Some(ind) = poly_props.monomial_map.get(&tmp_curve_diff.as_view()) else {
+                    continue;
+                };
+                let mut tmp_poly = Polynomial::new();
+                let mut tmp_num = poly_props.zero.clone();
+                tmp_num.assign(1);
+                tmp_poly.coeffs.insert(*ind, tmp_num);
+                tmp_poly.nonzero.push(*ind);
+                closest_curve = prev_qns[i].mul(&tmp_poly, poly_props);
+                closest_dist = tmp_dist;
+                closest_curve_diff.copy_from(&tmp_curve_diff);
             }
         }
-        // Now we compute qN and Li2(qN)
-        let tmp_qn = compute_qn(&closest_curve, &closest_curve_diff, expalpha, poly_props);
-        let tmp_li2qn = match invariant_kind {
-            InvariantKind::GV => tmp_qn.li_2(poly_props),
-            InvariantKind::GW => Ok(tmp_qn.clone(&poly_props.zero)),
-        };
-        // The receiver hangs up early when another worker reports an error, so a
-        // failed send just means that there is nothing left to do.
-        if tx.send((t, tmp_qn, tmp_li2qn)).is_err() {
-            break;
-        }
+    }
+    compute_qn(&closest_curve, &closest_curve_diff, expalpha, poly_props)
+}
+
+/// How expensive it is to walk one step of a curve-class difference, used to
+/// pick the cheapest already-computed qN to start from.
+fn curve_diff_cost(d: &i32) -> f32 {
+    if *d == 0 {
+        0_f32
+    } else {
+        (*d as f32).abs().log2() + 1_f32
     }
 }
 
@@ -145,7 +107,6 @@ pub fn invert_series<T>(
     poly_props: &PolynomialProperties<T>,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
-    n_threads: usize,
 ) -> Result<HashMap<(usize, usize), T>, SeriesInversionError>
 where
     T: PolynomialCoeff<T>,
@@ -288,57 +249,54 @@ where
                 }
             }
         }
-        let mut computed_qn = HashMap::new();
-        // compute qN and Li2(qN) in parallel and subtract from the instanton corrections
-        let tasks_iter = Arc::new(Mutex::new(qn_to_compute.iter()));
-        let mut error = None;
-        thread::scope(|s| {
-            let (tx, rx) = channel();
-            for _ in 0..n_threads {
-                let tx = tx.clone();
-                let tasks = Arc::clone(&tasks_iter);
-                s.spawn(|| {
-                    compute_li2qn_thread(
-                        tasks,
-                        tx,
-                        &previous_qn,
-                        &previous_qn_ind,
-                        &expalpha,
-                        poly_props,
-                        invariant_kind,
-                    );
-                });
-            }
-            drop(tx);
-            while let Ok((j, qn, li2qn_r)) = rx.recv() {
-                let Ok(li2qn) = li2qn_r else {
-                    error = li2qn_r.err();
-                    break;
+        // Compute qN and Li2(qN) in parallel, then subtract them from the
+        // instanton corrections. GW invariants subtract qN itself, so there is
+        // no second polynomial to compute or hold on to for them.
+        let computed: Vec<(usize, Polynomial<T>, Option<Polynomial<T>>)> = qn_to_compute
+            .par_iter()
+            .map(|&j| {
+                let qn = compute_qn_from_previous(
+                    j,
+                    &previous_qn,
+                    &previous_qn_ind,
+                    &expalpha,
+                    poly_props,
+                );
+                let li2qn = match invariant_kind {
+                    InvariantKind::GV => Some(qn.li_2(poly_props)?),
+                    InvariantKind::GW => None,
                 };
-                computed_qn.insert(j, qn.clone(&poly_props.zero));
+                Ok((j, qn, li2qn))
+            })
+            .collect::<Result<_, PolynomialError>>()?;
+
+        // Every instanton correction is updated independently of the others, so
+        // the subtraction is parallelized over them. Each one walks the curves
+        // in the same order, which keeps the result independent of scheduling.
+        inst.par_iter_mut().enumerate().for_each(|(k, inst_k)| {
+            let mut tmp_gv = poly_props.zero.clone();
+            for (j, qn, li2qn) in computed.iter() {
+                let li2qn = li2qn.as_ref().unwrap_or(qn);
                 if cy_kind.is_threefold() {
-                    for (k, inst_k) in inst.iter_mut().enumerate() {
-                        if poly_props.semigroup.elements[(k, j)] == 0 {
-                            continue;
-                        }
-                        let mut tmp_poly = li2qn.clone(&poly_props.zero);
-                        tmp_gv.assign(&gv_qn_to_compute[&j]);
-                        tmp_gv *= poly_props.semigroup.elements[(k, j)];
-                        tmp_poly.mul_scalar_assign(&tmp_gv);
-                        inst_k.sub_assign(&tmp_poly, &poly_props.zero);
+                    let e = poly_props.semigroup.elements[(k, *j)];
+                    if e == 0 {
+                        continue;
                     }
+                    let mut tmp_poly = li2qn.clone(&poly_props.zero);
+                    tmp_gv.assign(&gv_qn_to_compute[j]);
+                    tmp_gv *= e;
+                    tmp_poly.mul_scalar_assign(&tmp_gv);
+                    inst_k.sub_assign(&tmp_poly, &poly_props.zero);
                 } else {
-                    for kk in h22gv_qn_to_compute[&j].iter() {
+                    for kk in h22gv_qn_to_compute[j].iter().filter(|kk| kk.0 == k) {
                         let mut tmp_poly = li2qn.clone(&poly_props.zero);
                         tmp_poly.mul_scalar_assign(&kk.1);
-                        inst[kk.0].sub_assign(&tmp_poly, &poly_props.zero);
+                        inst_k.sub_assign(&tmp_poly, &poly_props.zero);
                     }
                 }
             }
         });
-        if let Some(e) = error {
-            return Err(e.into());
-        }
+        let computed_qn: HashMap<_, _> = computed.into_iter().map(|(j, qn, _)| (j, qn)).collect();
         // Now we update the cache of previous qN
         previous_qn.pop_front();
         previous_qn_ind.pop_front();

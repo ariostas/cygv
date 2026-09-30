@@ -6,12 +6,11 @@ use crate::factorial::{factorial_prod, harmonic};
 use crate::polynomial::{coefficient::PolynomialCoeff, Polynomial};
 use crate::semigroup::Semigroup;
 use crate::PolynomialProperties;
-use core::slice::Iter;
 use error::FundamentalPeriodError;
 use nalgebra::{DMatrix, DMatrixView, DVector};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{channel, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::thread;
 
 /// Group curves by the number of negative intersections with the GLSM
@@ -34,14 +33,42 @@ fn group_by_neg_int(curves_dot_q: DMatrixView<i32>) -> (Vec<usize>, Vec<usize>, 
     (neg0, neg1, neg2)
 }
 
-/// Computes the c coefficients for curves that have zero negative
-/// intersections with the GLSM basis. The results are sent so
-/// that the main thread assembles the polynomials.
+/// One coefficient of the fundamental period or of one of its derivatives: the
+/// index of the curve it belongs to, the derivative indices (none for `c0`, one
+/// for `c1`, two for `c2`), and the value.
+type CCoeff<T> = (usize, Option<usize>, Option<usize>, T);
+
+/// Scratch space that the `compute_c_*neg` routines reuse across curves, so
+/// that the bignums backing it are allocated once per rayon job rather than
+/// once per curve.
+struct CScratch<T> {
+    /// The A vector, with one entry per element of the GLSM basis.
+    a: Vec<T>,
+    fact: T,
+    tmp0: T,
+    tmp1: T,
+    res: T,
+}
+
+impl<T: PolynomialCoeff<T>> CScratch<T> {
+    fn new(template_var: &T, h11: usize) -> Self {
+        Self {
+            a: (0..h11).map(|_| template_var.clone()).collect(),
+            fact: template_var.clone(),
+            tmp0: template_var.clone(),
+            tmp1: template_var.clone(),
+            res: template_var.clone(),
+        }
+    }
+}
+
+/// Computes the c coefficients for a curve that has zero negative
+/// intersections with the GLSM basis, pushing them onto `out`.
 #[allow(clippy::too_many_arguments)]
 fn compute_c_0neg<T>(
-    tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(usize, Option<usize>, Option<usize>, T)>,
-    template_var: &T,
+    t: usize,
+    scratch: &mut CScratch<T>,
+    out: &mut Vec<CCoeff<T>>,
     q: DMatrixView<i32>,
     q0: DMatrixView<i32>,
     curves_dot_q: DMatrixView<i32>,
@@ -50,81 +77,73 @@ fn compute_c_0neg<T>(
 ) where
     T: PolynomialCoeff<T>,
 {
-    let mut a: Vec<_> = (0..q.ncols()).map(|_| template_var.clone()).collect();
-    let mut tmp_num0 = template_var.clone();
-    let mut tmp_num1 = template_var.clone();
-    let mut c0fact = template_var.clone();
-    let mut tmp_final = template_var.clone();
-    loop {
-        let t;
+    let CScratch {
+        a,
+        fact: c0fact,
+        tmp0: tmp_num0,
+        tmp1: tmp_num1,
+        res: tmp_final,
+    } = scratch;
+    // compute the common c0 factor
+    let n: Vec<_> = curves_dot_q0.column(t).iter().map(|&c| c as u32).collect();
+    let d: Vec<_> = curves_dot_q.column(t).iter().map(|&c| c as u32).collect();
+    factorial_prod(&n, &d, c0fact);
+    out.push((t, None, None, c0fact.clone()));
+    // Compute A vector
+    for (i, aa) in a.iter_mut().enumerate() {
+        aa.assign(0);
+        for (&qq0, &cdq0) in q0.column(i).iter().zip(curves_dot_q0.column(t).iter()) {
+            harmonic(cdq0 as u32, 1, tmp_num0, tmp_num1);
+            *tmp_num0 *= qq0;
+            *aa += &*tmp_num0;
+        }
+        for (&qq, &cdq) in q.column(i).iter().zip(curves_dot_q.column(t).iter()) {
+            harmonic(cdq as u32, 1, tmp_num0, tmp_num1);
+            *tmp_num0 *= qq;
+            *aa -= &*tmp_num0;
+        }
+        tmp_final.assign(&*c0fact);
+        *tmp_final *= &*aa;
+        out.push((t, Some(i), None, tmp_final.clone()));
+    }
+    // Finally, compute B elements
+    for &(aa, bb) in beta_pairs.iter() {
+        tmp_final.assign(0);
+        for ((&q0a, &q0b), &cdq0) in q0
+            .column(aa)
+            .iter()
+            .zip(q0.column(bb).iter())
+            .zip(curves_dot_q0.column(t).iter())
         {
-            let Some(i) = tasks.lock().unwrap().next() else {
-                break;
-            };
-            t = *i;
+            harmonic(cdq0 as u32, 2, tmp_num0, tmp_num1);
+            *tmp_num0 *= q0a * q0b;
+            *tmp_final -= &*tmp_num0;
         }
-        // compute the common c0 factor
-        let n: Vec<_> = curves_dot_q0.column(t).iter().map(|&c| c as u32).collect();
-        let d: Vec<_> = curves_dot_q.column(t).iter().map(|&c| c as u32).collect();
-        factorial_prod(&n, &d, &mut c0fact);
-        tx.send((t, None, None, c0fact.clone())).unwrap();
-        // Compute A vector
-        for (i, aa) in a.iter_mut().enumerate() {
-            aa.assign(0);
-            for (&qq0, &cdq0) in q0.column(i).iter().zip(curves_dot_q0.column(t).iter()) {
-                harmonic(cdq0 as u32, 1, &mut tmp_num0, &mut tmp_num1);
-                tmp_num0 *= qq0;
-                *aa += &tmp_num0;
-            }
-            for (&qq, &cdq) in q.column(i).iter().zip(curves_dot_q.column(t).iter()) {
-                harmonic(cdq as u32, 1, &mut tmp_num0, &mut tmp_num1);
-                tmp_num0 *= qq;
-                *aa -= &tmp_num0;
-            }
-            tmp_final.assign(&c0fact);
-            tmp_final *= &*aa;
-            tx.send((t, Some(i), None, tmp_final.clone())).unwrap();
+        for ((&qa, &qb), &cdq) in q
+            .column(aa)
+            .iter()
+            .zip(q.column(bb).iter())
+            .zip(curves_dot_q.column(t).iter())
+        {
+            harmonic(cdq as u32, 2, tmp_num0, tmp_num1);
+            *tmp_num0 *= qa * qb;
+            *tmp_final += &*tmp_num0;
         }
-        // Finally, compute B elements
-        for &(aa, bb) in beta_pairs.iter() {
-            tmp_final.assign(0);
-            for ((&q0a, &q0b), &cdq0) in q0
-                .column(aa)
-                .iter()
-                .zip(q0.column(bb).iter())
-                .zip(curves_dot_q0.column(t).iter())
-            {
-                harmonic(cdq0 as u32, 2, &mut tmp_num0, &mut tmp_num1);
-                tmp_num0 *= q0a * q0b;
-                tmp_final -= &tmp_num0;
-            }
-            for ((&qa, &qb), &cdq) in q
-                .column(aa)
-                .iter()
-                .zip(q.column(bb).iter())
-                .zip(curves_dot_q.column(t).iter())
-            {
-                harmonic(cdq as u32, 2, &mut tmp_num0, &mut tmp_num1);
-                tmp_num0 *= qa * qb;
-                tmp_final += &tmp_num0;
-            }
-            tmp_num0.assign(&a[aa]);
-            tmp_num0 *= &a[bb];
-            tmp_final += &tmp_num0;
-            tmp_final *= &c0fact;
-            tx.send((t, Some(aa), Some(bb), tmp_final.clone())).unwrap();
-        }
+        tmp_num0.assign(&a[aa]);
+        *tmp_num0 *= &a[bb];
+        *tmp_final += &*tmp_num0;
+        *tmp_final *= &*c0fact;
+        out.push((t, Some(aa), Some(bb), tmp_final.clone()));
     }
 }
 
-/// Computes the c coefficients for curves that have one negative
-/// intersection with the GLSM basis. The results are sent so
-/// that the main thread assembles the polynomials.
+/// Computes the c coefficients for a curve that has one negative
+/// intersection with the GLSM basis, pushing them onto `out`.
 #[allow(clippy::too_many_arguments)]
 fn compute_c_1neg<T>(
-    tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(usize, Option<usize>, Option<usize>, T)>,
-    template_var: &T,
+    t: usize,
+    scratch: &mut CScratch<T>,
+    out: &mut Vec<CCoeff<T>>,
     q: DMatrixView<i32>,
     q0: DMatrixView<i32>,
     curves_dot_q: DMatrixView<i32>,
@@ -133,94 +152,86 @@ fn compute_c_1neg<T>(
 ) where
     T: PolynomialCoeff<T>,
 {
-    let mut a: Vec<_> = (0..q.ncols()).map(|_| template_var.clone()).collect();
-    let mut tmp_fact = template_var.clone();
-    let mut tmp_num0 = template_var.clone();
-    let mut tmp_num1 = template_var.clone();
-    let mut tmp_final = template_var.clone();
-    loop {
-        let t;
-        {
-            let Some(i) = tasks.lock().unwrap().next() else {
-                break;
-            };
-            t = *i;
-        }
-        let neg_ints: Vec<_> = curves_dot_q
-            .column(t)
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.is_negative())
-            .map(|(i, c)| (i, *c))
-            .collect();
-        let mut neg_ints_iter = neg_ints.into_iter();
-        let (neg_idx, neg_int) = neg_ints_iter
-            .next()
-            .expect("the curve doesn't have negative intersections");
-        assert!(
-            neg_ints_iter.next().is_none(),
-            "the curve has more than one negative intersection"
-        );
-        let sn = if neg_int % 2 == 0 { -1 } else { 1 };
+    let CScratch {
+        a,
+        fact: tmp_fact,
+        tmp0: tmp_num0,
+        tmp1: tmp_num1,
+        res: tmp_final,
+    } = scratch;
+    let neg_ints: Vec<_> = curves_dot_q
+        .column(t)
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.is_negative())
+        .map(|(i, c)| (i, *c))
+        .collect();
+    let mut neg_ints_iter = neg_ints.into_iter();
+    let (neg_idx, neg_int) = neg_ints_iter
+        .next()
+        .expect("the curve doesn't have negative intersections");
+    assert!(
+        neg_ints_iter.next().is_none(),
+        "the curve has more than one negative intersection"
+    );
+    let sn = if neg_int % 2 == 0 { -1 } else { 1 };
 
-        let mut n: Vec<_> = curves_dot_q0.column(t).iter().map(|c| *c as u32).collect();
-        n.push((-neg_int - 1) as u32);
-        let d: Vec<_> = curves_dot_q
-            .column(t)
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != neg_idx)
-            .map(|(_, c)| *c as u32)
-            .collect();
-        factorial_prod(&n, &d, &mut tmp_fact);
-        // Compute A vector
-        for (i, aa) in a.iter_mut().enumerate() {
-            aa.assign(0);
-            for (&qq0, &cdq0) in q0.column(i).iter().zip(curves_dot_q0.column(t).iter()) {
-                harmonic(cdq0 as u32, 1, &mut tmp_num0, &mut tmp_num1);
-                tmp_num0 *= qq0;
-                *aa += &tmp_num0;
-            }
-            for (&qq, &cdq) in q.column(i).iter().zip(curves_dot_q.column(t).iter()) {
-                harmonic(
-                    if cdq.is_negative() {
-                        (-cdq - 1) as u32
-                    } else {
-                        cdq as u32
-                    },
-                    1,
-                    &mut tmp_num0,
-                    &mut tmp_num1,
-                );
-                tmp_num0 *= qq;
-                *aa -= &tmp_num0;
-            }
-            tmp_final.assign(&tmp_fact);
-            tmp_final *= sn;
-            tmp_final *= q[(neg_idx, i)];
-            tx.send((t, Some(i), None, tmp_final.clone())).unwrap();
+    let mut n: Vec<_> = curves_dot_q0.column(t).iter().map(|c| *c as u32).collect();
+    n.push((-neg_int - 1) as u32);
+    let d: Vec<_> = curves_dot_q
+        .column(t)
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != neg_idx)
+        .map(|(_, c)| *c as u32)
+        .collect();
+    factorial_prod(&n, &d, tmp_fact);
+    // Compute A vector
+    for (i, aa) in a.iter_mut().enumerate() {
+        aa.assign(0);
+        for (&qq0, &cdq0) in q0.column(i).iter().zip(curves_dot_q0.column(t).iter()) {
+            harmonic(cdq0 as u32, 1, tmp_num0, tmp_num1);
+            *tmp_num0 *= qq0;
+            *aa += &*tmp_num0;
         }
-        for &(aa, bb) in beta_pairs.iter() {
-            tmp_final.assign(&tmp_fact);
-            tmp_num0.assign(&a[aa]);
-            tmp_num1.assign(&a[bb]);
-            tmp_num0 *= q[(neg_idx, bb)];
-            tmp_num1 *= q[(neg_idx, aa)];
-            tmp_num0 += &tmp_num1;
-            tmp_num0 *= sn;
-            tmp_final *= &tmp_num0;
-            tx.send((t, Some(aa), Some(bb), tmp_final.clone())).unwrap();
+        for (&qq, &cdq) in q.column(i).iter().zip(curves_dot_q.column(t).iter()) {
+            harmonic(
+                if cdq.is_negative() {
+                    (-cdq - 1) as u32
+                } else {
+                    cdq as u32
+                },
+                1,
+                tmp_num0,
+                tmp_num1,
+            );
+            *tmp_num0 *= qq;
+            *aa -= &*tmp_num0;
         }
+        tmp_final.assign(&*tmp_fact);
+        *tmp_final *= sn;
+        *tmp_final *= q[(neg_idx, i)];
+        out.push((t, Some(i), None, tmp_final.clone()));
+    }
+    for &(aa, bb) in beta_pairs.iter() {
+        tmp_final.assign(&*tmp_fact);
+        tmp_num0.assign(&a[aa]);
+        tmp_num1.assign(&a[bb]);
+        *tmp_num0 *= q[(neg_idx, bb)];
+        *tmp_num1 *= q[(neg_idx, aa)];
+        *tmp_num0 += &*tmp_num1;
+        *tmp_num0 *= sn;
+        *tmp_final *= &*tmp_num0;
+        out.push((t, Some(aa), Some(bb), tmp_final.clone()));
     }
 }
 
-/// Computes the c coefficients for curves that have two negative
-/// intersection with the GLSM basis. The results are sent so
-/// that the main thread assembles the polynomials.
+/// Computes the c coefficients for a curve that has two negative
+/// intersections with the GLSM basis, pushing them onto `out`.
 fn compute_c_2neg<T>(
-    tasks: Arc<Mutex<Iter<usize>>>,
-    tx: Sender<(usize, Option<usize>, Option<usize>, T)>,
-    template_var: &T,
+    t: usize,
+    scratch: &mut CScratch<T>,
+    out: &mut Vec<CCoeff<T>>,
     q: DMatrixView<i32>,
     curves_dot_q: DMatrixView<i32>,
     curves_dot_q0: DMatrixView<i32>,
@@ -228,58 +239,51 @@ fn compute_c_2neg<T>(
 ) where
     T: PolynomialCoeff<T>,
 {
-    let mut tmp_fact = template_var.clone();
-    let mut tmp_final = template_var.clone();
-    loop {
-        let t;
-        {
-            let Some(i) = tasks.lock().unwrap().next() else {
-                break;
-            };
-            t = *i;
-        }
-        let neg_ints: Vec<_> = curves_dot_q
-            .column(t)
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.is_negative())
-            .map(|(i, c)| (i, *c))
-            .collect();
-        let mut neg_ints_iter = neg_ints.into_iter();
-        let (neg_idx1, neg_int1) = neg_ints_iter
-            .next()
-            .expect("the curve doesn't have negative intersections");
-        let (neg_idx2, neg_int2) = neg_ints_iter
-            .next()
-            .expect("the curve only has one negative intersection");
-        assert!(
-            neg_ints_iter.next().is_none(),
-            "the curve has more than two negative intersections"
-        );
-        let sn = if (neg_int1 + neg_int2) % 2 == 0 {
-            1
-        } else {
-            -1
-        };
+    let CScratch {
+        fact: tmp_fact,
+        res: tmp_final,
+        ..
+    } = scratch;
+    let neg_ints: Vec<_> = curves_dot_q
+        .column(t)
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.is_negative())
+        .map(|(i, c)| (i, *c))
+        .collect();
+    let mut neg_ints_iter = neg_ints.into_iter();
+    let (neg_idx1, neg_int1) = neg_ints_iter
+        .next()
+        .expect("the curve doesn't have negative intersections");
+    let (neg_idx2, neg_int2) = neg_ints_iter
+        .next()
+        .expect("the curve only has one negative intersection");
+    assert!(
+        neg_ints_iter.next().is_none(),
+        "the curve has more than two negative intersections"
+    );
+    let sn = if (neg_int1 + neg_int2) % 2 == 0 {
+        1
+    } else {
+        -1
+    };
 
-        let mut n: Vec<_> = curves_dot_q0.column(t).iter().map(|c| *c as u32).collect();
-        n.push((-neg_int1 - 1) as u32);
-        n.push((-neg_int2 - 1) as u32);
-        let d: Vec<_> = curves_dot_q
-            .column(t)
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != neg_idx1 && *i != neg_idx2)
-            .map(|(_, c)| *c as u32)
-            .collect();
-        factorial_prod(&n, &d, &mut tmp_fact);
-        tmp_fact *= sn;
-        for &(aa, bb) in beta_pairs.iter() {
-            tmp_final.assign(&tmp_fact);
-            tmp_final *=
-                q[(neg_idx1, aa)] * q[(neg_idx2, bb)] + q[(neg_idx1, bb)] * q[(neg_idx2, aa)];
-            tx.send((t, Some(aa), Some(bb), tmp_final.clone())).unwrap();
-        }
+    let mut n: Vec<_> = curves_dot_q0.column(t).iter().map(|c| *c as u32).collect();
+    n.push((-neg_int1 - 1) as u32);
+    n.push((-neg_int2 - 1) as u32);
+    let d: Vec<_> = curves_dot_q
+        .column(t)
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != neg_idx1 && *i != neg_idx2)
+        .map(|(_, c)| *c as u32)
+        .collect();
+    factorial_prod(&n, &d, tmp_fact);
+    *tmp_fact *= sn;
+    for &(aa, bb) in beta_pairs.iter() {
+        tmp_final.assign(&*tmp_fact);
+        *tmp_final *= q[(neg_idx1, aa)] * q[(neg_idx2, bb)] + q[(neg_idx1, bb)] * q[(neg_idx2, aa)];
+        out.push((t, Some(aa), Some(bb), tmp_final.clone()));
     }
 }
 
@@ -293,6 +297,95 @@ pub struct FundamentalPeriod<T> {
     pub c0_inv: Polynomial<T>,
 }
 
+/// Runs one of the `compute_c_*neg` routines over a set of curves in parallel,
+/// sending the coefficients of each curve down `tx` as soon as they are ready.
+///
+/// The scratch space is built once per rayon job rather than once per curve.
+fn send_c<T, F>(
+    curves: &[usize],
+    poly_props: &PolynomialProperties<T>,
+    h11: usize,
+    tx: &SyncSender<Vec<CCoeff<T>>>,
+    compute: F,
+) where
+    T: PolynomialCoeff<T>,
+    F: Fn(usize, &mut CScratch<T>, &mut Vec<CCoeff<T>>) + Sync,
+{
+    curves.par_iter().for_each_init(
+        || CScratch::new(&poly_props.zero_cutoff, h11),
+        |scratch, &t| {
+            let mut out = Vec::new();
+            compute(t, scratch, &mut out);
+            // The receiver only goes away early if filing panicked, in which
+            // case that panic is the one worth reporting.
+            let _ = tx.send(out);
+        },
+    );
+}
+
+/// Runs `produce`, which sends coefficients down the channel it is given, while
+/// a separate thread files them into their polynomials with `file` as they
+/// arrive.
+///
+/// Filing the coefficients as they arrive, rather than collecting them all and
+/// filing them afterwards, is what keeps the memory of this stage down: the
+/// collected lists would hold every coefficient at once while the polynomials
+/// fill up, which puts the peak up by half on the realistic models, and the
+/// filing would become a serial tail. The filing thread sits outside the rayon
+/// pool, so that waiting on the channel can never take a worker away from the
+/// producers, even when the pool only has one.
+///
+/// The channel is bounded, so that the producers wait for the filing thread
+/// whenever it falls behind, e.g. because the machine is busy, rather than
+/// piling up coefficients faster than they can be filed. It never waits on the
+/// producers, so this cannot deadlock.
+fn file_while<T, R>(
+    mut file: impl FnMut(CCoeff<T>) + Send,
+    produce: impl FnOnce(&SyncSender<Vec<CCoeff<T>>>) -> R,
+) -> R
+where
+    T: PolynomialCoeff<T>,
+{
+    // A few curves' worth per worker is plenty to smooth out the jitter.
+    let (tx, rx) = sync_channel::<Vec<CCoeff<T>>>(8 * rayon::current_num_threads());
+    thread::scope(|s| {
+        s.spawn(move || {
+            for coeffs in rx {
+                coeffs.into_iter().for_each(&mut file);
+            }
+        });
+        let res = produce(&tx);
+        // Hang up, so that the filing thread stops once the channel is drained.
+        drop(tx);
+        res
+    })
+}
+
+/// Files a coefficient that a `compute_c_*neg` routine produced into the
+/// polynomial it belongs to. `c0` is only needed while it is being computed.
+fn file_coeff<T>(
+    (i, a, b, c): CCoeff<T>,
+    c0: Option<&mut Polynomial<T>>,
+    c1: &mut [Polynomial<T>],
+    c2: &mut HashMap<(usize, usize), Polynomial<T>>,
+) where
+    T: PolynomialCoeff<T>,
+{
+    match (a, b) {
+        (None, _) => {
+            c0.expect("a coefficient of c0 arrived after c0 was complete")
+                .coeffs
+                .insert(i, c);
+        }
+        (Some(a), None) => {
+            c1[a].coeffs.insert(i, c);
+        }
+        (Some(a), Some(b)) => {
+            c2.get_mut(&(a, b)).unwrap().coeffs.insert(i, c);
+        }
+    }
+}
+
 // -> Result<(Polynomial<T>,Vec<Polynomial<T>>,HashMap<(u32,u32),Polynomial<T>>),FundamentalPeriodError>
 /// Computes the fundamental period $\omega$, its inverse $\omega^{-1}$, and polynomials with first
 /// and second derivatives of its coefficients.
@@ -302,7 +395,6 @@ pub fn compute_omega<T>(
     q: &DMatrix<i32>,
     nefpart: &[DVector<i32>],
     intnum_idxpairs: &HashSet<(usize, usize)>,
-    n_threads: usize,
 ) -> Result<FundamentalPeriod<T>, FundamentalPeriodError>
 where
     T: PolynomialCoeff<T>,
@@ -344,121 +436,76 @@ where
     let (neg0, neg1, neg2) = group_by_neg_int(curves_dot_q.as_view());
 
     let mut c0 = Polynomial::new();
-    let mut c1 = Vec::new();
-    for _ in 0..h11 {
-        c1.push(Polynomial::new());
-    }
-    let mut c2 = HashMap::new();
-    for &(a, b) in beta_pairs.iter() {
-        c2.insert((a, b), Polynomial::new());
-    }
-    let mut c0_inv = Polynomial::new();
+    let mut c1: Vec<Polynomial<T>> = (0..h11).map(|_| Polynomial::new()).collect();
+    let mut c2: HashMap<_, _> = beta_pairs
+        .iter()
+        .map(|&(a, b)| ((a, b), Polynomial::new()))
+        .collect();
 
     // Start by using curves with zero negative intersections.
-    let tasks_c0 = Arc::new(Mutex::new(neg0.iter()));
-
-    thread::scope(|s| {
-        let (tx, rx) = channel();
-
-        for _ in 0..n_threads {
-            let tx = tx.clone();
-            let tasks = Arc::clone(&tasks_c0);
-            s.spawn(|| {
+    file_while(
+        |coeff| file_coeff(coeff, Some(&mut c0), &mut c1, &mut c2),
+        |tx| {
+            send_c(&neg0, poly_props, h11, tx, |t, scratch, out| {
                 compute_c_0neg(
-                    tasks,
-                    tx,
-                    &poly_props.zero_cutoff,
+                    t,
+                    scratch,
+                    out,
                     q.as_view(),
                     q0.as_view(),
                     curves_dot_q.as_view(),
                     curves_dot_q0.as_view(),
                     &beta_pairs,
                 )
-            });
-        }
-        drop(tx);
+            })
+        },
+    );
 
-        while let Ok(msg) = rx.recv() {
-            match msg {
-                (i, None, None, c) => {
-                    c0.coeffs.insert(i, c);
-                }
-                (i, Some(a), None, c) => {
-                    c1[a].coeffs.insert(i, c);
-                }
-                (i, Some(a), Some(b), c) => {
-                    c2.get_mut(&(a, b)).unwrap().coeffs.insert(i, c);
-                }
-                _ => {}
-            }
-        }
-    });
     c0.nonzero = c0.coeffs.keys().cloned().collect();
     c0.nonzero.sort_unstable();
     c0.clean_up(poly_props);
 
-    // Now compute the inverse and derivatives in parallel
-    let tasks_c1 = Arc::new(Mutex::new(neg1.iter()));
-    let tasks_c2 = Arc::new(Mutex::new(neg2.iter()));
+    // Now compute the inverse and the derivatives in parallel.
+    let (mut c0_inv, _) = file_while(
+        |coeff| file_coeff(coeff, None, &mut c1, &mut c2),
+        |tx| {
+            rayon::join(
+                || c0.recipr(poly_props).unwrap(),
+                || {
+                    rayon::join(
+                        || {
+                            send_c(&neg1, poly_props, h11, tx, |t, scratch, out| {
+                                compute_c_1neg(
+                                    t,
+                                    scratch,
+                                    out,
+                                    q.as_view(),
+                                    q0.as_view(),
+                                    curves_dot_q.as_view(),
+                                    curves_dot_q0.as_view(),
+                                    &beta_pairs,
+                                )
+                            })
+                        },
+                        || {
+                            send_c(&neg2, poly_props, h11, tx, |t, scratch, out| {
+                                compute_c_2neg(
+                                    t,
+                                    scratch,
+                                    out,
+                                    q.as_view(),
+                                    curves_dot_q.as_view(),
+                                    curves_dot_q0.as_view(),
+                                    &beta_pairs,
+                                )
+                            })
+                        },
+                    )
+                },
+            )
+        },
+    );
 
-    thread::scope(|s| {
-        // Compute inverse of fundamental period
-        s.spawn(|| {
-            let tmp_poly = c0.recipr(poly_props).unwrap();
-            tmp_poly.move_into(&mut c0_inv);
-        });
-
-        let (tx, rx) = channel();
-
-        // Compute c1
-        for _ in 0..n_threads {
-            let tx = tx.clone();
-            let tasks = Arc::clone(&tasks_c1);
-            s.spawn(|| {
-                compute_c_1neg(
-                    tasks,
-                    tx,
-                    &poly_props.zero_cutoff,
-                    q.as_view(),
-                    q0.as_view(),
-                    curves_dot_q.as_view(),
-                    curves_dot_q0.as_view(),
-                    &beta_pairs,
-                )
-            });
-        }
-
-        // Compute c2
-        for _ in 0..n_threads {
-            let tx = tx.clone();
-            let tasks = Arc::clone(&tasks_c2);
-            s.spawn(|| {
-                compute_c_2neg(
-                    tasks,
-                    tx,
-                    &poly_props.zero_cutoff,
-                    q.as_view(),
-                    curves_dot_q.as_view(),
-                    curves_dot_q0.as_view(),
-                    &beta_pairs,
-                )
-            });
-        }
-
-        drop(tx);
-
-        while let Ok(msg) = rx.recv() {
-            match msg {
-                (i, Some(a), None, c) => {
-                    c1[a].coeffs.insert(i, c);
-                }
-                (i, Some(a), Some(b), c) => {
-                    c2.get_mut(&(a, b)).unwrap().coeffs.insert(i, c);
-                }
-                _ => {}
-            }
-        }
-    });
     c0_inv.clean_up(poly_props);
     for p in c1.iter_mut() {
         p.nonzero = p.coeffs.keys().cloned().collect();
@@ -499,7 +546,7 @@ mod tests {
         let nefpart = Vec::new();
         let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
-        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs, 1);
+        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs);
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 

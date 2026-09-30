@@ -318,6 +318,7 @@ dependencies = [
  "gmp-mpfr-sys",
  "nalgebra",
  "pyo3",
+ "rayon",
  "rug",
  "yaml-rust2",
 ]
