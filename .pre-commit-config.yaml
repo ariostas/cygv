@@ -1,3 +1,6 @@
+# cgv/ is a standalone C program with its own tools and tests, and python/cygv/_cgv_run.py and
+# _cgv_phase.py are unchanged copies of cgv/tools/ (python/tests/test_cgv.py checks that): not linted here.
+exclude: ^(cgv/|python/cygv/_cgv_(run|phase)\.py$)
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: "v6.0.0"

@@ -1,0 +1,6 @@
+[
+  {"name": "gpu0",   "kind": "gpu", "cmd": ["/path/to/cgv/cgv_gpu", "-q", "-t", "8", "-g", "0"]},
+  {"name": "local",  "cmd": ["/path/to/cgv/cgv", "-q", "-t", "16"]},
+  {"name": "node1",  "ssh": "user@node1", "cmd": ["~/cgv/cgv", "-q", "-t", "32"]},
+  {"name": "mac",    "ssh": "user@mac",   "cmd": ["~/cgv/cgv", "-q", "-t", "10"]}
+]
