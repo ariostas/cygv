@@ -1,6 +1,11 @@
 # Changes since the 2026-09-23 snapshot
 
 ## Behaviour
+- **Vex phases** (new, additive): cgv accepts an optional strata section (one exact curve class per vex 3-cone)
+  and computes curves of negative anticanonical degree with the pole-free coefficient; before, it stopped with
+  "negative anticanonical degree". A vex 2-cone in the input stops with a pointer to MacFadden–Sheridan Prop. 5.
+  Inputs without the section behave exactly as before (identical output on all regression inputs, CPU and GPU).
+  `tools/cgv_phase.py` builds the input from a fan, `q` and `kappa`; `tests/vex_regress.py` tests it.
 - **Incomplete generator sets** (reported by the group): when the generators miss a Hilbert basis
   element of their cone, cgv now prints `cgv: note: ...` and stays on the fast path instead of
   falling back to slow full enumeration (178 s / 20 GB before). `compute_gvs` raises it as a Python

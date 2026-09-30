@@ -79,6 +79,14 @@ need the nearest supported architecture when building and an override when runni
 RX 6700 XT (gfx1031): `CGV_HIP_ARCH=gfx1030` when installing, `HSA_OVERRIDE_GFX_VERSION=10.3.0`
 when running.
 
+#### Any phase, including vex fans
+
+`compute_gv_phase(cones, q, intnums, max_deg)` (and `compute_gw_phase`) computes the invariants in a given phase of the
+ambient toric variety, given its fan (maximal cones as column indices of `q`): an FRST or a vex fan, where curves of
+negative anticanonical degree exist and are handled with a pole-free prescription. Optional `generators` (all or a
+subset of the Mori cone, e.g. for lightcone GVs), `saturate`, `grading_vector` and `device` as above. It needs
+[normaliz](https://github.com/Normaliz/Normaliz) and uses cgv; see `cgv/README.md`, "Any phase".
+
 ## Command line interface
 
 This project also ships a `cygv` executable, so that it can be used without Python. It reads

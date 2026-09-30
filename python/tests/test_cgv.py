@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import gzip
 import json
+from fractions import Fraction
+from math import gcd
 from pathlib import Path
 from typing import Any
 
@@ -108,3 +110,70 @@ def test_cgv_backend_rejects_unsupported() -> None:
         compute_gv(**kw, min_points=100, backend="cgv")
     with pytest.raises(ValueError, match="unknown backend"):
         compute_gv(**kw, max_deg=10, backend="nope")
+
+
+def test_bundled_cgv_phase_is_a_copy() -> None:
+    """python/cygv/_cgv_phase.py must stay identical to cgv/tools/cgv_phase.py."""
+    tools = REPO / "cgv" / "tools" / "cgv_phase.py"
+    if not tools.exists():
+        pytest.skip("not a repository checkout")
+    bundled = REPO / "python" / "cygv" / "_cgv_phase.py"
+    assert bundled.read_bytes() == tools.read_bytes()
+
+
+def _phase_ref(name: str) -> dict[str, Any]:
+    import shutil  # noqa: PLC0415
+
+    path = REPO / "cgv" / "tests" / "refs_vex" / f"{name}.json.gz"
+    if not path.exists():
+        pytest.skip("not a repository checkout")
+    if shutil.which("normaliz") is None:
+        pytest.skip("compute_gv_phase needs normaliz")
+    with gzip.open(path) as f:
+        ref: dict[str, Any] = json.load(f)
+    return ref
+
+
+def test_phase_frst_and_vex() -> None:
+    """compute_gv_phase in FRST and vex phases (cgv/tests/refs_vex), GV and GW."""
+    from cygv import compute_gv_phase, compute_gw_phase  # noqa: PLC0415
+
+    for name in ["liam_h2_fan0", "liam_h2_fan1", "liam_h3_fan4", "liam_h3_fan9"]:
+        r = _phase_ref(name)
+        kappa = {(i, j, k): v for i, j, k, v in r["kappa"]}
+        kw: dict[str, Any] = {"grading_vector": r["grading"]}
+        gv = dict(compute_gv_phase(r["cones"], r["q"], kappa, r["max_deg"], **kw))
+        assert gv == {tuple(k): v for k, v in r["gvs"]}, name
+        gw = dict(compute_gw_phase(r["cones"], r["q"], kappa, r["max_deg"], **kw))
+        assert all(isinstance(x, Fraction) for x in gw.values())
+        primitive = [c for c in gv if gcd(*c) == 1]
+        assert primitive, name
+        assert all(gw[c] == gv[c] for c in primitive), (
+            name
+        )  # GW = GV on primitive classes
+
+
+def test_phase_vex_equals_frst_of_another_polytope() -> None:
+    """A vex phase and an FRST of a different polytope with the same CY give the same GVs."""
+    import numpy as np  # noqa: PLC0415
+
+    from cygv import compute_gv_phase  # noqa: PLC0415
+
+    r = _phase_ref("pair_h4_1")
+    T = np.array(r["T"])
+    w_vex = np.array(r["grading_vex"])
+    w_frst = np.round(np.linalg.inv(T) @ w_vex).astype(int)
+    sides = {}
+    for side, w in (("vex", w_vex), ("frst", w_frst)):
+        s = r[side]
+        kappa = {(i, j, k): v for i, j, k, v in s["kappa"]}
+        sides[side] = dict(
+            compute_gv_phase(
+                s["cones"], s["q"], kappa, r["max_deg"], grading_vector=w.tolist()
+            )
+        )
+    mapped = {
+        tuple(int(x) for x in T.T @ np.array(n)): v for n, v in sides["vex"].items()
+    }
+    assert mapped == sides["frst"]
+    assert len(mapped) > 100

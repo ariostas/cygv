@@ -75,7 +75,7 @@ testpaths = [
 [tool.ruff]
 src = ["python"]
 # see the comment at the top of .pre-commit-config.yaml
-extend-exclude = ["cgv", "python/cygv/_cgv_run.py"]
+extend-exclude = ["cgv", "python/cygv/_cgv_run.py", "python/cygv/_cgv_phase.py"]
 
 [tool.ruff.lint]
 extend-select = [
@@ -123,6 +123,6 @@ warn_unreachable = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-# unchanged copy of cgv/tools/cgv_run.py (see .pre-commit-config.yaml)
-module = "cygv._cgv_run"
+# unchanged copies of cgv/tools/cgv_run.py and cgv/tools/cgv_phase.py (see .pre-commit-config.yaml)
+module = ["cygv._cgv_run", "cygv._cgv_phase"]
 ignore_errors = true

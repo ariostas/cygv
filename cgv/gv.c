@@ -64,6 +64,7 @@
 #endif
 
 typedef unsigned __int128 u128;
+#define MAXH_VEX 64
 typedef __int128 i128;
 typedef uint64_t u64;
 typedef int64_t i64;
@@ -202,7 +203,12 @@ static int *W, *Q, *Q0;
 static int ngen_in, *gens_in;
 static int nint, (*intnums)[4];
 static int in_probe; /* set during the lane probe: no duplicate notes */
-static int have_cones, nmhb, *mhb, ncones, *cone_n, **cone_g, (*cone_T)[2];
+static int have_cones, nmhb, *mhb, ncones, *cone_n, **cone_g, (*cone_T)[3];
+/* bgv: vex strata (cones S of the fan whose rays share no facet). |S| = 2: [V_S]_X = sum_a c_a J_a;
+ * |S| = 3: d_t = J_t . V_S. Stored as exact rationals, converted per pass (per set of primes). */
+static int nvex, *vex_k, (*vex_S)[3];
+static i64 (*vex_num)[MAXH_VEX], (*vex_den)[MAXH_VEX];
+static Co *vex_val;   /* [nvex][h11], filled by tables_init */
 static int keybits;
 static u128 fieldmask;
 static u128 LT_XK;   /* level-table key marker: pack(-e_t) with W_t > 0 has negative degree, so it is never a level key */
@@ -241,8 +247,9 @@ static void read_input(FILE *f) {
     RD(nint);
     intnums = xmalloc((size_t)nint * sizeof(*intnums));
     for (int i = 0; i < nint; i++) for (int j = 0; j < 4; j++) RD(intnums[i][j]);
-    int flag;
-    if (fscanf(f, "%d", &flag) == 1 && flag == 1) {
+    int flag = 0;
+    if (fscanf(f, "%d", &flag) != 1) flag = 0;
+    if (flag == 1 || flag == 2) {   /* 2: cone headers carry three divisor indices (bgv) */
         have_cones = 1;
         RD(nmhb);
         mhb = xmalloc((size_t)nmhb * h11 * sizeof(int));
@@ -255,10 +262,31 @@ static void read_input(FILE *f) {
         cone_T = xmalloc(ncones * sizeof(*cone_T));
         for (int c = 0; c < ncones; c++) {
             RD(cone_n[c]);
-            cone_T[c][0] = cone_T[c][1] = -2; /* unknown */
-            if (with_T) { RD(cone_T[c][0]); RD(cone_T[c][1]); }
+            cone_T[c][0] = cone_T[c][1] = -2; cone_T[c][2] = -1; /* unknown */
+            if (with_T) { RD(cone_T[c][0]); RD(cone_T[c][1]); if (flag == 2) RD(cone_T[c][2]); }
             cone_g[c] = xmalloc((size_t)(cone_n[c] ? cone_n[c] : 1) * h11 * sizeof(int));
             for (int i = 0; i < cone_n[c] * h11; i++) RD(cone_g[c][i]);
+        }
+    }
+    /* bgv: optional vex strata:  nvex  { k  i_1 .. i_k  v_1 .. v_h11 }  (k = 2: c_a, k = 3: d_t; "p/q" allowed) */
+    nvex = 0;
+    if (fscanf(f, "%d", &nvex) != 1) nvex = 0;
+    if (nvex > 0) {
+        if (h11 > MAXH_VEX) die("vex strata: h11 too large");
+        vex_k = xmalloc(nvex * sizeof(int)); vex_S = xmalloc(nvex * sizeof(*vex_S));
+        vex_num = xmalloc(nvex * sizeof(*vex_num)); vex_den = xmalloc(nvex * sizeof(*vex_den));
+        for (int v = 0; v < nvex; v++) {
+            RD(vex_k[v]);
+            if (vex_k[v] == 2) die("vex 2-cone in the input: impossible for a fine fan on a reflexive polytope (MacFadden-Sheridan, arXiv:2512.14817, Prop. 5); check the fan");
+            if (vex_k[v] != 3) die("vex stratum must have 3 divisors");
+            vex_S[v][2] = -1;
+            for (int j = 0; j < vex_k[v]; j++) RD(vex_S[v][j]);
+            for (int a = 0; a < h11; a++) {
+                char tok[64]; long long nu, de = 1;
+                if (fscanf(f, "%63s", tok) != 1) die("bad vex stratum");
+                if (sscanf(tok, "%lld/%lld", &nu, &de) < 1 || de <= 0) die("bad vex rational");
+                vex_num[v][a] = nu; vex_den[v][a] = de;
+            }
         }
     }
 #undef RD
@@ -525,7 +553,7 @@ static void enumerate_semigroup(const int *gens, int ng, SM *vis, SM *out, int f
         }
     }
     for (int s = 0; s < vis->n; s++) {
-        if (filter) { unpack(vis->key[s], tmp); if (nneg_of(tmp) > 2) continue; }
+        if (filter) { unpack(vis->key[s], tmp); int nn = nneg_of(tmp); if (nn > 3 || (nn == 3 && (!nvex || dot(tmp, Q0) >= 0))) continue; }
         sm_add(out, vis->key[s], vis->deg[s], &cr);
     }
     sm_clear(vis);
@@ -669,7 +697,7 @@ static void build_candidates(void) {
         int nzero = 0;
         int *skip = xcalloc(ncones, sizeof(int));
         for (int c = 0; c < ncones; c++) {
-            if (cone_T[c][0] < 0 || cone_T[c][1] < 0) continue;
+            if (cone_T[c][0] < 0 || cone_T[c][1] < 0 || cone_T[c][2] >= 0) continue;   /* |T| = 2 cones only */
             int s1 = cone_T[c][0], s2 = cone_T[c][1];
             i64 form2 = 0; /* 2 * form, over the integers */
             /* recompute K_ab exactly as tables_init does (distinct permutations) */
@@ -753,6 +781,7 @@ static void tables_init(void) {
         unpack(CAND.key[s], C);
         int s0 = dot(C, Q0);
         if (s0 > maxv) maxv = s0;
+        if (-s0 > maxv) maxv = -s0;   /* bgv: |m| for negative anticanonical degree */
         for (int r = 0; r < ndiv; r++) { int v = dot(C, Q + (size_t)r * h11); if (v < 0) v = -v; if (v > maxv) maxv = v; }
     }
     tabn = (maxv > maxdeg ? maxv : maxdeg) + 2;
@@ -796,11 +825,20 @@ static void tables_init(void) {
         }
     }
     Qm = xmalloc((size_t)ndiv * H * sizeof(Co)); Q0m = xmalloc(H * sizeof(Co));
+    if (nvex) {
+        vex_val = xmalloc((size_t)nvex * H * sizeof(Co));
+        for (int v = 0; v < nvex; v++) for (int a = 0; a < H; a++) {
+            Co d = co_int(vex_den[v][a]);
+            if (co_isz(d)) die("vex stratum denominator divisible by a prime");
+            vex_val[(size_t)v * H + a] = co_mul(co_int(vex_num[v][a]), co_inv(d));
+        }
+    }
     for (int i = 0; i < ndiv * H; i++) Qm[i] = co_int(Q[i]);
     for (int a = 0; a < H; a++) Q0m[a] = co_int(Q0[a]);
 }
 static void tables_free(void) {
     free(INV); free(H1); free(H2); free(FACT); free(IFACT); free(DEGC); free(Kab); free(Qm); free(Q0m);
+    if (nvex) free(vex_val);
 }
 
 /* coordinates of c1 and alpha: h11 of them, or (majorant build) one per row of the charge
@@ -832,8 +870,46 @@ static void fp_point(const int *C, Co *c0, Co *c1, Co *s2) {
     }
     *c0 = co_zero(); *s2 = co_zero();
     for (int a = 0; a < H; a++) c1[a] = co_zero();
+    if (dq0 < 0) {
+        /* bgv: m = q0.n < 0 (vex phase). S = negative set is a vex cone; the 1/L pole cancels against the
+         * stratum class [V_S]_X (Liam's note / Wang's quasimap I-function):
+         *   c = [V_S]_X * U0 * exp(A.rho + ...),  U0 = (-1)^(sum_S (k_i-1) + |m|-1) prod_S (k_i-1)! / (prod_notS b_i! (|m|-1)!)
+         *   A_a = q0_a H_{|m|-1} - sum_notS q_ia H_{b_i} - sum_S q_ia H_{k_i-1}
+         * |S| = 3: S2 = U0 (w . d); |S| = 2 cannot occur for fine fans (MacFadden-Sheridan Prop. 5); else 0. */
+        if (nneg < 2) die("negative anticanonical degree with fewer than two negative intersections");
+        /* |S| = 2: S cannot be a cone of a fine fan (MacFadden-Sheridan Prop. 5; the driver rejects vex 2-cones),
+         * so S is not a cone and the term vanishes (Stanley-Reisner). |S| >= 4: invisible to GVs. */
+        if (nneg != 3) return;
+#ifdef CGV_MAJ
+        die("majorant build: vex strata not supported");
+#endif
+        int neg[3], nn = 0;
+        for (int r = 0; r < ndiv; r++) if (dq[r] < 0) neg[nn++] = r;
+        int vs = -1;
+        for (int v = 0; v < nvex && vs < 0; v++) {
+            if (vex_k[v] != nneg) continue;
+            int ok = 1;
+            for (int j = 0; j < nneg; j++) if (vex_S[v][j] != neg[j]) ok = 0;
+            if (ok) vs = v;
+        }
+        if (vs < 0) return;   /* S is not a cone of the fan: the term vanishes (Stanley-Reisner) */
+        int mm = -dq0;
+        Co u = IFACT[mm - 1];
+        int e = mm - 1;
+        for (int r = 0; r < ndiv; r++) {
+            if (dq[r] < 0) { u = co_mul(u, FACT[-dq[r] - 1]); e += -dq[r] - 1; }
+            else u = co_mul(u, IFACT[dq[r]]);
+        }
+        if (e % 2) u = co_neg(u);
+        const Co *cv = vex_val + (size_t)vs * H;
+        {
+            Co wd = co_zero();
+            for (int t = 0; t < H; t++) if (W[t]) wd = co_add(wd, co_mul(co_int(W[t]), cv[t]));
+            *s2 = co_mul(u, wd);
+        }
+        return;
+    }
     if (nneg > 2) return;
-    if (dq0 < 0) die("negative anticanonical degree");
     Co half = INV[2];
     Co fact = FACT[dq0];
     for (int r = 0; r < ndiv; r++) fact = co_mul(fact, dq[r] >= 0 ? IFACT[dq[r]] : FACT[-dq[r] - 1]);

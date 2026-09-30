@@ -194,6 +194,99 @@ def _cgv_gvs(
     return gvs
 
 
+def _cgv_phase_gvs(
+    cones: ArrayLike,
+    q: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
+    max_deg: int,
+    generators: ArrayLike | None,
+    grading_vector: ArrayLike | None,
+    saturate: bool,
+    device: str,
+) -> tuple[dict[tuple[int, ...], int], list[int]]:
+    """GV invariants in the phase given by a fan, with the bundled cgv program, through the same
+    code as its standalone Python interface (cgv/tools/cgv_phase.py). Returns (GVs, grading)."""
+    from cygv import _cgv_phase, _cgv_run  # noqa: PLC0415
+    from cygv.cygv import _cgv_executable, _cgv_gpu_executable  # noqa: PLC0415
+
+    try:
+        d = _cgv_phase.prepare(  # type: ignore[no-untyped-call]
+            [[int(x) for x in c] for c in cones],
+            [[int(x) for x in r] for r in np.array(q, dtype=int)],
+            {(int(i), int(j), int(k)): int(v) for (i, j, k), v in intnums.items()},
+            None
+            if generators is None
+            else [[int(x) for x in g] for g in np.array(generators, dtype=int)],
+            None
+            if grading_vector is None
+            else [int(x) for x in np.array(grading_vector, dtype=int)],
+            saturate,
+        )
+    except FileNotFoundError as e:
+        msg = "compute_gv_phase needs normaliz (e.g. conda install -c conda-forge normaliz)"
+        raise RuntimeError(msg) from e
+    gpu = _cgv_gpu_executable()
+    gpu_bin, hip = gpu if gpu is not None else (None, False)
+    extra = _cgv_run.pick_device(device, gpu_bin, hip=hip)  # type: ignore[no-untyped-call]
+    if extra and gpu_bin is None:
+        msg = "this cygv was built without cgv's GPU variant (build from source with nvcc or hipcc)"
+        raise ValueError(msg)
+    binary = gpu_bin if extra else _cgv_executable()
+    gvs, _ = _cgv_phase.run(
+        d, int(max_deg), os.cpu_count() or 1, binary=binary, extra=extra
+    )  # type: ignore[no-untyped-call]
+    grading: list[int] = d["grading_vector"]
+    return gvs, grading
+
+
+def compute_gv_phase(
+    cones: ArrayLike,
+    q: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
+    max_deg: int,
+    generators: ArrayLike | None = None,
+    grading_vector: ArrayLike | None = None,
+    saturate: bool = True,
+    device: str = "auto",
+) -> list[Any]:
+    """GV invariants of a CY threefold hypersurface in a given phase of the ambient toric variety:
+    an FRST or a vex fan (a fine regular fan that does not refine the face fan). Uses cgv.
+
+    cones: maximal cones of the fan, as tuples of column indices of q. q, intnums: as for compute_gv.
+    generators: Mori cone generators, or a subset (lightcone GVs); default: the fan's wall curves.
+    saturate: True uses every lattice point of the cone they span (normaliz Hilbert basis); False uses
+    exactly their semigroup. grading_vector: default an interior point of the dual cone. The result is
+    in the same format as compute_gv's. Needs normaliz. See cgv/README.md, "Any phase"."""
+    gvs, _ = _cgv_phase_gvs(
+        cones, q, intnums, max_deg, generators, grading_vector, saturate, device
+    )
+    return list(gvs.items())
+
+
+def compute_gw_phase(
+    cones: ArrayLike,
+    q: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
+    max_deg: int,
+    generators: ArrayLike | None = None,
+    grading_vector: ArrayLike | None = None,
+    saturate: bool = True,
+    device: str = "auto",
+    prec: int | None = None,
+) -> list[Any]:
+    """Genus-0 GW invariants in a given phase (see compute_gv_phase), from its GV invariants."""
+    if prec is not None:
+        mp.mp.prec = prec
+    gvs, grading = _cgv_phase_gvs(
+        cones, q, intnums, max_deg, generators, grading_vector, saturate, device
+    )
+    gws = _gw_from_gv(gvs, grading, max_deg)
+    return [
+        (b, (x if prec is None else mp.mpf(x.numerator) / x.denominator))
+        for b, x in gws.items()
+    ]
+
+
 def _gw_from_gv(
     gvs: dict[tuple[int, ...], int], grading_vector: ArrayLike, max_deg: int
 ) -> dict[tuple[int, ...], Fraction]:
