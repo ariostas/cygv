@@ -79,7 +79,7 @@ mod tests {
 
         let index_of = |monomial: &[i32]| {
             let monomial = DVector::from_column_slice(monomial);
-            poly_props.monomial_map[&monomial.as_view()]
+            poly_props.monomial_index(monomial.as_slice()).unwrap()
         };
         let display = |p: &Polynomial<Rational>| {
             format!(

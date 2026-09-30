@@ -27,6 +27,15 @@ pub struct Semigroup {
     pub grading_vector: RowDVector<i32>,
     pub degrees: RowDVector<u32>,
     pub max_degree: u32,
+    /// A set of generators of the semigroup, when one is known.
+    ///
+    /// The constructors that build the elements from a set of generators keep
+    /// the generators they used. It lets the elements be checked for the
+    /// property that a sum of two of them is an element as well whenever its
+    /// degree allows, which would otherwise take a pass over every pair of
+    /// elements; see `PolynomialProperties::new`. [`Self::from_data`] takes the
+    /// elements as they are and has none to record.
+    pub generators: Option<DMatrix<i32>>,
 }
 
 impl Semigroup {
@@ -51,6 +60,7 @@ impl Semigroup {
             grading_vector,
             degrees,
             max_degree,
+            generators: None,
         })
     }
 
@@ -99,7 +109,10 @@ impl Semigroup {
             .zip(elements_set)
             .for_each(|(mut d, s)| d.copy_from(&s));
 
-        Self::from_data(elements, grading_vector)
+        Ok(Self {
+            generators: Some(generators),
+            ..Self::from_data(elements, grading_vector)?
+        })
     }
 
     /// Constructs a semigroup by increasing the maximum degree until the minimum number of elements is achieved.
@@ -149,7 +162,10 @@ impl Semigroup {
             .zip(elements_set)
             .for_each(|(mut d, s)| d.copy_from(&s));
 
-        Self::from_data(elements, grading_vector)
+        Ok(Self {
+            generators: Some(generators),
+            ..Self::from_data(elements, grading_vector)?
+        })
     }
 
     /// Constructs the part of the semigroup needed to compute invariants at
@@ -226,7 +242,10 @@ impl Semigroup {
             .zip(final_elements)
             .for_each(|(mut d, s)| d.copy_from(&s));
 
-        Self::from_data(elements, grading_vector)
+        Ok(Self {
+            generators: Some(generators),
+            ..Self::from_data(elements, grading_vector)?
+        })
     }
 }
 
