@@ -9,8 +9,8 @@ rust-version = "1.87"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/ariostas/cygv"
 readme = "README.md"
-# cgv's regression data (several MB) stays in the repository only
-exclude = ["cgv/tests/"]
+# cgv/ is a development oracle (see PLAN.md) and is not part of the crate.
+exclude = ["cgv/"]
 keywords = ["calabi-yau", "string-theory", "gopakumar-vafa", "gromov-witten", "mirror-symmetry"]
 categories = ["science", "mathematics", "algorithms"]
 
@@ -24,7 +24,7 @@ path = "src/bin/cygv/main.rs"
 required-features = ["cli"]
 
 [features]
-default = ["cli", "cgv"]
+default = ["cli"]
 # The command line interface, i.e. the `cygv` binary and the `io` module. Library
 # users that do not need it can depend on this crate with `default-features = false`
 # to avoid pulling in the argument and YAML parsers.
@@ -33,10 +33,6 @@ cli = ["dep:clap", "dep:yaml-rust2"]
 # by maturin needs them (see `[tool.maturin]` in pyproject.toml), so plain Rust
 # builds do not have to compile pyo3.
 python = ["dep:pyo3", "dep:ctrlc"]
-# The cgv program (cgv/: exact GV invariants in C, much faster on deep degrees), built from the
-# unchanged C sources by build.rs and bundled with the crate. Needs a C compiler with 128-bit
-# integers (gcc or clang; MSVC has none).
-cgv = []
 
 [dependencies]
 clap = { version = "4.5.16", features = ["derive"], optional = true }
@@ -50,9 +46,6 @@ yaml-rust2 = { version = "0.12", optional = true }
 version = "0.29.2"
 features = ["abi3-py310"]
 optional = true
-
-[build-dependencies]
-cc = "1"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }

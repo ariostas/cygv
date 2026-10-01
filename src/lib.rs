@@ -1,7 +1,5 @@
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 
-#[cfg(feature = "cgv")]
-pub mod cgv;
 pub mod factorial;
 pub mod fundamental_period;
 pub mod hkty;

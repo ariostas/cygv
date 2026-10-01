@@ -51,7 +51,7 @@ python-source = "python"
 # would pull in the argument and YAML parsers. The bindings themselves live
 # behind the off-by-default `python` feature, so it has to be enabled here.
 no-default-features = true
-features = ["python", "cgv", "pyo3/extension-module"]
+features = ["python", "pyo3/extension-module"]
 
 [tool.uv]
 # Without these, uv will not rebuild the extension module when only the Rust
@@ -75,7 +75,7 @@ testpaths = [
 [tool.ruff]
 src = ["python"]
 # see the comment at the top of .pre-commit-config.yaml
-extend-exclude = ["cgv", "python/cygv/_cgv_run.py"]
+extend-exclude = ["cgv"]
 
 [tool.ruff.lint]
 extend-select = [
@@ -121,8 +121,3 @@ strict = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 warn_unreachable = true
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-# unchanged copy of cgv/tools/cgv_run.py (see .pre-commit-config.yaml)
-module = "cygv._cgv_run"
-ignore_errors = true
