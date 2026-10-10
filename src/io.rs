@@ -282,12 +282,7 @@ impl Input {
             check_target_points(target_points, &grading_vector)
                 .map_err(|reason| IoError::invalid_field("target_points", reason))?;
         }
-        let unsupported = modular_unsupported(
-            max_deg,
-            min_points,
-            target_points.is_some(),
-            !strata.is_empty(),
-        );
+        let unsupported = modular_unsupported(max_deg, min_points, target_points.is_some());
         if let (Method::Modular, Some(what)) = (method, unsupported) {
             return Err(IoError::invalid_field(
                 "method",
@@ -325,7 +320,7 @@ impl Input {
         check_strata(&strata, q.nrows(), h11, cy_kind, nefpart.is_empty())
             .map_err(|reason| IoError::invalid_field("strata", reason))?;
         if let Some(cone_data) = &cone_data {
-            check_cone_data(cone_data, &q, &generators)
+            check_cone_data(cone_data, &q, &generators, &strata)
                 .map_err(|(field, reason)| IoError::invalid_field(field, reason))?;
         }
         // The intersection numbers are canonicalized differently depending on the
@@ -890,18 +885,13 @@ min_points: 20
             load_one(&format!("{base}strata: [{{divisors: [1, 2, 3]}}]\n")),
             Err(IoError::MissingField("class"))
         );
-        // Strata are only supported for threefold hypersurfaces, and not by the modular
-        // method yet.
+        // Strata are only supported for threefold hypersurfaces, by both methods.
         let strata = "strata: [{divisors: [1, 2, 3], class: [1, 1]}]\n";
         assert!(matches!(
             load_one(&format!("{base}{strata}is_threefold: false\n")),
             Err(IoError::InvalidField { field, .. }) if field == "strata"
         ));
-        assert!(matches!(
-            load_one(&format!("{base}{strata}method: modular\n")),
-            Err(IoError::InvalidField { field, reason })
-                if field == "method" && reason.contains("strata")
-        ));
+        assert!(load_one(&format!("{base}{strata}method: modular\n")).is_ok());
     }
 
     /// P(1,1,2,2,2)[8] with its cone data and no generators.
@@ -999,6 +989,11 @@ cones:
                 "{divisors: [0], basis: []}",
             ),
             ("{divisors: [0], hilbert_basis: [[1, 0], [2, 1]]}", "[0]"),
+            // Three divisors only for a stratum.
+            (
+                "{divisors: [0], hilbert_basis: [[1, 0], [2, 1]]}",
+                "{divisors: [0, 1, 2], hilbert_basis: []}",
+            ),
         ] {
             assert_eq!(field_of(&data.replacen(from, to, 1)), "cones", "{to}");
         }

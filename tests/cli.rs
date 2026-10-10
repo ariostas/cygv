@@ -202,3 +202,39 @@ fn test_cone_data() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("generators"), "{stderr}");
 }
+
+#[test]
+fn test_vex_cone_data() {
+    // The vex example, with the cone of its stratum, gives the same invariants as the
+    // reference method with the generators.
+    let input = std::fs::read_to_string(example("vex.yaml")).unwrap();
+    let with_cones = run(&[], &input);
+    assert!(
+        with_cones.status.success(),
+        "{}",
+        String::from_utf8_lossy(&with_cones.stderr)
+    );
+    let head = &input[..input.find("# The inequalities").unwrap()];
+    let reference = run(
+        &["--method", "reference"],
+        &format!("{head}generators: [[0, 1], [1, -1]]\n"),
+    );
+    assert!(reference.status.success());
+    assert_eq!(with_cones.stdout, reference.stdout);
+    let out = String::from_utf8(with_cones.stdout).unwrap();
+    assert!(
+        out.contains("{curve_class: [1, -1], degree: 1, gv: 1}"),
+        "{out}"
+    );
+
+    // Without the cone of the stratum, the cone data is incomplete.
+    let without = input.replace(
+        "  - {divisors: [1, 2, 4], hilbert_basis: [[0, 1], [1, -1]]}\n",
+        "",
+    );
+    assert_ne!(without, input);
+    let output = run(&[], &without);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("stratum"), "{stderr}");
+}

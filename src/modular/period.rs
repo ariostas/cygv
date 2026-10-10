@@ -13,8 +13,15 @@
 //!   $S_2^{(k)} = \sum_{a \le b} K^{(k)}_{ab}\, c_{2,ab}$ with half weight on the diagonal,
 //!   instead of being kept per pair of indices;
 //! - curves with negative anticanonical degree are rejected when they have fewer than two
-//!   negative intersections, and contribute nothing otherwise, instead of wrapping around.
-//!   (The phases of `PLAN.md` with vex strata give some of them a value.)
+//!   negative intersections, instead of wrapping around, and contribute nothing otherwise,
+//!   except in a vex phase. There a curve of anticanonical degree $m < 0$ whose negative
+//!   intersections $-k_i$ are with the divisors of a stratum $S$ adds $U_0\, (w \cdot d_S)$ to
+//!   $S_2$, with
+//!   $U_0 = (-1)^{e} \prod_{i \in S} (k_i - 1)! \,/\, \big(\prod_{i \notin S} b_i!\,
+//!   (\lvert m \rvert - 1)!\big)$, $e = \lvert m \rvert - 1 + \sum_{i \in S} (k_i - 1)$ and $b_i$
+//!   the other intersections, as in the C program and the reference's `compute_c_vex`. (The
+//!   reference adds $c_0^{-1} U_0\, d_{S,t}$ to each instanton correction $t$, which is the
+//!   same once contracted with the grading vector.)
 
 use super::field::Ring;
 use super::key::KeyLayout;
@@ -101,6 +108,8 @@ struct Evaluator<'a, R: Ring> {
     pairs: Vec<(usize, usize)>,
     /// Per pair, the images of $K^{(k)}_{ab}$ for every $k$, halved when $a = b$.
     k_pairs: Vec<R::Elem>,
+    /// Per stratum, the image of $w \cdot d_S$.
+    strata: Vec<R::Elem>,
 }
 
 /// Scratch space for [`Evaluator::point`].
@@ -111,7 +120,11 @@ struct Scratch<E> {
 }
 
 impl<'a, R: Ring> Evaluator<'a, R> {
-    fn new(ring: &'a R, geometry: &'a Geometry, tables: &'a Tables<R::Elem>) -> Self {
+    fn new(
+        ring: &'a R,
+        geometry: &'a Geometry,
+        tables: &'a Tables<R::Elem>,
+    ) -> Result<Self, Error> {
         let h11 = geometry.h11();
         let ndiv = geometry.n_divisors();
         let q_cols = (0..h11)
@@ -146,7 +159,16 @@ impl<'a, R: Ring> Evaluator<'a, R> {
                 }
             }
         }
-        Self {
+        let mut strata = Vec::new();
+        for stratum in geometry.strata() {
+            let mut v = R::Elem::default();
+            for &(num, den) in &stratum.weighted_class {
+                let inv = ring.inv(ring.int(den)).ok_or(Error::NotInvertible)?;
+                ring.fma(&mut v, ring.int(num), inv);
+            }
+            strata.push(v);
+        }
+        Ok(Self {
             ring,
             geometry,
             tables,
@@ -155,7 +177,8 @@ impl<'a, R: Ring> Evaluator<'a, R> {
             q,
             pairs,
             k_pairs,
-        }
+            strata,
+        })
     }
 
     fn scratch(&self) -> Scratch<R::Elem> {
@@ -198,12 +221,12 @@ impl<'a, R: Ring> Evaluator<'a, R> {
         c1.fill(zero);
         s2.fill(zero);
 
-        let mut neg = [0usize; 2];
+        let mut neg = [0usize; 3];
         let mut nneg = 0;
         for (r, dq) in sc.dq.iter_mut().enumerate() {
             *dq = dot(c, g.q(r));
             if *dq < 0 {
-                if nneg < 2 {
+                if nneg < 3 {
                     neg[nneg] = r;
                 }
                 nneg += 1;
@@ -215,11 +238,30 @@ impl<'a, R: Ring> Evaluator<'a, R> {
             anticanonical_negative |= *dq0 < 0;
         }
         if anticanonical_negative {
-            return if nneg < 2 {
-                Err(Error::NegativeAnticanonicalDegree)
-            } else {
-                Ok(())
-            };
+            if nneg < 2 {
+                return Err(Error::NegativeAnticanonicalDegree);
+            }
+            // Strata only exist on hypersurfaces, which have a single anticanonical row.
+            let stratum = if nneg == 3 { g.stratum(&neg) } else { None };
+            if let Some(i) = stratum {
+                let m = -sc.dq0[0];
+                let mut u0 = t.inv_fact[(m - 1) as usize];
+                let mut e = m - 1;
+                for &d in &sc.dq {
+                    let f = if d < 0 {
+                        e += -d - 1;
+                        t.fact[(-d - 1) as usize]
+                    } else {
+                        t.inv_fact[d as usize]
+                    };
+                    u0 = ring.mul(u0, f);
+                }
+                if e % 2 != 0 {
+                    u0 = ring.neg(u0);
+                }
+                s2[0] = ring.mul(u0, self.strata[i]);
+            }
+            return Ok(());
         }
         if nneg > 2 {
             return Ok(());
@@ -346,7 +388,7 @@ pub fn period<R: Ring, L: KeyLayout>(
     }
     let tables = Tables::new(ring, max_arg as usize + 2)?;
 
-    let eval = Evaluator::new(ring, geometry, &tables);
+    let eval = Evaluator::new(ring, geometry, &tables)?;
     let mut sc = eval.scratch();
     let m = geometry.n_forms();
     let mut c0 = SparsePoly::new(1);

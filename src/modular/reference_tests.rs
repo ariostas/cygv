@@ -26,7 +26,7 @@ use crate::reference::misc::process_int_nums;
 use crate::reference::polynomial::properties::PolynomialProperties;
 use crate::reference::run_hkty;
 use crate::reference::semigroup::Semigroup;
-use crate::{CYKind, InvariantKind, Method};
+use crate::{CYKind, ConeData, InvariantKind, Method, Stratum};
 use nalgebra::{DMatrix, DVector, RowDVector};
 use rug::{Integer, Rational};
 use std::collections::HashMap;
@@ -42,6 +42,7 @@ struct Case {
     intnums: HashMap<(usize, usize, usize), i32>,
     cy_kind: CYKind,
     max_deg: u32,
+    strata: Vec<Stratum>,
 }
 
 /// The residue of a rational modulo `p`.
@@ -116,9 +117,10 @@ fn check(case: &Case) {
         &case.nefpart,
         &idx_pairs,
         case.cy_kind,
-        &[],
+        &case.strata,
     )
     .unwrap();
+    let ref_vex: Vec<_> = fp.vex.iter().map(|p| p.clone(&pp.zero)).collect();
     let ref_c0 = fp.c0.clone(&pp.zero);
     let ref_c1: Vec<_> = fp.c1.iter().map(|p| p.clone(&pp.zero)).collect();
     let ref_c2: HashMap<_, _> = fp.c2.iter().map(|(&k, p)| (k, p.clone(&pp.zero))).collect();
@@ -135,6 +137,8 @@ fn check(case: &Case) {
         case.cy_kind,
         &case.grading_vector,
     )
+    .unwrap()
+    .with_strata(&case.strata, &case.grading_vector)
     .unwrap();
     let gens: Vec<&[i32]> = case.generators.as_slice().chunks(h11).collect();
     let bounds =
@@ -151,7 +155,8 @@ fn check(case: &Case) {
     let pd = period(&lf, &layout, &geometry, &cands, case.max_deg).unwrap();
     let inst = instanton(&lf, &geometry, &pd, case.max_deg).unwrap();
 
-    // The candidates are the elements with at most two negative intersections.
+    // The candidates are the elements with at most two negative intersections, and those on
+    // the strata.
     let keys: Vec<PackedKey> = sg
         .elements
         .column_iter()
@@ -160,7 +165,7 @@ fn check(case: &Case) {
     let n_cands = sg
         .elements
         .column_iter()
-        .filter(|c| geometry.n_negative(c.as_slice()) <= 2)
+        .filter(|c| geometry.carries_period(c.as_slice()))
         .count();
     assert_eq!(cands.len(), n_cands, "{name}: candidates");
     assert!(
@@ -184,6 +189,10 @@ fn check(case: &Case) {
                 let c2 = at(&ref_c2[&(a, b)], e);
                 s += c2 * kab / if a == b { 2 } else { 1 };
             }
+        }
+        // The stratum terms, which the reference keeps apart, contracted with the grading.
+        for (t, p) in ref_vex.iter().enumerate() {
+            s += at(p, e) * case.grading_vector[t];
         }
         s
     });
@@ -214,7 +223,7 @@ fn check_gv(case: &Case, options: &Options) {
         case.q.clone(),
         case.nefpart.clone(),
         case.intnums.clone(),
-        Vec::new(),
+        case.strata.clone(),
         None,
     );
     let expected: HashMap<(Vec<i32>, usize), String> = reference
@@ -229,6 +238,8 @@ fn check_gv(case: &Case, options: &Options) {
         case.cy_kind,
         &case.grading_vector,
     )
+    .unwrap()
+    .with_strata(&case.strata, &case.grading_vector)
     .unwrap();
     let h11 = case.grading_vector.len();
     let gens: Vec<&[i32]> = case.generators.as_slice().chunks(h11).collect();
@@ -262,7 +273,7 @@ fn check_gw(case: &Case) {
             case.q.clone(),
             case.nefpart.clone(),
             case.intnums.clone(),
-            Vec::new(),
+            case.strata.clone(),
             None,
             InvariantKind::GW,
             case.cy_kind,
@@ -296,6 +307,7 @@ fn quintic(max_deg: u32) -> Case {
         intnums: HashMap::from([((0, 0, 0), 5)]),
         cy_kind: CYKind::Threefold,
         max_deg,
+        strata: Vec::new(),
     }
 }
 
@@ -311,6 +323,7 @@ fn p11222(max_deg: u32) -> Case {
         intnums: HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]),
         cy_kind: CYKind::Threefold,
         max_deg,
+        strata: Vec::new(),
     }
 }
 
@@ -427,6 +440,7 @@ fn test_toy_threefold() {
         ]),
         cy_kind: CYKind::Threefold,
         max_deg: 12,
+        strata: Vec::new(),
     });
 }
 
@@ -443,6 +457,7 @@ fn load(name: &'static str, yaml: &str, max_deg: u32) -> Case {
         intnums: input.intnums,
         cy_kind: input.cy_kind,
         max_deg,
+        strata: Vec::new(),
     }
 }
 
@@ -545,7 +560,7 @@ fn strings(
         case.q.clone(),
         case.nefpart.clone(),
         case.intnums.clone(),
-        Vec::new(),
+        case.strata.clone(),
         None,
         kind,
         case.cy_kind,
@@ -583,6 +598,7 @@ fn check_targets(case: &Case, pick: impl Fn(&[Vec<i32>]) -> Vec<Vec<i32>>) {
         q: case.q.clone(),
         nefpart: case.nefpart.clone(),
         intnums: case.intnums.clone(),
+        strata: case.strata.clone(),
         ..*case
     };
     let full = strings(
@@ -649,4 +665,187 @@ fn test_target_points_realistic() {
     // The complete intersection, an n-fold.
     let yaml = include_str!("../../examples/fourfold.yaml");
     check_targets(&load("fourfold", yaml, 8), pick_two);
+}
+
+/// A vex phase with $h^{1,1} = 2$, a flop of the resolved $\mathbb{P}(1,1,2,2,2)[8]$
+/// (`liam_h2_fan1` of `cgv/tests/refs_vex`), whose stratum gives the curves of negative
+/// anticanonical degree their period data. The generators are the Hilbert basis of its Mori
+/// cone.
+fn h2_vex(max_deg: u32) -> Case {
+    Case {
+        name: "h2 vex",
+        generators: DMatrix::from_column_slice(2, 2, &[0, 1, 1, -1]),
+        grading_vector: vec![2, 1],
+        q: DMatrix::from_row_slice(6, 2, &[1, 0, 0, 1, -1, 1, 1, 1, 0, 1, 1, 0]),
+        nefpart: vec![],
+        intnums: HashMap::from([((0, 1, 1), 4), ((1, 1, 1), 2)]),
+        cy_kind: CYKind::Threefold,
+        max_deg,
+        strata: vec![Stratum {
+            divisors: [1, 2, 4],
+            class: vec![(1, 1), (-1, 1)],
+        }],
+    }
+}
+
+/// A vex phase with $h^{1,1} = 4$ (`pair_h4_1` of `cgv/tests/refs_vex`), whose stratum class
+/// has entries of both signs.
+fn h4_vex(max_deg: u32) -> Case {
+    Case {
+        name: "h4 vex",
+        generators: DMatrix::from_column_slice(
+            4,
+            5,
+            &[
+                0, 0, -1, 0, 0, 0, 1, 1, 0, 1, 0, -1, 1, -1, 0, -1, 1, 0, -2, -4,
+            ],
+        ),
+        grading_vector: vec![7, 3, -1, 2],
+        q: DMatrix::from_column_slice(
+            8,
+            4,
+            &[
+                1, 0, 0, 0, 2, 0, 0, 1, 0, 1, 0, -2, 1, -1, 0, 1, 0, 0, 1, 2, -1, 1, 0, -3, 0, 0,
+                0, -1, 1, 0, 1, 0,
+            ],
+        ),
+        nefpart: vec![],
+        intnums: HashMap::from([
+            ((0, 1, 3), 1),
+            ((0, 2, 3), 1),
+            ((0, 0, 0), 8),
+            ((0, 0, 1), 1),
+            ((0, 0, 2), 3),
+            ((0, 0, 3), 2),
+            ((0, 1, 1), -1),
+            ((0, 2, 2), 1),
+            ((0, 3, 3), -4),
+            ((1, 1, 1), 1),
+            ((1, 1, 3), -1),
+            ((1, 3, 3), -1),
+            ((2, 3, 3), -2),
+            ((3, 3, 3), 7),
+        ]),
+        cy_kind: CYKind::Threefold,
+        max_deg,
+        strata: vec![Stratum {
+            divisors: [3, 5, 6],
+            class: vec![(0, 1), (1, 1), (0, 1), (-1, 1)],
+        }],
+    }
+}
+
+/// The stages and the invariants in vex phases, whose curves of negative anticanonical degree
+/// on a stratum carry its term.
+#[test]
+fn test_vex() {
+    for case in [h2_vex(10), h4_vex(8)] {
+        check(&case);
+        assert!(
+            case.strata
+                .iter()
+                .all(|s| s.class.iter().any(|&(n, _)| n != 0)),
+            "{}",
+            case.name
+        );
+        check_gv(
+            &Case {
+                max_deg: 12,
+                ..case_clone(&case)
+            },
+            &Options::default(),
+        );
+        check_gw(&case);
+        let pick_two = |curves: &[Vec<i32>]| {
+            let n = curves.len();
+            vec![curves[n - 1].clone(), curves[n / 2].clone()]
+        };
+        check_targets(&case, pick_two);
+        check_vex_cones(&case);
+    }
+}
+
+/// Checks the candidates from cone data built by brute force, with the cones of the strata,
+/// against the enumeration, and the invariants from them, up to the maximum degree and below
+/// a target, against the reference.
+fn check_vex_cones(case: &Case) {
+    let geometry = Geometry::from_toric(
+        &case.q,
+        &case.nefpart,
+        &case.intnums,
+        case.cy_kind,
+        &case.grading_vector,
+    )
+    .unwrap()
+    .with_strata(&case.strata, &case.grading_vector)
+    .unwrap();
+    let h11 = case.grading_vector.len();
+    let gens: Vec<&[i32]> = case.generators.as_slice().chunks(h11).collect();
+    let w = &case.grading_vector;
+    let cone_data =
+        super::candidates::tests::brute_force_cone_data(&gens, w, case.max_deg, &geometry);
+    assert_eq!(
+        cone_data.cones.len(),
+        geometry.n_divisors() * (geometry.n_divisors() + 1) / 2 + case.strata.len()
+    );
+    super::candidates::tests::check_cones(&cone_data, &gens, w, case.max_deg, &geometry);
+
+    let run = |cone_data: Option<ConeData>, targets: Option<DMatrix<i32>>, method| {
+        let max_deg = if targets.is_some() {
+            None
+        } else {
+            Some(case.max_deg)
+        };
+        let mut res: Vec<_> = compute_gvgw_strings(
+            case.generators.clone(),
+            RowDVector::from_row_slice(w),
+            case.q.clone(),
+            case.nefpart.clone(),
+            case.intnums.clone(),
+            case.strata.clone(),
+            cone_data,
+            InvariantKind::GV,
+            case.cy_kind,
+            max_deg,
+            None,
+            targets,
+            None,
+            method,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|((c, k), v)| (c.as_slice().to_vec(), k, v))
+        .collect();
+        res.sort_unstable();
+        res
+    };
+    let expected = run(None, None, Method::Reference);
+    assert_eq!(
+        run(Some(cone_data.clone()), None, Method::Modular),
+        expected
+    );
+    // Below the curve of highest degree on a stratum, i.e. with three negative intersections.
+    let target = expected
+        .iter()
+        .map(|(c, _, _)| c)
+        .filter(|c| geometry.n_negative(c) == 3)
+        .max_by_key(|c| super::dot(c, w))
+        .unwrap()
+        .clone();
+    let targets = Some(DMatrix::from_column_slice(h11, 1, &target));
+    let expected = run(None, targets.clone(), Method::Reference);
+    assert!(expected.iter().any(|(c, _, _)| *c == target));
+    assert_eq!(run(Some(cone_data), targets, Method::Modular), expected);
+}
+
+fn case_clone(case: &Case) -> Case {
+    Case {
+        generators: case.generators.clone(),
+        grading_vector: case.grading_vector.clone(),
+        q: case.q.clone(),
+        nefpart: case.nefpart.clone(),
+        intnums: case.intnums.clone(),
+        strata: case.strata.clone(),
+        ..*case
+    }
 }

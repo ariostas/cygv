@@ -91,11 +91,9 @@ fn test_h2_vex() {
         Err(ComputeError::Modular(modular::Error::NotStable))
     );
 
-    // The modular pipeline does not support strata yet, and the strata are checked.
-    assert_eq!(
-        h2_vex().gv(6, Method::Modular),
-        Err(ComputeError::Unsupported("strata"))
-    );
+    // Both methods give the same invariants, and the strata are checked.
+    assert_eq!(h2_vex().gv(6, Method::Modular).unwrap(), gv);
+    assert_eq!(h2_vex().gv(6, Method::Reference).unwrap(), gv);
     let mut phase = h2_vex();
     phase.strata[0].divisors = [1, 2, 6];
     assert!(matches!(
@@ -173,7 +171,8 @@ fn test_vex_and_frst_agree() {
     let t = DMatrix::from_row_slice(4, 4, &[1, 2, 0, 1, 0, 1, 0, 1, 0, -1, 1, -3, 0, 1, 0, 0]);
 
     let max_deg = 10;
-    let gv_vex = vex.gv(max_deg, Method::Auto).unwrap();
+    let gv_vex = vex.gv(max_deg, Method::Modular).unwrap();
+    assert_eq!(vex.gv(max_deg, Method::Reference).unwrap(), gv_vex);
     let gv_frst = frst.gv(max_deg, Method::Auto).unwrap();
     let mapped: HashMap<Vec<i32>, Integer> = gv_vex
         .into_iter()

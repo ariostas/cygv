@@ -113,7 +113,7 @@ pub fn generated_semigroup<'a, L: KeyLayout>(
 
 /// The candidates among the elements of degree at most `max_deg` of the semigroup generated
 /// by `generators`: those with at most two negative intersections with the toric divisors,
-/// in increasing order of degree and then key. See [`generated_semigroup`] for the
+/// and in a vex phase those on its strata, in increasing order of degree and then key. See [`generated_semigroup`] for the
 /// requirements on the input.
 pub fn candidates_by_enumeration<'a, L: KeyLayout>(
     layout: &L,
@@ -129,7 +129,8 @@ pub fn candidates_by_enumeration<'a, L: KeyLayout>(
     Ok(retain_candidates(layout, points, geometry))
 }
 
-/// The points with at most two negative intersections with the toric divisors.
+/// The points with at most two negative intersections with the toric divisors, and those on
+/// the strata of a vex phase (see [`Geometry::carries_period`]).
 fn retain_candidates<L: KeyLayout>(
     layout: &L,
     mut points: Vec<(L::Key, u32)>,
@@ -138,7 +139,7 @@ fn retain_candidates<L: KeyLayout>(
     let mut c = vec![0; layout.dim()];
     points.retain(|&(key, _)| {
         layout.unpack(key, &mut c);
-        geometry.n_negative(&c) <= 2
+        geometry.carries_period(&c)
     });
     points
 }
@@ -286,7 +287,9 @@ fn fits(m: &nalgebra::DMatrix<i32>, dim: usize) -> bool {
 ///   $K_s$ and $K_u$ give.
 ///
 /// So the candidates can be fewer than the lattice points with at most two negative
-/// intersections, but the missing ones have no period data. The cones are trusted to be the
+/// intersections, but the missing ones have no period data. In a vex phase the cones of the
+/// strata, of three divisors, add the curves on them, and their points that cannot carry
+/// period data are dropped (see [`Geometry::carries_period`]). The cones are trusted to be the
 /// $K_T$ of `geometry` (see [`crate::cone::ConeData`]).
 pub fn candidates_from_cones<L: KeyLayout>(
     layout: &L,
@@ -362,6 +365,11 @@ pub(crate) fn cone_candidates<L: KeyLayout>(
         .zip(map.degs().iter().copied())
         .collect();
     points.sort_unstable_by_key(|&(key, deg)| (deg, key));
+    // The cones of the strata also have points with three negative intersections that carry
+    // nothing.
+    if !geometry.strata().is_empty() {
+        points = retain_candidates(layout, points, geometry);
+    }
     Ok(points)
 }
 
@@ -550,11 +558,112 @@ pub(crate) mod tests {
             .map(|a| (0..h11).map(|b| (a == b) as i32).collect())
             .collect();
         let units: Vec<&[i32]> = units.iter().map(Vec::as_slice).collect();
+        brute_force_cone_data(&units, grading_vector, max_deg, geometry)
+    }
+
+    /// The cone data of the full-dimensional cone of `generators`, whose semigroup must have
+    /// every lattice point of the cone up to `max_deg`: its facets, and the cones $K_T$ of
+    /// `geometry` with their Hilbert bases truncated at `max_deg`, by brute force.
+    pub(crate) fn brute_force_cone_data(
+        generators: &[&[i32]],
+        grading_vector: &[i32],
+        max_deg: u32,
+        geometry: &Geometry,
+    ) -> ConeData {
+        let h11 = grading_vector.len();
+        let facets = facets(generators);
         ConeData {
-            hyperplanes: DMatrix::identity(h11, h11),
+            hyperplanes: DMatrix::from_iterator(h11, facets.len(), facets.into_iter().flatten()),
             equations: DMatrix::zeros(h11, 0),
-            cones: brute_force_cones(&units, grading_vector, max_deg, geometry),
+            cones: brute_force_cones(generators, grading_vector, max_deg, geometry),
         }
+    }
+
+    /// The facets of the full-dimensional cone of `generators`, as primitive inward normals:
+    /// the normals of the hyperplanes through $h^{1,1} - 1$ of them that leave all on one side.
+    fn facets(generators: &[&[i32]]) -> Vec<Vec<i32>> {
+        let dim = generators[0].len();
+        let mut facets: Vec<Vec<i32>> = Vec::new();
+        let mut subset: Vec<usize> = (0..dim - 1).collect();
+        loop {
+            // The normal by cofactors: n_a = (-1)^a det of the rows without coordinate a.
+            let normal: Vec<i64> = (0..dim)
+                .map(|a| {
+                    let m: Vec<Vec<i64>> = subset
+                        .iter()
+                        .map(|&i| {
+                            (0..dim)
+                                .filter(|&b| b != a)
+                                .map(|b| generators[i][b] as i64)
+                                .collect()
+                        })
+                        .collect();
+                    if a % 2 == 0 {
+                        det(m)
+                    } else {
+                        -det(m)
+                    }
+                })
+                .collect();
+            let g = normal.iter().fold(0, |g, &x| gcd(g, x.abs()));
+            if g > 0 {
+                let side = |n: &[i64]| {
+                    generators
+                        .iter()
+                        .all(|c| c.iter().zip(n).map(|(&x, &y)| x as i64 * y).sum::<i64>() >= 0)
+                };
+                let neg: Vec<i64> = normal.iter().map(|x| -x).collect();
+                for n in [&normal, &neg] {
+                    let n: Vec<i32> = n.iter().map(|x| (x / g) as i32).collect();
+                    let n64: Vec<i64> = n.iter().map(|&x| x as i64).collect();
+                    if side(&n64) && !facets.contains(&n) {
+                        facets.push(n);
+                    }
+                }
+            }
+            // The next subset in lexicographic order.
+            let k = dim - 1;
+            let Some(i) = (0..k).rev().find(|&i| subset[i] < generators.len() - k + i) else {
+                break;
+            };
+            subset[i] += 1;
+            for j in i + 1..k {
+                subset[j] = subset[j - 1] + 1;
+            }
+        }
+        facets
+    }
+
+    fn gcd(a: i64, b: i64) -> i64 {
+        if b == 0 {
+            a
+        } else {
+            gcd(b, a % b)
+        }
+    }
+
+    /// The determinant of a small square matrix, by cofactor expansion.
+    fn det(m: Vec<Vec<i64>>) -> i64 {
+        let n = m.len();
+        if n == 0 {
+            return 1;
+        }
+        (0..n)
+            .map(|j| {
+                let minor = m[1..]
+                    .iter()
+                    .map(|r| {
+                        r.iter()
+                            .enumerate()
+                            .filter(|&(c, _)| c != j)
+                            .map(|(_, &x)| x)
+                            .collect()
+                    })
+                    .collect();
+                let sign = if j % 2 == 0 { 1 } else { -1 };
+                sign * m[0][j] * det(minor)
+            })
+            .sum()
     }
 
     /// The cones $K_T$ of `geometry`, with their Hilbert bases truncated at `max_deg`, by
@@ -579,36 +688,38 @@ pub(crate) mod tests {
         let negatives = |c: &[i32]| -> Vec<usize> {
             (0..ndiv).filter(|&r| dot(c, geometry.q(r)) < 0).collect()
         };
+        // Every set of one or two divisors, and those of the strata.
+        let mut sets: Vec<Vec<usize>> = (0..ndiv)
+            .flat_map(|s| (s..ndiv).map(move |t| if s == t { vec![s] } else { vec![s, t] }))
+            .collect();
+        sets.extend(geometry.strata().iter().map(|s| s.divisors.to_vec()));
         let mut cones = Vec::new();
-        for s in 0..ndiv {
-            for t in s..ndiv {
-                let divisors = if s == t { vec![s] } else { vec![s, t] };
-                // The points of K_T, in increasing order of degree.
-                let in_cone: Vec<&Vec<i32>> = points
-                    .iter()
-                    .filter(|c| negatives(c).iter().all(|r| divisors.contains(r)))
-                    .collect();
-                let set: HashSet<&Vec<i32>> = in_cone.iter().copied().collect();
-                // A point is reducible exactly when it minus some basis element is in K_T.
-                let mut basis: Vec<Vec<i32>> = Vec::new();
-                for &c in &in_cone[1..] {
-                    let reducible = basis.iter().any(|h| {
-                        let d: Vec<i32> = c.iter().zip(h).map(|(x, y)| x - y).collect();
-                        set.contains(&d)
-                    });
-                    if !reducible {
-                        basis.push(c.clone());
-                    }
-                }
-                cones.push(CandidateCone {
-                    divisors,
-                    hilbert_basis: DMatrix::from_iterator(
-                        h11,
-                        basis.len(),
-                        basis.into_iter().flatten(),
-                    ),
+        for divisors in sets {
+            // The points of K_T, in increasing order of degree.
+            let in_cone: Vec<&Vec<i32>> = points
+                .iter()
+                .filter(|c| negatives(c).iter().all(|r| divisors.contains(r)))
+                .collect();
+            let set: HashSet<&Vec<i32>> = in_cone.iter().copied().collect();
+            // A point is reducible exactly when it minus some basis element is in K_T.
+            let mut basis: Vec<Vec<i32>> = Vec::new();
+            for &c in &in_cone[1..] {
+                let reducible = basis.iter().any(|h| {
+                    let d: Vec<i32> = c.iter().zip(h).map(|(x, y)| x - y).collect();
+                    set.contains(&d)
                 });
+                if !reducible {
+                    basis.push(c.clone());
+                }
             }
+            cones.push(CandidateCone {
+                divisors,
+                hilbert_basis: DMatrix::from_iterator(
+                    h11,
+                    basis.len(),
+                    basis.into_iter().flatten(),
+                ),
+            });
         }
         cones
     }
@@ -677,6 +788,16 @@ pub(crate) mod tests {
         }
         assert_eq!(skipped.len() + dropped, all.len());
         dropped
+    }
+
+    #[test]
+    fn test_facets() {
+        let mut f = facets(&[&[1, 0], &[1, 2], &[1, 1]]);
+        f.sort_unstable();
+        assert_eq!(f, [vec![0, 1], vec![2, -1]]);
+        let mut f = facets(&[&[1, 0, 0], &[0, 1, 0], &[0, 0, 1], &[1, 1, 0]]);
+        f.sort_unstable();
+        assert_eq!(f, [vec![0, 0, 1], vec![0, 1, 0], vec![1, 0, 0]]);
     }
 
     #[test]

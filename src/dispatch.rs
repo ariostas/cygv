@@ -1,9 +1,9 @@
 //! Entry points that pick a pipeline and run it.
 //!
 //! Every entry point takes a [`Method`]. The modular pipeline supports truncation by a maximum
-//! degree and by target points, but not by a minimum number of points, and no vex phases yet;
-//! with [`Method::Auto`] the other requests, and those whose curve classes do not fit its keys,
-//! go to the reference pipeline instead. Both give the nonzero invariants only.
+//! degree and by target points, but not by a minimum number of points; with [`Method::Auto`]
+//! those requests, and those whose curve classes do not fit its keys, go to the reference
+//! pipeline instead. Both support the strata of vex phases. Both give the nonzero invariants only.
 //!
 //! Target points may come with a maximum degree, which then truncates their backward
 //! lightcones further; without one, the largest degree of the targets is the maximum.
@@ -84,11 +84,8 @@ pub(crate) fn modular_unsupported(
     max_deg: Option<u32>,
     min_points: Option<u32>,
     has_target_points: bool,
-    has_strata: bool,
 ) -> Option<&'static str> {
-    if has_strata {
-        Some("strata")
-    } else if min_points.is_some() {
+    if min_points.is_some() {
         Some("min_points")
     } else if max_deg.is_none() && !has_target_points {
         Some("computations without max_deg or target_points")
@@ -148,7 +145,7 @@ fn compute(
     check_strata(&strata, q.nrows(), q.ncols(), cy_kind, nefpart.is_empty())
         .map_err(ComputeError::InvalidStrata)?;
     if let Some(cone_data) = &cone_data {
-        check_cone_data(cone_data, &q, &generators)
+        check_cone_data(cone_data, &q, &generators, &strata)
             .map_err(|(_, reason)| ComputeError::InvalidConeData(reason))?;
     }
     // No target points means no truncation by them.
@@ -161,12 +158,7 @@ fn compute(
     if !has_generators && cone_data.is_none() {
         return Err(ComputeError::MissingGenerators);
     }
-    let unsupported = modular_unsupported(
-        max_deg,
-        min_points,
-        target_points.is_some(),
-        !strata.is_empty(),
-    );
+    let unsupported = modular_unsupported(max_deg, min_points, target_points.is_some());
     let use_modular = match (method, unsupported) {
         (Method::Reference, _) | (Method::Auto, Some(_)) => false,
         (Method::Modular, Some(what)) => return Err(ComputeError::Unsupported(what)),
@@ -179,6 +171,7 @@ fn compute(
             &q,
             &nefpart,
             &intnums,
+            &strata,
             cone_data.as_ref(),
             invariant_kind,
             cy_kind,
@@ -228,6 +221,7 @@ fn run_modular(
     q: &DMatrix<i32>,
     nefpart: &[DVector<i32>],
     intnums: &HashMap<(usize, usize, usize), i32>,
+    strata: &[Stratum],
     cone_data: Option<&ConeData>,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
@@ -238,7 +232,8 @@ fn run_modular(
     let targets: Vec<&[i32]> = target_points.map_or_else(Vec::new, |t| columns(t).collect());
     // The targets lower it to their largest degree.
     let max_deg = max_deg.unwrap_or(u32::MAX);
-    let geometry = Geometry::from_toric(q, nefpart, intnums, cy_kind, grading_vector)?;
+    let geometry = Geometry::from_toric(q, nefpart, intnums, cy_kind, grading_vector)?
+        .with_strata(strata, grading_vector)?;
     let gens: Vec<&[i32]> = columns(generators).collect();
     let source = match cone_data {
         Some(cone_data) => CandidateSource::Cones(cone_data),

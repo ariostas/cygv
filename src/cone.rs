@@ -4,20 +4,27 @@
 //! intersections with the toric divisors. The others, the *candidates*, are the lattice points
 //! of the cones
 //! $$K_T = \text{Mori cone} \cap \{C : Q_r \cdot C \ge 0 \text{ for } r \notin T\}$$
-//! over the sets $T$ of one or two divisors, so the modular pipeline can enumerate them from
+//! over the sets $T$ of one or two divisors (and, in a vex phase, the divisors of each stratum,
+//! whose curves of negative anticanonical degree carry the stratum's term), so the modular
+//! pipeline can enumerate them from
 //! the Hilbert bases of the $K_T$ without the rest of the Mori cone, which is much faster than
 //! enumerating the semigroup of the generators. This module holds that data, [`ConeData`],
 //! which callers compute with an external program such as normaliz for now.
 
+use crate::Stratum;
 use nalgebra::DMatrix;
 use std::collections::HashSet;
 
 /// The Mori cone (or a face of it) by inequalities and equations, with the Hilbert bases of the
 /// cones $K_T$.
 ///
+/// In a vex phase, each stratum $S$ (see [`Stratum`]) also needs its cone $K_S$, of three
+/// divisors, whose curves of negative anticanonical degree carry the stratum's term.
+///
 /// The data is trusted to be complete: a Hilbert basis that misses an element silently drops
 /// curve classes. What can be checked cheaply is checked, i.e. that every $T$ with one or two
-/// divisors has a cone, and that every Hilbert basis element and generator lies in its cone.
+/// divisors and every stratum has a cone, that no other $T$ does, and that every Hilbert basis
+/// element and generator lies in its cone.
 ///
 /// The lattice points of the cones are taken in $\mathbb{Z}^{h^{1,1}}$, so the candidates are
 /// those of the cone the hyperplanes describe, even when the generators do not generate all of
@@ -31,7 +38,8 @@ pub struct ConeData {
     /// The equations $e \cdot C = 0$ of the linear span of the cone, one per column, when it is
     /// a face of the Mori cone rather than all of it. Otherwise there are none.
     pub equations: DMatrix<i32>,
-    /// The cone $K_T$ of every set $T$ of one or two divisors, in any order.
+    /// The cone $K_T$ of every set $T$ of one or two divisors, and of the divisors of every
+    /// stratum, in any order.
     pub cones: Vec<CandidateCone>,
 }
 
@@ -60,13 +68,14 @@ fn dot(a: &[i32], b: &[i32]) -> i64 {
     a.iter().zip(b).map(|(&x, &y)| x as i64 * y as i64).sum()
 }
 
-/// Checks the cone data against the charge matrix `q` (one row per divisor) and the
-/// generators, which may be empty, returning the input field at fault and what is wrong with
-/// it otherwise.
+/// Checks the cone data against the charge matrix `q` (one row per divisor), the generators,
+/// which may be empty, and the strata, which must have been checked, returning the input field
+/// at fault and what is wrong with it otherwise.
 pub(crate) fn check_cone_data(
     cone_data: &ConeData,
     q: &DMatrix<i32>,
     generators: &DMatrix<i32>,
+    strata: &[Stratum],
 ) -> Result<(), (&'static str, &'static str)> {
     let cones_err = |reason| Err(("cones", reason));
     let (n_divisors, h11) = q.shape();
@@ -105,16 +114,27 @@ pub(crate) fn check_cone_data(
         }
     }
 
+    let strata_sets: Vec<[usize; 3]> = strata
+        .iter()
+        .map(|s| {
+            let mut d = s.divisors;
+            d.sort_unstable();
+            d
+        })
+        .collect();
     let mut seen = HashSet::new();
     let q_rows: Vec<Vec<i32>> = q.row_iter().map(|r| r.iter().copied().collect()).collect();
     for cone in cones {
         let mut t = cone.divisors.clone();
         t.sort_unstable();
-        if !(1..=2).contains(&t.len()) {
-            return cones_err("a cone K_T must have one or two divisors");
+        if !(1..=3).contains(&t.len()) {
+            return cones_err("a cone K_T must have one or two divisors, or three for a stratum");
         }
         if t[t.len() - 1] >= n_divisors || t.windows(2).any(|w| w[0] == w[1]) {
             return cones_err("the divisors of a cone K_T must be distinct rows of the charges");
+        }
+        if t.len() == 3 && !strata_sets.iter().any(|s| s[..] == t[..]) {
+            return cones_err("a cone K_T of three divisors must be on a stratum");
         }
         if !seen.insert(t.clone()) {
             return cones_err("two cones K_T have the same divisors");
@@ -133,8 +153,10 @@ pub(crate) fn check_cone_data(
             }
         }
     }
-    if seen.len() != n_divisors + n_divisors * n_divisors.saturating_sub(1) / 2 {
-        return cones_err("there must be a cone K_T for every set of one or two divisors");
+    if seen.len() != n_divisors + n_divisors * n_divisors.saturating_sub(1) / 2 + strata.len() {
+        return cones_err(
+            "there must be a cone K_T for every set of one or two divisors, and for every stratum",
+        );
     }
     Ok(())
 }
@@ -176,13 +198,13 @@ mod tests {
     fn test_check_cone_data() {
         let (q, cd) = p11222();
         let gens = dmatrix![1, 0; 0, 1];
-        assert_eq!(check_cone_data(&cd, &q, &gens), Ok(()));
-        assert_eq!(check_cone_data(&cd, &q, &DMatrix::zeros(0, 0)), Ok(()));
+        assert_eq!(check_cone_data(&cd, &q, &gens, &[]), Ok(()));
+        assert_eq!(check_cone_data(&cd, &q, &DMatrix::zeros(0, 0), &[]), Ok(()));
 
         let check = |f: &dyn Fn(&mut ConeData)| {
             let mut cd = cd.clone();
             f(&mut cd);
-            check_cone_data(&cd, &q, &gens)
+            check_cone_data(&cd, &q, &gens, &[])
         };
         assert!(check(&|cd| cd.hyperplanes = DMatrix::zeros(2, 0)).is_err());
         assert!(check(&|cd| cd.hyperplanes = dmatrix![1; 0; 0]).is_err());
@@ -205,6 +227,22 @@ mod tests {
             check(&|cd| cd.cones[0].hilbert_basis = DMatrix::zeros(0, 0)),
             Ok(())
         );
-        assert!(check_cone_data(&cd, &q, &dmatrix![1, -1; 0, 1]).is_err());
+        assert!(check_cone_data(&cd, &q, &dmatrix![1, -1; 0, 1], &[]).is_err());
+
+        // A stratum needs its cone, of three divisors, which other sets cannot have.
+        let strata = [Stratum {
+            divisors: [5, 0, 1],
+            class: vec![(1, 1), (0, 1)],
+        }];
+        assert!(check_cone_data(&cd, &q, &gens, &strata).is_err());
+        let mut with_stratum = cd.clone();
+        with_stratum.cones.push(CandidateCone {
+            divisors: vec![0, 1, 5],
+            hilbert_basis: dmatrix![1, 0; 0, 1],
+        });
+        assert_eq!(check_cone_data(&with_stratum, &q, &gens, &strata), Ok(()));
+        assert!(check_cone_data(&with_stratum, &q, &gens, &[]).is_err());
+        with_stratum.cones.last_mut().unwrap().divisors = vec![0, 2, 5];
+        assert!(check_cone_data(&with_stratum, &q, &gens, &strata).is_err());
     }
 }

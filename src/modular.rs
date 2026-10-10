@@ -32,7 +32,7 @@ pub mod table;
 #[cfg(test)]
 mod reference_tests;
 
-use crate::{CYKind, NON_INTEGER_CAUSES};
+use crate::{check_strata, CYKind, Stratum, NON_INTEGER_CAUSES};
 pub use candidates::CandidateSource;
 use core::fmt;
 use crt::Residues;
@@ -63,6 +63,9 @@ pub enum Error {
     NotInvertible,
     /// The options are out of range.
     InvalidOptions,
+    /// The strata do not fit the geometry: it is not a threefold hypersurface, or their
+    /// divisors are not three distinct ones, or their classes are out of range.
+    InvalidStrata,
     /// The lift of the residues did not stabilize within the allowed number of passes.
     NotStable,
 }
@@ -84,6 +87,10 @@ impl fmt::Display for Error {
             ),
             Self::NotInvertible => write!(f, "a value is not invertible modulo one of the primes"),
             Self::InvalidOptions => write!(f, "the options are out of range"),
+            Self::InvalidStrata => write!(
+                f,
+                "the strata must be on three distinct divisors of a threefold hypersurface"
+            ),
             Self::NotStable => write!(
                 f,
                 "the GV invariants did not stabilize as more primes were used, so they are \
@@ -112,6 +119,11 @@ impl From<KeyError> for Error {
 ///   the grading vector; an n-fold has one form $K^{(k)}_{ab} = \kappa_{kab}$ per reference
 ///   surface $k$.
 ///
+/// - In a vex phase of a threefold hypersurface, the strata (see [`Stratum`]): each one's three
+///   divisors and its class contracted with the grading vector, $w \cdot d_S$, which is what
+///   the curves of negative anticanonical degree that meet exactly those divisors negatively
+///   add to $S_2$ (see [`period`]).
+///
 /// The kind of the Calabi-Yau also decides how the invariants are read off the instanton
 /// series (see [`multicover`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,6 +133,16 @@ pub struct Geometry {
     q: Vec<i32>,
     q0: Vec<i32>,
     forms: Vec<i64>,
+    strata: Vec<VexStratum>,
+}
+
+/// A stratum of a vex phase, as the period step uses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VexStratum {
+    /// The three divisors, in increasing order.
+    pub divisors: [usize; 3],
+    /// $w \cdot d_S = \sum_t w_t\, n_t / d_t$, as the terms $(w_t n_t, d_t)$ with $w_t n_t \ne 0$.
+    pub weighted_class: Vec<(i64, i64)>,
 }
 
 impl Geometry {
@@ -156,7 +178,49 @@ impl Geometry {
             q,
             q0,
             forms,
+            strata: Vec::new(),
         })
+    }
+
+    /// Adds the strata of a vex phase, contracted with the grading vector. Only threefold
+    /// hypersurfaces can have them, with distinct divisors that exist and positive
+    /// denominators, and no two on the same divisors.
+    pub fn with_strata(
+        mut self,
+        strata: &[Stratum],
+        grading_vector: &[i32],
+    ) -> Result<Self, Error> {
+        if strata.is_empty() {
+            return Ok(self);
+        }
+        if grading_vector.len() != self.h11 {
+            return Err(Error::DimensionMismatch);
+        }
+        check_strata(
+            strata,
+            self.n_divisors(),
+            self.h11,
+            self.kind,
+            self.n_anticanonical() == 1,
+        )
+        .map_err(|_| Error::InvalidStrata)?;
+        for stratum in strata {
+            let mut divisors = stratum.divisors;
+            divisors.sort_unstable();
+            let weighted_class = stratum
+                .class
+                .iter()
+                .zip(grading_vector)
+                .filter(|&(&(num, _), &w)| num != 0 && w != 0)
+                .map(|(&(num, den), &w)| Some((num.checked_mul(w as i64)?, den)))
+                .collect::<Option<_>>()
+                .ok_or(Error::InvalidStrata)?;
+            self.strata.push(VexStratum {
+                divisors,
+                weighted_class,
+            });
+        }
+        Ok(self)
     }
 
     /// Derives the data from the inputs of the reference pipeline: the charge matrix `q` with
@@ -309,6 +373,37 @@ impl Geometry {
         (0..self.n_divisors())
             .filter(|&r| dot(c, self.q(r)) < 0)
             .count()
+    }
+
+    /// The strata of a vex phase, if any.
+    #[inline]
+    pub fn strata(&self) -> &[VexStratum] {
+        &self.strata
+    }
+
+    /// The index of the stratum on the divisors `neg`, given in increasing order, if any.
+    pub fn stratum(&self, neg: &[usize]) -> Option<usize> {
+        self.strata.iter().position(|s| s.divisors[..] == *neg)
+    }
+
+    /// Whether the fundamental period can be nonzero at the curve class `c`: when it has at most
+    /// two negative intersections with the toric divisors, or when it has negative
+    /// anticanonical degree and its negative intersections are with the divisors of a stratum.
+    pub fn carries_period(&self, c: &[i32]) -> bool {
+        let mut neg = [0; 3];
+        let mut n = 0;
+        for r in 0..self.n_divisors() {
+            if dot(c, self.q(r)) < 0 {
+                if n == 3 {
+                    return false;
+                }
+                neg[n] = r;
+                n += 1;
+            }
+        }
+        n <= 2
+            || (self.stratum(&neg).is_some()
+                && (0..self.n_anticanonical()).any(|j| dot(c, self.q0(j)) < 0))
     }
 }
 

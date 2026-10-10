@@ -123,7 +123,8 @@ entry points, which pick a pipeline by the `Method` enum of `src/lib.rs`, and `s
 CLI and `src/python.rs` sit on top of those. `src/cone.rs` holds the optional *cone data*
 (`ConeData`: the Mori cone's inequalities and equations, and the Hilbert basis of each cone
 $K_T$, the curve classes in the Mori cone that only meet the divisors in $T$ negatively, for
-every $T$ of one or two divisors) and its validation (`check_cone_data`). Callers compute it
+every $T$ of one or two divisors and, in a vex phase, the three divisors of every stratum) and
+its validation (`check_cone_data`). Callers compute it
 with an external program such as Normaliz (the Python side deliberately does not call one);
 it is the shared home the native cone computations of `PLAN.md` phase 7 are meant to land in.
 
@@ -139,9 +140,12 @@ the sums of the Hilbert basis elements of each $K_T$ of the cone data, skipping 
 in another and two-divisor cones whose form $Q_s K^{(k)} Q_u$ vanishes, as the C does, or the
 whole semigroup of the generators up to `max_deg`, enumerated in order of degree and filtered
 to the classes with at most two negative intersections; the cones are much faster and give
-every lattice point of the Mori cone, the enumeration only those the generators generate),
-`period` (tables of factorials and harmonic numbers, then $c_0$, $c_1$ and the
-second derivatives already contracted with the bilinear forms, $S_2$), `instanton` (sparse
+every lattice point of the Mori cone, the enumeration only those the generators generate; in
+a vex phase both also keep the curves of negative anticanonical degree on a stratum,
+`Geometry::carries_period`), `period` (tables of factorials and harmonic numbers, then $c_0$,
+$c_1$ and the second derivatives already contracted with the bilinear forms, $S_2$, to which
+a curve on a stratum adds $U_0\,(w \cdot d_S)$, the reference's $c_0^{-1}$ `vex[t]` term
+contracted with the grading; the strata reach `Geometry` through `with_strata`), `instanton` (sparse
 products and reciprocal, $\alpha$, and the instanton series $I$), `extraction` (the
 coefficients of $I$ in the basis $z^C \exp(C\cdot\alpha)$, curve by curve in order of degree,
 each exponential built by the Euler recurrence in per-degree tables) and `multicover` (the GV
@@ -201,7 +205,7 @@ indices differently (the first index is a reference surface in the n-fold case).
   `compute_gvgw_strings` in the same file, which is the runtime dispatch used by both
   `src/python.rs` and the CLI — goes through the private `dispatch::compute`, which picks the
   pipeline from the `Method`: `Auto` (the default) runs `modular` when the request has
-  `max_deg` or `target_points`, and no `min_points` or `strata` (see `modular_unsupported`), and falls back
+  `max_deg` or `target_points` and no `min_points` (see `modular_unsupported`), and falls back
   to `reference` otherwise or when the curve classes do not fit `modular`'s keys; `Modular`
   makes an unsupported request a `ComputeError::Unsupported`; `Reference` always runs
   `run_hkty`. The entry points return `Result<_, ComputeError>`, but only `modular`'s errors

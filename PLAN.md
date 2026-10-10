@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6 and 6b done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b and 6–6c done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -506,10 +506,36 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     against the C's 0.46 s; with `max_deg` 13) and `h11_11` (14 and 12). The toy threefold's
     target-point smoke tests in Python now ask for the reference: `auto` routes them to
     `modular`, where that inconsistent geometry has no integer invariants.
-- [ ] **6c. Vex phases in `modular`** (6.3).
-  - [ ] The $m < 0$ period branch.
-  - [ ] The extra $K_T$ per stratum.
-  - [ ] Tests against the reference (phase 4b), the C oracle and `cgv/tests/refs_vex`.
+- [x] **6c. Vex phases in `modular`** (6.3).
+  - [x] The $m < 0$ period branch. `Geometry::with_strata` (threefold hypersurfaces only,
+    `Error::InvalidStrata`) keeps each stratum's sorted divisors and the terms of $w \cdot d_S$;
+    the period evaluator reduces them modulo the primes and adds $U_0\,(w \cdot d_S)$ to $S_2$
+    at a curve of anticanonical degree $m < 0$ whose three negative intersections are a
+    stratum's, as the C does. That is the reference's $c_0^{-1}$ `vex[t]` contracted with the
+    grading, since $S_2$ only enters $I$ as $c_0^{-1} S_2$. The "larger factorial tables" of
+    6.3 came for free: the tables were already sized by the intersections of the candidates.
+  - [x] The extra $K_T$ per stratum. `ConeData` takes a three-divisor cone for every stratum,
+    and `check_cone_data` (which now takes the strata) requires one per stratum and rejects any
+    other. The containment skip needs no change: the stratum's cone contains those of its
+    subsets. The candidates keep the curves on a stratum (`Geometry::carries_period`) on both
+    paths; from the cones, points of a stratum's cone with three negatives that carry nothing
+    are dropped. `modular_unsupported` lost its strata argument, so `auto` routes vex phases to
+    `modular`.
+  - [x] Tests against the reference (phase 4b), the C oracle and `cgv/tests/refs_vex`.
+    `reference_tests::test_vex` on `liam_h2_fan1` and the vex side of `pair_h4_1`: the stages
+    curve by curve (the reference's $S_2$ plus its stratum terms contracted with $w$, which
+    catches a flipped sign of $U_0$), GV and GW end to end, target points, and cone data built
+    by brute force (with the facets, now computed by a test helper) against the enumeration and
+    the reference, also below a target on a stratum. `tests/vex.rs` compares both methods; a
+    new example, `examples/vex.yaml` (cone data with the stratum's cone, no generators), is
+    checked against the reference by `tests/cli.rs`, as is the error without that cone; YAML and
+    Python tests. Development only (scratch scripts, the inputs need `cgv_phase.py` and
+    Normaliz): all 16 references of `refs_vex` at their stored degrees, through the generators
+    (1 s for all) and through Normaliz cone data with the stratum cones, plus the lightcones of
+    three stored curves per reference as `vex_regress.py` does; the C oracle at higher degrees,
+    identical on `liam_h2_fan1` at 50, `liam_h3_fan4/6/8` at 30, `pair_h4_1` at 30 and
+    `pair_h5_1/2` at 28 (up to 5156 invariants, 0.1–3.2 s on one thread against the C's
+    0.3–1.7 s on eight); the cone path against the generators path at 26–40 on all of them.
 - [ ] **5. Parallelism and tuning.** Target parity with the C *with cone data* (section 2).
   - [ ] Rayon over candidates / product chunks / curves per layer.
   - [ ] Sharded $I$ with per-shard locks.

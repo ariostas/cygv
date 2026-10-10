@@ -230,11 +230,35 @@ def test_vex_phase() -> None:
         dict(compute_gv(*args, max_deg=4, strata=as_strings, method="reference")) == gv
     )
 
+    # Both methods support strata, also with cone data, which then needs the cone of the
+    # stratum.
+    assert dict(compute_gv(*args, max_deg=4, strata=strata, method="modular")) == gv
+    sets: list[tuple[int, ...]] = [(s,) for s in range(6)]
+    sets += [(s, t) for s in range(6) for t in range(s + 1, 6)]
+    cones = [(T, [[0, 1], [1, 0]] if 2 in T else [[0, 1], [1, 1]]) for T in sets]
+    cones.append(((1, 2, 4), [[0, 1], [1, -1]]))
+    hyperplanes = [[1, 0], [1, 1]]
+    cone_args = (None, grading_vector, q, intnums)
+    res = compute_gv(
+        *cone_args,
+        max_deg=4,
+        strata=strata,
+        mori_hyperplanes=hyperplanes,
+        cones=cones,
+    )
+    assert dict(res) == gv
+    with pytest.raises(ValueError, match="stratum"):
+        compute_gv(
+            *cone_args,
+            max_deg=4,
+            strata=strata,
+            mori_hyperplanes=hyperplanes,
+            cones=cones[:-1],
+        )
+
     # Without the stratum the invariants are not integers.
     with pytest.raises(ValueError, match="not integers"):
         compute_gv(*args, max_deg=6)
-    with pytest.raises(ValueError, match="strata"):
-        compute_gv(*args, max_deg=4, strata=strata, method="modular")
 
 
 def test_cone_data() -> None:
