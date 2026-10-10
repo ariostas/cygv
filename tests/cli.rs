@@ -174,3 +174,31 @@ max_deg: 6
     let output = run(&["--method", "fast"], quintic);
     assert!(!output.status.success());
 }
+
+#[test]
+fn test_cone_data() {
+    // The example with cone data and no generators gives the same invariants as the
+    // reference method with the generators.
+    let input = std::fs::read_to_string(example("cones.yaml")).unwrap();
+    let with_cones = run(&[], &input);
+    assert!(
+        with_cones.status.success(),
+        "{}",
+        String::from_utf8_lossy(&with_cones.stderr)
+    );
+    let head = &input[..input.find("# The inequalities").unwrap()];
+    let reference = run(
+        &["--method", "reference"],
+        &format!("{head}generators: [[1, 0], [0, 1]]\n"),
+    );
+    assert!(reference.status.success());
+    assert_eq!(with_cones.stdout, reference.stdout);
+    let docs = YamlLoader::load_from_str(&String::from_utf8(with_cones.stdout).unwrap()).unwrap();
+    check_results(&docs, &["gv"]);
+
+    // Without generators the reference method cannot run.
+    let output = run(&["--method", "reference"], &input);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("generators"), "{stderr}");
+}

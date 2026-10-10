@@ -44,6 +44,7 @@ fn test_threefold() {
         intnums.clone(),
         Vec::new(),
         None,
+        None,
         Method::Reference,
     )
     .unwrap();
@@ -57,6 +58,7 @@ fn test_threefold() {
         nefpart.clone(),
         intnums.clone(),
         Vec::new(),
+        None,
         None,
         Method::Reference,
     )
@@ -182,6 +184,7 @@ fn test_fourfold() {
         intnums.clone(),
         Vec::new(),
         None,
+        None,
         Method::Reference,
     )
     .unwrap();
@@ -195,6 +198,7 @@ fn test_fourfold() {
         nefpart.clone(),
         intnums.clone(),
         Vec::new(),
+        None,
         None,
         Method::Reference,
     )
@@ -213,6 +217,7 @@ fn test_fourfold() {
             intnums.clone(),
             Vec::new(),
             None,
+            None,
             method,
         )
         .unwrap();
@@ -230,6 +235,7 @@ fn test_fourfold() {
             nefpart.clone(),
             intnums.clone(),
             Vec::new(),
+            None,
             None,
             method,
         )
@@ -265,6 +271,7 @@ fn test_methods() {
             intnums.clone(),
             Vec::new(),
             None,
+            None,
             method,
         )
         .map(|mut res| {
@@ -283,6 +290,7 @@ fn test_methods() {
             Vec::new(),
             intnums.clone(),
             Vec::new(),
+            None,
             None,
             method,
         )

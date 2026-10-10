@@ -10,7 +10,7 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/ariostas/cygv"
 readme = "README.md"
 # cgv/ is a development oracle (see PLAN.md) and is not part of the crate.
-exclude = ["cgv/"]
+exclude = ["cgv/", "tests/data/"]
 keywords = ["calabi-yau", "string-theory", "gopakumar-vafa", "gromov-witten", "mirror-symmetry"]
 categories = ["science", "mathematics", "algorithms"]
 

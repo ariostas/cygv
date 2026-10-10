@@ -1,5 +1,5 @@
 use crate::dispatch::compute_gvgw_strings;
-use crate::{CYKind, InvariantKind, Method, Stratum};
+use crate::{CYKind, CandidateCone, ConeData, InvariantKind, Method, Stratum};
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ fn to_matrix(m: Vec<Vec<i32>>, name: &str) -> PyResult<DMatrix<i32>> {
 /// Compute GV or GW invariants
 #[pyfunction]
 #[pyo3(name = "_compute_gvgw")]
-#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, method=None, strata=None))]
+#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, method=None, strata=None, mori_hyperplanes=None, mori_equations=None, cones=None))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
@@ -43,6 +43,9 @@ pub fn compute_gvgw(
     n_threads: Option<u32>,
     method: Option<&str>,
     strata: Option<Vec<(Vec<usize>, Vec<(i64, i64)>)>>,
+    mori_hyperplanes: Option<Vec<Vec<i32>>>,
+    mori_equations: Option<Vec<Vec<i32>>>,
+    cones: Option<Vec<(Vec<usize>, Vec<Vec<i32>>)>>,
 ) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
     CTRLC_HANDLER.call_once(|| {
         ctrlc::set_handler(|| std::process::exit(1)).expect("failed to install ctrl-c handler");
@@ -76,6 +79,36 @@ pub fn compute_gvgw(
             Ok(Stratum { divisors, class })
         })
         .collect::<PyResult<_>>()?;
+    let h11 = grading_vector.len();
+    // An empty list of vectors has no length to give its matrix, so it gets h11 rows.
+    let to_matrix_h11 = |m: Vec<Vec<i32>>, name| {
+        if m.is_empty() {
+            Ok(DMatrix::zeros(h11, 0))
+        } else {
+            to_matrix(m, name)
+        }
+    };
+    let cone_data = match (mori_hyperplanes, cones) {
+        (None, None) if mori_equations.is_none() => None,
+        (Some(hyperplanes), Some(cones)) => Some(ConeData {
+            hyperplanes: to_matrix_h11(hyperplanes, "mori_hyperplanes")?,
+            equations: to_matrix_h11(mori_equations.unwrap_or_default(), "mori_equations")?,
+            cones: cones
+                .into_iter()
+                .map(|(divisors, basis)| {
+                    Ok(CandidateCone {
+                        divisors,
+                        hilbert_basis: to_matrix_h11(basis, "cones")?,
+                    })
+                })
+                .collect::<PyResult<_>>()?,
+        }),
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "the cone data needs both mori_hyperplanes and cones",
+            ))
+        }
+    };
     let method = match method {
         None => Method::default(),
         Some(name) => Method::from_name(name).ok_or_else(|| {
@@ -92,6 +125,7 @@ pub fn compute_gvgw(
         nefpart,
         intnums,
         strata,
+        cone_data,
         invariant_kind,
         cy_kind,
         max_deg,

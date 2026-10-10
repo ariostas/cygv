@@ -1,0 +1,42 @@
+# An example input for the cygv command line interface with cone data.
+#
+#   cygv --file examples/cones.yaml
+#
+# It computes the GV invariants of P(1,1,2,2,2)[8], a CY threefold hypersurface with
+# h^{1,1} = 2, with the modular method, taking the curve classes from the Hilbert bases
+# of the cones K_T instead of from generators of the Mori cone. For larger geometries this
+# data comes from a program such as Normaliz.
+---
+name: P(1,1,2,2,2)[8]
+grading_vector: [1, 1]
+q: [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]]
+intnums: [[0, 0, 0, 8], [0, 0, 1, 4]]
+max_deg: 10
+# The inequalities h . C >= 0 of the Mori cone, which is spanned by (1, 0) and (0, 1).
+mori_hyperplanes: [[1, 0], [0, 1]]
+# For every set T of one or two divisors (rows of the charge matrix), the Hilbert basis of
+# the cone K_T of the curve classes in the Mori cone that only meet the divisors in T
+# negatively. Here only the last divisor can be negative, on the classes (x, y) with
+# x < 2y.
+cones:
+  - {divisors: [0], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [0, 1], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [0, 2], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [0, 3], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [0, 4], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [0, 5], hilbert_basis: [[1, 0], [0, 1]]}
+  - {divisors: [1], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [1, 2], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [1, 3], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [1, 4], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [1, 5], hilbert_basis: [[1, 0], [0, 1]]}
+  - {divisors: [2], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [2, 3], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [2, 4], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [2, 5], hilbert_basis: [[1, 0], [0, 1]]}
+  - {divisors: [3], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [3, 4], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [3, 5], hilbert_basis: [[1, 0], [0, 1]]}
+  - {divisors: [4], hilbert_basis: [[1, 0], [2, 1]]}
+  - {divisors: [4, 5], hilbert_basis: [[1, 0], [0, 1]]}
+  - {divisors: [5], hilbert_basis: [[1, 0], [0, 1]]}

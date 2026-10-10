@@ -40,6 +40,21 @@
 //!     class: [1, "-1/2"]
 //! ```
 //!
+//! The modular method is much faster with cone data (see [`ConeData`]): the inequalities of
+//! the Mori cone, the equations of its span if it is a face, and the Hilbert basis of the cone
+//! $K_T$ of every set $T$ of one or two divisors, which an external program such as normaliz
+//! computes. Then the generators can be left out, but only the modular method can run.
+//!
+//! ```yaml
+//! mori_hyperplanes: [[1, 0], [0, 1]]
+//! cones:
+//!   - divisors: [0]
+//!     hilbert_basis: [[1, 0], [2, 1]]
+//!   - divisors: [0, 5]
+//!     hilbert_basis: [[1, 0], [0, 1]]
+//!   # ... one entry per set of one or two divisors
+//! ```
+//!
 //! The results are written back as one YAML document per input document.
 //!
 //! ```yaml
@@ -57,6 +72,7 @@
 
 pub mod error;
 
+use crate::cone::{check_cone_data, CandidateCone, ConeData};
 use crate::dispatch::{compute_gvgw_strings, modular_unsupported, ComputeError};
 use crate::reference::misc::process_int_nums;
 use crate::{check_strata, CYKind, InvariantKind, Method, Stratum};
@@ -68,7 +84,7 @@ use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
 /// The fields that are accepted in an input document.
-const INPUT_FIELDS: [&str; 14] = [
+const INPUT_FIELDS: [&str; 17] = [
     "name",
     "generators",
     "grading_vector",
@@ -83,6 +99,9 @@ const INPUT_FIELDS: [&str; 14] = [
     "n_threads",
     "method",
     "strata",
+    "mori_hyperplanes",
+    "mori_equations",
+    "cones",
 ];
 
 /// The specification of a single computation of GV or GW invariants.
@@ -93,7 +112,8 @@ const INPUT_FIELDS: [&str; 14] = [
 pub struct Input {
     /// An optional label that is echoed back in the output.
     pub name: Option<String>,
-    /// The generators of the Mori cone.
+    /// The generators of the Mori cone. It has no columns when they are left out, which the
+    /// cone data allows.
     pub generators: DMatrix<i32>,
     /// A vector that has a positive inner product with every generator.
     pub grading_vector: RowDVector<i32>,
@@ -105,6 +125,8 @@ pub struct Input {
     pub intnums: HashMap<(usize, usize, usize), i32>,
     /// The strata of a vex phase. It is empty otherwise.
     pub strata: Vec<Stratum>,
+    /// The cone data for the modular method, if any.
+    pub cone_data: Option<ConeData>,
     /// Which invariants to compute.
     pub invariant_kind: InvariantKind,
     /// The kind of CY the invariants are computed for.
@@ -155,21 +177,28 @@ impl Input {
                     .to_owned(),
             ),
         };
-        let generators = as_matrix(require_field(hash, "generators")?, "generators")?;
-        let h11 = generators.nrows();
+        let generators = get_field(hash, "generators")
+            .map(|y| as_matrix(y, "generators"))
+            .transpose()?;
         let grading_vector = as_int_vec(require_field(hash, "grading_vector")?, "grading_vector")?;
-        if grading_vector.len() != h11 {
-            return Err(IoError::invalid_field(
-                "grading_vector",
-                format!("expected {h11} entries to match the generators"),
-            ));
+        let h11 = grading_vector.len();
+        if let Some(generators) = &generators {
+            if generators.nrows() != h11 {
+                return Err(IoError::invalid_field(
+                    "grading_vector",
+                    format!(
+                        "expected {} entries to match the generators",
+                        generators.nrows()
+                    ),
+                ));
+            }
         }
         let grading_vector = RowDVector::from_row_slice(&grading_vector);
         let q = as_matrix(require_field(hash, "q")?, "q")?;
         if q.ncols() != h11 {
             return Err(IoError::invalid_field(
                 "q",
-                format!("expected {h11} charge vectors to match the generators"),
+                format!("expected {h11} charge vectors to match the grading vector"),
             ));
         }
         let intnums = as_intnums(require_field(hash, "intnums")?)?;
@@ -180,6 +209,22 @@ impl Input {
         let strata = match get_field(hash, "strata") {
             None => Vec::new(),
             Some(y) => as_strata(y)?,
+        };
+        let cone_data = match (
+            get_field(hash, "mori_hyperplanes"),
+            get_field(hash, "cones"),
+        ) {
+            (Some(hyperplanes), Some(cones)) => Some(ConeData {
+                hyperplanes: as_matrix(hyperplanes, "mori_hyperplanes")?,
+                equations: match get_field(hash, "mori_equations") {
+                    None => DMatrix::zeros(h11, 0),
+                    Some(y) => as_matrix(y, "mori_equations")?,
+                },
+                cones: as_cones(cones, h11)?,
+            }),
+            (None, None) if get_field(hash, "mori_equations").is_none() => None,
+            (None, _) => return Err(IoError::MissingField("mori_hyperplanes")),
+            (_, None) => return Err(IoError::MissingField("cones")),
         };
 
         let invariant_kind = match get_field(hash, "invariants") {
@@ -235,19 +280,26 @@ impl Input {
         if n_truncations > 1 {
             return Err(IoError::ConflictingTruncations);
         }
-        if method == Method::Modular {
-            if let Some(what) = modular_unsupported(
-                max_deg,
-                min_points,
-                target_points.is_some(),
-                !strata.is_empty(),
-            ) {
-                return Err(IoError::invalid_field(
-                    "method",
-                    ComputeError::Unsupported(what).to_string(),
-                ));
-            }
+        let unsupported = modular_unsupported(
+            max_deg,
+            min_points,
+            target_points.is_some(),
+            !strata.is_empty(),
+        );
+        if let (Method::Modular, Some(what)) = (method, unsupported) {
+            return Err(IoError::invalid_field(
+                "method",
+                ComputeError::Unsupported(what).to_string(),
+            ));
         }
+        // Without generators only the modular method can run, and only with cone data.
+        let generators = match generators {
+            Some(generators) => generators,
+            None if cone_data.is_some() && method != Method::Reference && unsupported.is_none() => {
+                DMatrix::zeros(h11, 0)
+            }
+            None => return Err(IoError::MissingField("generators")),
+        };
         // These are checked again, deeper in the computation, but the errors there are
         // not recoverable, so they are caught here to report them properly.
         let n_rays = q.nrows() as i64;
@@ -270,6 +322,10 @@ impl Input {
         }
         check_strata(&strata, q.nrows(), h11, cy_kind, nefpart.is_empty())
             .map_err(|reason| IoError::invalid_field("strata", reason))?;
+        if let Some(cone_data) = &cone_data {
+            check_cone_data(cone_data, &q, &generators)
+                .map_err(|(field, reason)| IoError::invalid_field(field, reason))?;
+        }
         // The intersection numbers are canonicalized differently depending on the
         // dimension of the CY, so they can only be checked once it is known.
         process_int_nums(intnums.clone(), cy_kind)
@@ -283,6 +339,7 @@ impl Input {
             nefpart,
             intnums,
             strata,
+            cone_data,
             invariant_kind,
             cy_kind,
             max_deg,
@@ -329,6 +386,7 @@ impl Input {
             self.nefpart.clone(),
             self.intnums.clone(),
             self.strata.clone(),
+            self.cone_data.clone(),
             self.invariant_kind,
             self.cy_kind,
             self.max_deg,
@@ -519,6 +577,54 @@ fn as_strata(data: &Yaml) -> Result<Vec<Stratum>, IoError> {
         .collect()
 }
 
+/// Read the cones of the cone data, a list of mappings with the `divisors` and the
+/// `hilbert_basis`, which may be empty.
+fn as_cones(data: &Yaml, h11: usize) -> Result<Vec<CandidateCone>, IoError> {
+    let field = "cones";
+    let entries = data.as_vec().ok_or_else(|| {
+        IoError::invalid_field(
+            field,
+            "expected a list of mappings with divisors and hilbert_basis",
+        )
+    })?;
+    entries
+        .iter()
+        .map(|e| {
+            let hash = e.as_hash().ok_or_else(|| {
+                IoError::invalid_field(
+                    field,
+                    "each cone must be a mapping with divisors and hilbert_basis",
+                )
+            })?;
+            if hash
+                .keys()
+                .any(|k| !matches!(k.as_str(), Some("divisors" | "hilbert_basis")))
+            {
+                return Err(IoError::invalid_field(
+                    field,
+                    "the fields of a cone are divisors and hilbert_basis",
+                ));
+            }
+            let divisors = as_int_vec(require_field(hash, "divisors")?, field)?
+                .into_iter()
+                .map(|d| usize::try_from(d).ok())
+                .collect::<Option<_>>()
+                .ok_or_else(|| {
+                    IoError::invalid_field(field, "the divisors must be non-negative indices")
+                })?;
+            let basis = require_field(hash, "hilbert_basis")?;
+            let hilbert_basis = match basis.as_vec() {
+                Some(v) if v.is_empty() => DMatrix::zeros(h11, 0),
+                _ => as_matrix(basis, field)?,
+            };
+            Ok(CandidateCone {
+                divisors,
+                hilbert_basis,
+            })
+        })
+        .collect()
+}
+
 /// Read a fraction, given as an integer or as a string of the form `"p/q"` or `"p"`.
 fn as_fraction(data: &Yaml) -> Result<(i64, i64), IoError> {
     let invalid = || {
@@ -556,7 +662,7 @@ fn as_target_points(data: &Yaml, h11: usize) -> Result<DMatrix<i32>, IoError> {
     if points.nrows() != h11 {
         return Err(IoError::invalid_field(
             field,
-            format!("expected vectors with {h11} entries to match the generators"),
+            format!("expected vectors with {h11} entries to match the grading vector"),
         ));
     }
     Ok(points)
@@ -794,6 +900,121 @@ min_points: 20
             Err(IoError::InvalidField { field, reason })
                 if field == "method" && reason.contains("strata")
         ));
+    }
+
+    /// P(1,1,2,2,2)[8] with its cone data and no generators.
+    fn p11222_cones() -> String {
+        let mut data = "\
+grading_vector: [1, 1]
+q: [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]]
+intnums: [[0, 0, 0, 8], [0, 0, 1, 4]]
+max_deg: 6
+mori_hyperplanes: [[1, 0], [0, 1]]
+cones:
+"
+        .to_owned();
+        for s in 0..6 {
+            for t in s..6 {
+                let divisors = if s == t { vec![s] } else { vec![s, t] };
+                let basis = if divisors.contains(&5) {
+                    "[[1, 0], [0, 1]]"
+                } else {
+                    "[[1, 0], [2, 1]]"
+                };
+                data += &format!("  - {{divisors: {divisors:?}, hilbert_basis: {basis}}}\n");
+            }
+        }
+        data
+    }
+
+    #[test]
+    fn test_parse_cone_data() {
+        let data = p11222_cones();
+        let input = load_one(&data).unwrap();
+        assert_eq!(input.generators.shape(), (2, 0));
+        let cone_data = input.cone_data.unwrap();
+        assert_eq!(cone_data.hyperplanes, dmatrix![1, 0; 0, 1]);
+        assert_eq!(cone_data.equations.shape(), (2, 0));
+        assert_eq!(cone_data.cones.len(), 21);
+        assert_eq!(cone_data.cones[1].divisors, [0, 1]);
+        assert_eq!(cone_data.cones[1].hilbert_basis, dmatrix![1, 2; 0, 1]);
+        assert!(load_one(&format!("{data}generators: [[1, 0], [0, 1]]\n"))
+            .unwrap()
+            .cone_data
+            .is_some());
+
+        // The face spanned by (1, 0), which meets no divisor negatively, so it is every K_T.
+        let face = data
+            .replace("max_deg: 6\n", "max_deg: 6\nmori_equations: [[0, 1]]\n")
+            .replace("[[1, 0], [0, 1]]}", "[[1, 0]]}")
+            .replace("[[1, 0], [2, 1]]}", "[[1, 0]]}");
+        let cone_data = load_one(&face).unwrap().cone_data.unwrap();
+        assert_eq!(cone_data.equations, dmatrix![0; 1]);
+        assert_eq!(cone_data.cones[0].hilbert_basis, dmatrix![1; 0]);
+        // An empty Hilbert basis is read too (a K_T can be just the origin).
+        let empty = data.replacen("[[1, 0], [2, 1]]}", "[]}", 1);
+        let cone_data = load_one(&empty).unwrap().cone_data.unwrap();
+        assert_eq!(cone_data.cones[0].hilbert_basis.shape(), (2, 0));
+
+        // The cone data needs both the hyperplanes and the cones, and without generators the
+        // request must be one for the modular method.
+        let no_cones = &data[..data.find("cones:").unwrap()];
+        assert_eq!(load_one(no_cones), Err(IoError::MissingField("cones")));
+        let no_hyperplanes = data.replace("mori_hyperplanes: [[1, 0], [0, 1]]\n", "");
+        assert_eq!(
+            load_one(&no_hyperplanes),
+            Err(IoError::MissingField("mori_hyperplanes"))
+        );
+        let head = &data[..data.find("mori_hyperplanes").unwrap()];
+        assert_eq!(
+            load_one(&format!("{head}mori_equations: [[0, 1]]\n")),
+            Err(IoError::MissingField("mori_hyperplanes"))
+        );
+        assert_eq!(load_one(head), Err(IoError::MissingField("generators")));
+        for extra in ["method: reference\n", "min_points: 5\n"] {
+            let data = data.replace("max_deg: 6\n", extra);
+            assert_eq!(load_one(&data), Err(IoError::MissingField("generators")));
+        }
+
+        // The cone data is checked.
+        let field_of = |data: &str| match load_one(data) {
+            Err(IoError::InvalidField { field, .. }) => field,
+            res => panic!("{res:?}"),
+        };
+        let last = data.rfind("  - ").unwrap();
+        assert_eq!(field_of(&data[..last]), "cones");
+        for (from, to) in [
+            (
+                "{divisors: [0], hilbert_basis: [[1, 0], [2, 1]]}",
+                "{divisors: [0], hilbert_basis: [[0, 1]]}",
+            ),
+            (
+                "{divisors: [0], hilbert_basis: [[1, 0], [2, 1]]}",
+                "{divisors: [-1], hilbert_basis: []}",
+            ),
+            (
+                "{divisors: [0], hilbert_basis: [[1, 0], [2, 1]]}",
+                "{divisors: [0], basis: []}",
+            ),
+            ("{divisors: [0], hilbert_basis: [[1, 0], [2, 1]]}", "[0]"),
+        ] {
+            assert_eq!(field_of(&data.replacen(from, to, 1)), "cones", "{to}");
+        }
+        assert_eq!(
+            field_of(&data.replace(
+                "mori_hyperplanes: [[1, 0], [0, 1]]",
+                "mori_hyperplanes: [[1, 0, 0]]"
+            )),
+            "mori_hyperplanes"
+        );
+        assert_eq!(
+            field_of(&format!("{data}generators: [[1, 0], [-1, 1]]\n")),
+            "generators"
+        );
+        assert_eq!(
+            field_of(&format!("{data}mori_equations: [[1]]\n")),
+            "mori_equations"
+        );
     }
 
     #[test]

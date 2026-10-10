@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4 and 4b done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b and 6 done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -422,17 +422,57 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     and YAML and Python tests. These use the geometry of two references (charges, intersection
     numbers, derived generators and strata), not their stored tables; whether that needs the
     PR author's confirmation too is open (phase 9).
-- [ ] **6. Cone fast path through optional input.** Runs before phase 5, and fixes the
+- [x] **6. Cone fast path through optional input.** Runs before phase 5, and fixes the
   interface that phase 7 plugs into.
-  - [ ] Cone data (6.1) accepted by the Rust API and YAML. The Mori cone may be described by
-    spanning vectors or by inequalities, plus equations for faces (section 7).
-  - [ ] `generators` optional in `io::Input` when `mori_hyperplanes` is given, with validation
-    reworked accordingly (moved from phase 4).
-  - [ ] `candidates` enumerates each $K_T$ from its Hilbert basis, with the containment and
+  - [x] Cone data (6.1) accepted by the Rust API and YAML. The Mori cone may be described by
+    spanning vectors or by inequalities, plus equations for faces (section 7). `ConeData` in
+    the new `src/cone.rs` (the shared module of 4): `hyperplanes` and `equations` (columns,
+    $h \cdot C \ge 0$ and $e \cdot C = 0$) and `cones`, a `CandidateCone` (divisors $T$,
+    Hilbert basis as columns) for every $T$ of one or two divisors. One more positional
+    argument, `cone_data: Option<ConeData>`, after `strata` at every dispatch site; YAML and
+    Python fields `mori_hyperplanes`, `mori_equations`, `cones` (mappings / pairs of
+    `divisors` and `hilbert_basis`). The reference ignores it. Spanning vectors stay the
+    `generators`; nothing is derived from them natively until 7a. Checked by
+    `check_cone_data`: a cone for every $T$ (a forgotten one would silently drop curves), no
+    duplicates, every Hilbert basis element in its $K_T$ and every generator in the Mori cone.
+    Completeness of a basis cannot be checked: wrong data silently drops curves (a face test
+    with deliberately wrong bases gave no invariants at all). Elements of degree above
+    `max_deg` may be left out, which keeps fixtures small. Cones of three divisors are rejected
+    until 6c.
+  - [x] `generators` optional in `io::Input` when `mori_hyperplanes` is given, with validation
+    reworked accordingly (moved from phase 4). In practice: when the cones are given (the
+    hyperplanes alone are not enough to run anything before 7b). Without generators the Rust
+    matrix has no columns, and a request that needs the reference (method `reference`, or one
+    `modular` does not support) is `ComputeError::MissingGenerators`, or `MissingField` in YAML.
+    `auto` does not fall back on key overflow then. `h11` comes from the grading vector now.
+  - [x] `candidates` enumerates each $K_T$ from its Hilbert basis, with the containment and
     vanishing-form skips. The candidate source is an interface, so phase 7b can plug in a
     native one (Hilbert bases or direct enumeration) without touching the rest.
-  - [ ] The Python wrapper may produce the cone data with `normaliz`.
-  - [ ] Tests: candidate sets with and without the skips, face inputs (5.2).
+    `CandidateSource { Generators, Cones }` gives the coordinate bounds (from the basis
+    elements up to `max_deg`, as the C) and the candidates; `compute_gv`/`compute_gw` take it.
+    Each used cone is enumerated with `generated_semigroup` and the points are merged. The
+    vanishing-form test is $Q_s K^{(k)} Q_u = 0$ for every form $k$, so it covers n-folds and
+    complete intersections too. Negative intersections for the containment skip only count
+    elements of degree up to `max_deg`, which is tighter and still sound.
+  - [x] ~~The Python wrapper may produce the cone data with `normaliz`.~~ Decided against
+    (6.1).
+  - [x] Tests: candidate sets with and without the skips, face inputs (5.2). Unit tests against
+    the enumeration with Hilbert bases computed by brute force (P(1,1,2,2,2)[8], a toy
+    $h^{1,1} = 3$ geometry under two gradings, threefold and n-fold, where the vanishing-form
+    skip drops points), and the same check on `h11_9` with Normaliz's bases
+    (`tests/data/h11_9_cones.yaml`, truncated at degree 10, 62 KB). `tests/cones.rs`: `h11_9`
+    at degree 8, all methods and with or without generators; the saturation test above; a facet
+    with its equation (`tests/data/h11_9_facet.yaml`, 34 KB) against the reference with the
+    facet's generators; errors. `cone.rs`, YAML, CLI (`examples/cones.yaml`) and Python tests.
+    The fixtures come from a scratch script around Normaliz 3.11.0 (the way `cgv_run.py` does
+    it, but keeping the equations of a face, whose omission is the C driver's face bug of
+    section 7).
+  - Measured (release, one thread, outputs identical to the enumeration path): `h11_8` deg 12 /
+    14 / 16: 0.09 / 0.33 / 1.17 s against 0.43 / 1.51 / 4.42 s; `h11_9` deg 10 / 14 / 16: 0.06
+    / 0.30 / 0.96 s against 0.15 / 1.89 / 5.93 s; `h11_10` deg 8 / 10: 0.12 / 0.22 s against
+    0.19 / 0.97 s; `h11_11` deg 10 / 12: 0.05 / 0.11 s against 0.66 / 3.62 s. The C with cone
+    data took 0.15 s for `h11_9` at 14 on 8 threads (section 2). Normaliz itself took 2.5–7 s
+    per geometry for all the cones.
 - [ ] **6b. Target points for `modular`** (6.3).
   - [ ] The facet test at the three filter points (listing candidates, choosing the curves to
     apply in the extraction, the output).
@@ -564,7 +604,8 @@ Prototype protocol:
   Heavy and Huge degrees, plus a face input and the vex references.
 - Correctness oracle: identical candidate sets to the C with normaliz-produced cone data, and
   identical GVs end to end; for B also normaliz's Hilbert bases truncated to `max_deg`.
-- Unsaturated input (`h11_11.yaml`): the candidates must come out saturated.
+- Unsaturated input (`h11_9` without `[1,0,0,0,0,0,1,0,0]`, see 6.2; the hole in `h11_11.yaml`
+  does not change any invariant): the candidates must come out saturated.
 
 Exit criteria:
 
@@ -645,8 +686,9 @@ Layers, from cheapest to most independent:
    is dropped. Linking libnormaliz (C++) is ruled out as contrary to the goal of the rewrite.
    The Mori cone itself can be described either way, as in #100: spanning vectors (the
    existing `generators` field, now read as "any vectors spanning the cone", lattice points or
-   just rays) or inequalities (a new `mori_hyperplanes` field). Still open: whether the Python
-   wrapper should call `normaliz` when it is installed.
+   just rays) or inequalities (a new `mori_hyperplanes` field). **Decided (2026-10-10): the
+   Python wrapper does not call `normaliz`**, not even as an opt-in; it accepts cone data the
+   caller computed, and waits for phase 7b.
 2. **Saturation semantics. Direction: saturate by default.** The reference uses the semigroup
    the generators *generate* (non-negative integer combinations); the correct object is *all
    lattice points of the cone they span*, $\sigma \cap \mathbb{Z}^n$. The two differ whenever
@@ -655,6 +697,11 @@ Layers, from cheapest to most independent:
    of lattice points, which can miss an element. `benches/data/h11_11.yaml` does (its 2032
    generators miss `[2,0,0,2,1,0,0,-1,-1,0,0]`, degree 6; not an artefact of the file's
    trimming at degree 16), and the reference then silently computes over a semigroup with holes.
+   (Found in phase 6: that point meets three divisors negatively and has GV 0, and the results
+   with and without it agree up to degree 12, so this hole is invisible. A missing Hilbert basis
+   element with nonzero GV is not: dropping `[1,0,0,0,0,0,1,0,0]` (GV 20) from `h11_9` makes
+   the reference panic on a non-integer and the enumeration path fail with `NotStable`, while
+   the cones give the full result; `tests/cones.rs` tests the latter two.)
 
    So the new method **works over the saturated semigroup by default**, rather than treating
    saturation as something to check. Since #100 this needs no separate step: the candidates come
@@ -674,8 +721,8 @@ Layers, from cheapest to most independent:
      the stats struct, and as a warning in the CLI and Python) that it used the generated
      semigroup. After 7d both methods saturate the same way.
    - Outputs can differ from the reference on unsaturated input, by design. Differential tests
-     need saturated inputs, or the reference fed the completed generator set. Add `h11_11` as
-     an explicit test of both.
+     need saturated inputs, or the reference fed the completed generator set. (`h11_11` turned
+     out not to show the difference; see above for the test that does.)
    - Reporting which Hilbert basis elements the input missed (the C's old note) would need the
      Mori cone's basis again. Dropped, as in #100; it can come back as a diagnostic if wanted.
 

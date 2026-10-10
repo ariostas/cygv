@@ -18,7 +18,7 @@ use super::instanton::instanton;
 use super::key::{coordinate_bounds, KeyLayout, PackedKey, PackedLayout};
 use super::period::period;
 use super::table::SparsePoly;
-use super::{compute_gv, Geometry, Options};
+use super::{compute_gv, CandidateSource, Geometry, Options};
 use crate::dispatch::compute_gvgw_strings;
 use crate::reference::fundamental_period::compute_omega;
 use crate::reference::instanton::compute_instanton_data;
@@ -233,7 +233,7 @@ fn check_gv(case: &Case, options: &Options) {
     let h11 = case.grading_vector.len();
     let gens: Vec<&[i32]> = case.generators.as_slice().chunks(h11).collect();
     let result = compute_gv(
-        &gens,
+        CandidateSource::Generators(&gens),
         &case.grading_vector,
         case.max_deg,
         &geometry,
@@ -262,6 +262,7 @@ fn check_gw(case: &Case) {
             case.nefpart.clone(),
             case.intnums.clone(),
             Vec::new(),
+            None,
             InvariantKind::GW,
             case.cy_kind,
             Some(case.max_deg),
@@ -372,7 +373,13 @@ fn test_invalid_options() {
         },
     ] {
         assert_eq!(
-            compute_gv(&gens, &[1, 1], 4, &geometry, &options),
+            compute_gv(
+                CandidateSource::Generators(&gens),
+                &[1, 1],
+                4,
+                &geometry,
+                &options
+            ),
             Err(super::Error::InvalidOptions)
         );
     }
@@ -383,7 +390,13 @@ fn test_invalid_options() {
         ..Options::default()
     };
     assert_eq!(
-        compute_gv(&gens, &[1, 1], 4, &geometry, &options),
+        compute_gv(
+            CandidateSource::Generators(&gens),
+            &[1, 1],
+            4,
+            &geometry,
+            &options
+        ),
         Err(super::Error::NotStable)
     );
 }
@@ -494,4 +507,22 @@ fn test_fourfold_gv() {
 fn test_h11_8_gw() {
     let yaml = include_str!("../../benches/data/h11_8.yaml");
     check_gw(&load("h11_8", yaml, 5));
+}
+
+/// The candidates from the cones of `h11_9`, computed with Normaliz, with and without the skips
+/// that drop most of its cones, against the enumeration of its generators.
+#[cfg(feature = "cli")]
+#[test]
+fn test_cone_candidates() {
+    let data = format!(
+        "{}{}",
+        include_str!("../../benches/data/h11_9.yaml"),
+        include_str!("../../tests/data/h11_9_cones.yaml")
+    );
+    let input = crate::io::Input::load_all(&data).unwrap().remove(0);
+    let w = input.grading_vector.as_slice();
+    let geometry = Geometry::from_toric(&input.q, &[], &input.intnums, input.cy_kind, w).unwrap();
+    let gens: Vec<&[i32]> = input.generators.as_slice().chunks(w.len()).collect();
+    let cones = &input.cone_data.as_ref().unwrap().cones;
+    assert!(super::candidates::tests::check_cones(cones, &gens, w, 8, &geometry) > 0);
 }

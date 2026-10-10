@@ -5,11 +5,18 @@
 //! whose curve classes do not fit its keys, go to the reference pipeline instead. Both give
 //! the nonzero invariants only.
 //!
+//! The optional [`ConeData`] lets the modular pipeline take its candidates from the Hilbert
+//! bases of the cones $K_T$ instead of enumerating the semigroup of the generators, which is
+//! much faster and uses every lattice point of the Mori cone. With it the generators may be
+//! empty (no columns), but then only the modular pipeline can run. The reference pipeline
+//! ignores the cone data.
+//!
 //! The reference pipeline still panics on invalid input, while the errors of the modular one
 //! are returned.
 
+use crate::cone::{check_cone_data, ConeData};
 use crate::modular::key::KeyError;
-use crate::modular::{self, CurveInvariants, Geometry, Options};
+use crate::modular::{self, CandidateSource, CurveInvariants, Geometry, Options};
 use crate::reference::run_hkty;
 use crate::{check_strata, CYKind, InvariantKind, Method, Stratum};
 use core::fmt;
@@ -31,6 +38,10 @@ pub enum ComputeError {
     Unsupported(&'static str),
     /// The strata do not fit the geometry, for the given reason.
     InvalidStrata(&'static str),
+    /// The cone data does not fit the geometry or the generators, for the given reason.
+    InvalidConeData(&'static str),
+    /// There are no generators, but the request needs them.
+    MissingGenerators,
     /// The modular pipeline failed.
     Modular(modular::Error),
 }
@@ -42,7 +53,12 @@ impl fmt::Display for ComputeError {
                 f,
                 "the modular method does not support {what}; use the auto or reference method"
             ),
-            Self::InvalidStrata(reason) => write!(f, "{reason}"),
+            Self::InvalidStrata(reason) | Self::InvalidConeData(reason) => write!(f, "{reason}"),
+            Self::MissingGenerators => write!(
+                f,
+                "the generators of the Mori cone are needed, except by the modular method with \
+                 cone data"
+            ),
             Self::Modular(e) => write!(f, "{e}"),
         }
     }
@@ -92,6 +108,7 @@ fn compute(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    cone_data: Option<ConeData>,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
     max_deg: Option<u32>,
@@ -102,6 +119,14 @@ fn compute(
 ) -> Result<Results, ComputeError> {
     check_strata(&strata, q.nrows(), q.ncols(), cy_kind, nefpart.is_empty())
         .map_err(ComputeError::InvalidStrata)?;
+    if let Some(cone_data) = &cone_data {
+        check_cone_data(cone_data, &q, &generators)
+            .map_err(|(_, reason)| ComputeError::InvalidConeData(reason))?;
+    }
+    let has_generators = generators.ncols() > 0;
+    if !has_generators && cone_data.is_none() {
+        return Err(ComputeError::MissingGenerators);
+    }
     let unsupported = modular_unsupported(
         max_deg,
         min_points,
@@ -120,6 +145,7 @@ fn compute(
             &q,
             &nefpart,
             &intnums,
+            cone_data.as_ref(),
             invariant_kind,
             cy_kind,
             max_deg,
@@ -127,9 +153,12 @@ fn compute(
         match res {
             Err(ComputeError::Modular(modular::Error::Key(
                 KeyError::TooWide { .. } | KeyError::BoundTooLarge,
-            ))) if method == Method::Auto => {}
+            ))) if method == Method::Auto && has_generators => {}
             res => return res,
         }
+    }
+    if !has_generators {
+        return Err(ComputeError::MissingGenerators);
     }
     Ok(Results::Reference(run_hkty::<Rational>(
         generators,
@@ -147,7 +176,8 @@ fn compute(
     )))
 }
 
-/// Runs the modular pipeline with its default options.
+/// Runs the modular pipeline with its default options, with the candidates from the cone data
+/// if there is any, and from the generators otherwise.
 #[allow(clippy::too_many_arguments)]
 fn run_modular(
     generators: &DMatrix<i32>,
@@ -155,6 +185,7 @@ fn run_modular(
     q: &DMatrix<i32>,
     nefpart: &[DVector<i32>],
     intnums: &HashMap<(usize, usize, usize), i32>,
+    cone_data: Option<&ConeData>,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
     max_deg: u32,
@@ -165,17 +196,21 @@ fn run_modular(
         .as_slice()
         .chunks(generators.nrows().max(1))
         .collect();
+    let source = match cone_data {
+        Some(cone_data) => CandidateSource::Cones(&cone_data.cones),
+        None => CandidateSource::Generators(&gens),
+    };
     let options = Options::default();
     Ok(match invariant_kind {
         InvariantKind::GV => Results::ModularGv(modular::compute_gv(
-            &gens,
+            source,
             grading_vector,
             max_deg,
             &geometry,
             &options,
         )?),
         InvariantKind::GW => Results::ModularGw(modular::compute_gw(
-            &gens,
+            source,
             grading_vector,
             max_deg,
             &geometry,
@@ -255,6 +290,7 @@ pub fn compute_gvgw_strings(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    cone_data: Option<ConeData>,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
     max_deg: Option<u32>,
@@ -270,6 +306,7 @@ pub fn compute_gvgw_strings(
         nefpart,
         intnums,
         strata,
+        cone_data,
         invariant_kind,
         cy_kind,
         max_deg,
@@ -313,6 +350,7 @@ pub fn compute_gv_rat_threefold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Vec<(DVector<i32>, Integer)>, ComputeError> {
@@ -323,6 +361,7 @@ pub fn compute_gv_rat_threefold(
         nefpart,
         intnums,
         strata,
+        cone_data,
         InvariantKind::GV,
         CYKind::Threefold,
         max_deg,
@@ -349,6 +388,7 @@ pub fn compute_gw_rat_threefold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Vec<(DVector<i32>, Rational)>, ComputeError> {
@@ -359,6 +399,7 @@ pub fn compute_gw_rat_threefold(
         nefpart,
         intnums,
         strata,
+        cone_data,
         InvariantKind::GW,
         CYKind::Threefold,
         max_deg,
@@ -385,6 +426,7 @@ pub fn compute_gv_rat_nfold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Vec<Labeled<Integer>>, ComputeError> {
@@ -395,6 +437,7 @@ pub fn compute_gv_rat_nfold(
         nefpart,
         intnums,
         strata,
+        cone_data,
         InvariantKind::GV,
         CYKind::Nfold,
         max_deg,
@@ -417,6 +460,7 @@ pub fn compute_gw_rat_nfold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Vec<Labeled<Rational>>, ComputeError> {
@@ -427,6 +471,7 @@ pub fn compute_gw_rat_nfold(
         nefpart,
         intnums,
         strata,
+        cone_data,
         InvariantKind::GW,
         CYKind::Nfold,
         max_deg,

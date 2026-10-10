@@ -351,6 +351,7 @@ impl Scenario {
                 nefpart,
                 intnums,
                 vec![],
+                None,
                 threads,
                 method,
             )
@@ -366,6 +367,7 @@ impl Scenario {
                 nefpart,
                 intnums,
                 vec![],
+                None,
                 threads,
                 method,
             )
@@ -381,6 +383,7 @@ impl Scenario {
                 nefpart,
                 intnums,
                 vec![],
+                None,
                 threads,
                 method,
             )
@@ -396,6 +399,7 @@ impl Scenario {
                 nefpart,
                 intnums,
                 vec![],
+                None,
                 threads,
                 method,
             )

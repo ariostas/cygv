@@ -31,6 +31,9 @@ def _compute_gvgw_subprocess(
     n_threads: int | None = None,
     method: str | None = None,
     strata: list[Any] | None = None,
+    mori_hyperplanes: list[Any] | None = None,
+    mori_equations: list[Any] | None = None,
+    cones: list[Any] | None = None,
 ) -> None:
     with stderr_path.open("wb") as f:
         os.dup2(f.fileno(), 2)
@@ -50,6 +53,9 @@ def _compute_gvgw_subprocess(
                 n_threads,
                 method,
                 strata,
+                mori_hyperplanes,
+                mori_equations,
+                cones,
             )
         )
     # Errors that the Rust side reports, such as invalid input, keep their type.
@@ -79,6 +85,9 @@ def _wrapped_compute_gvgw(
     n_threads: int | None = None,
     method: str | None = None,
     strata: list[Any] | None = None,
+    mori_hyperplanes: list[Any] | None = None,
+    mori_equations: list[Any] | None = None,
+    cones: list[Any] | None = None,
 ) -> Any:
     parent_conn, child_conn = Pipe(duplex=False)
     with tempfile.NamedTemporaryFile(delete=False) as f:
@@ -101,6 +110,9 @@ def _wrapped_compute_gvgw(
             n_threads,
             method,
             strata,
+            mori_hyperplanes,
+            mori_equations,
+            cones,
         ),
     )
     process.start()
@@ -165,8 +177,37 @@ def _regularize_strata(
     return res
 
 
+def _regularize_vectors(vectors: ArrayLike | None, name: str) -> list[Any] | None:
+    """Turn a list of vectors, which may be empty, into a list of lists."""
+    if vectors is None:
+        return None
+    array = np.array(vectors, dtype=int)
+    if array.size == 0:
+        return []
+    if array.ndim != 2:
+        msg = f"{name} must be a 2D array-like of ints"
+        raise ValueError(msg)
+    res: list[Any] = array.tolist()
+    return res
+
+
+def _regularize_cones(
+    cones: Iterable[tuple[ArrayLike, ArrayLike]] | None,
+) -> list[Any] | None:
+    """Turn the cones into (divisors, hilbert_basis) pairs of lists."""
+    if cones is None:
+        return None
+    return [
+        (
+            [int(d) for d in np.asarray(divisors).ravel()],
+            _regularize_vectors(basis, "the Hilbert bases of the cones"),
+        )
+        for divisors, basis in cones
+    ]
+
+
 def compute_gv(
-    generators: ArrayLike,
+    generators: ArrayLike | None,
     grading_vector: ArrayLike,
     q: ArrayLike,
     intnums: dict[tuple[int, int, int], int],
@@ -177,8 +218,11 @@ def compute_gv(
     n_threads: int | None = None,
     method: str | None = None,
     strata: Iterable[tuple[ArrayLike, Iterable[Any]]] | None = None,
+    mori_hyperplanes: ArrayLike | None = None,
+    mori_equations: ArrayLike | None = None,
+    cones: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
 ) -> list[Any]:
-    generators = np.array(generators, dtype=int)
+    generators = _regularize_vectors(generators, "generators") or []
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
     target_points = _regularize_target_points(target_points)
@@ -197,6 +241,9 @@ def compute_gv(
         n_threads,
         method,
         _regularize_strata(strata),
+        _regularize_vectors(mori_hyperplanes, "mori_hyperplanes"),
+        _regularize_vectors(mori_equations, "mori_equations"),
+        _regularize_cones(cones),
     )
     if is_threefold:
         res = [(tuple(v), int(gv)) for ((v, _), gv) in res_tmp]
@@ -206,7 +253,7 @@ def compute_gv(
 
 
 def compute_gw(
-    generators: ArrayLike,
+    generators: ArrayLike | None,
     grading_vector: ArrayLike,
     q: ArrayLike,
     intnums: dict[tuple[int, int, int], int],
@@ -217,8 +264,11 @@ def compute_gw(
     n_threads: int | None = None,
     method: str | None = None,
     strata: Iterable[tuple[ArrayLike, Iterable[Any]]] | None = None,
+    mori_hyperplanes: ArrayLike | None = None,
+    mori_equations: ArrayLike | None = None,
+    cones: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
 ) -> list[Any]:
-    generators = np.array(generators, dtype=int)
+    generators = _regularize_vectors(generators, "generators") or []
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
     target_points = _regularize_target_points(target_points)
@@ -237,6 +287,9 @@ def compute_gw(
         n_threads,
         method,
         _regularize_strata(strata),
+        _regularize_vectors(mori_hyperplanes, "mori_hyperplanes"),
+        _regularize_vectors(mori_equations, "mori_equations"),
+        _regularize_cones(cones),
     )
     if is_threefold:
         res = [(tuple(v), Fraction(gw)) for ((v, _), gw) in res_tmp]

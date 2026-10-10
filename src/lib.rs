@@ -1,5 +1,6 @@
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 
+pub mod cone;
 pub mod dispatch;
 #[cfg(feature = "cli")]
 pub mod io;
@@ -170,6 +171,10 @@ pub use reference::polynomial::coefficient::PolynomialCoeff;
 #[cfg(feature = "python")]
 #[doc(inline)]
 pub use python::cygv;
+
+// Re-export the cone data
+#[doc(inline)]
+pub use cone::{CandidateCone, ConeData};
 
 // Re-export main functions
 #[doc(inline)]

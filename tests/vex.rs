@@ -44,6 +44,7 @@ impl Phase {
                 .collect(),
             self.strata.clone(),
             None,
+            None,
             method,
         )?;
         Ok(res

@@ -229,3 +229,82 @@ def test_vex_phase() -> None:
         compute_gv(*args, max_deg=6)
     with pytest.raises(ValueError, match="strata"):
         compute_gv(*args, max_deg=4, strata=strata, method="modular")
+
+
+def test_cone_data() -> None:
+    # P(1,1,2,2,2)[8], whose Mori cone is spanned by (1, 0) and (0, 1). Only the last
+    # divisor can be negative, on the classes (x, y) with x < 2y.
+    grading_vector = [1, 1]
+    q = [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]]
+    intnums = {(0, 0, 0): 8, (0, 0, 1): 4}
+    hyperplanes = [[1, 0], [0, 1]]
+    sets = [(s,) for s in range(6)] + [
+        (s, t) for s in range(6) for t in range(s + 1, 6)
+    ]
+    cones = [(T, [[1, 0], [0, 1]] if 5 in T else [[1, 0], [2, 1]]) for T in sets]
+
+    expected = sorted(
+        compute_gv([[1, 0], [0, 1]], grading_vector, q, intnums, max_deg=6)
+    )
+    assert ((0, 1), 4) in expected
+    for generators in (None, [[1, 0], [0, 1]]):
+        res = compute_gv(
+            generators,
+            grading_vector,
+            q,
+            intnums,
+            max_deg=6,
+            mori_hyperplanes=hyperplanes,
+            cones=cones,
+        )
+        assert sorted(res) == expected
+    res = compute_gw(
+        None,
+        grading_vector,
+        q,
+        intnums,
+        max_deg=6,
+        mori_hyperplanes=hyperplanes,
+        cones=dict(cones).items(),
+    )
+    assert ((0, 2), Fraction(1, 2)) in res
+
+    # On the face spanned by (1, 0), which meets no divisor negatively, so it is every K_T.
+    face_cones = [(T, [[1, 0]]) for T in sets]
+    res = compute_gv(
+        None,
+        grading_vector,
+        q,
+        intnums,
+        max_deg=6,
+        mori_hyperplanes=[[1, 0]],
+        mori_equations=[[0, 1]],
+        cones=face_cones,
+    )
+    assert sorted(res) == [(c, gv) for (c, gv) in expected if c[1] == 0]
+
+    # Both parts are needed, the generators are needed by the reference method, and the
+    # cone data is checked.
+    with pytest.raises(ValueError, match="mori_hyperplanes and cones"):
+        compute_gv(None, grading_vector, q, intnums, max_deg=6, cones=cones)
+    with pytest.raises(ValueError, match="generators"):
+        compute_gv(
+            None,
+            grading_vector,
+            q,
+            intnums,
+            max_deg=6,
+            mori_hyperplanes=hyperplanes,
+            cones=cones,
+            method="reference",
+        )
+    with pytest.raises(ValueError, match="every set"):
+        compute_gv(
+            None,
+            grading_vector,
+            q,
+            intnums,
+            max_deg=6,
+            mori_hyperplanes=hyperplanes,
+            cones=cones[1:],
+        )

@@ -48,6 +48,19 @@ The optional fields are the following.
                  max_deg; auto uses it when it can, and the reference pipeline
                  otherwise.
 
+The modular pipeline is much faster with cone data, which programs such as
+Normaliz compute (see examples/cones.yaml). With it the generators can be left
+out, but then only the modular pipeline can run.
+
+  mori_hyperplanes  The inequalities h . C >= 0 of the Mori cone.
+  mori_equations    The equations e . C = 0 of its span, when it is a face of the
+                    Mori cone.
+  cones             For every set T of one or two divisors, the Hilbert basis of
+                    the cone K_T of the curve classes in the Mori cone that only
+                    meet the divisors in T negatively, as a list of mappings,
+                    e.g. {divisors: [0, 5], hilbert_basis: [[1, 0], [0, 1]]}.
+                    The elements above max_deg can be left out.
+
 At most one of max_deg, min_points, and target_points may be given. When none of
 them is given, the generators are taken to be the complete list of curve classes
 to use, which must then include the origin.";

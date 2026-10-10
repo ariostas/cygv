@@ -120,7 +120,12 @@ There are two pipelines. `src/reference.rs` and `src/reference/` hold a faithful
 of the HKTY procedure in exact rationals (named *reference* because the faster, differently
 structured `modular` pipeline sits beside it; see `PLAN.md`). `src/dispatch.rs` holds the public
 entry points, which pick a pipeline by the `Method` enum of `src/lib.rs`, and `src/io.rs`, the
-CLI and `src/python.rs` sit on top of those.
+CLI and `src/python.rs` sit on top of those. `src/cone.rs` holds the optional *cone data*
+(`ConeData`: the Mori cone's inequalities and equations, and the Hilbert basis of each cone
+$K_T$, the curve classes in the Mori cone that only meet the divisors in $T$ negatively, for
+every $T$ of one or two divisors) and its validation (`check_cone_data`). Callers compute it
+with an external program such as Normaliz (the Python side deliberately does not call one);
+it is the shared home the native cone computations of `PLAN.md` phase 7 are meant to land in.
 
 `src/modular.rs` and `src/modular/` hold the faster pipeline, which is still being extended and
 tuned. It computes modulo word-sized primes and lifts the results with the CRT, and shares no
@@ -129,9 +134,13 @@ code with `reference`. Its primitives are `field` (Montgomery arithmetic,
 primes as a context), `key` (curve classes packed into fixed-size keys that add like the
 classes, with a layout sized per run from coordinate bounds) and `table` (open-addressing
 tables and sparse series over those keys, each entry holding a run-time number of values).
-A *pass* runs the stages modulo `NL` primes: `candidates` (for now the whole semigroup up to
-`max_deg`, enumerated in order of degree, filtered to the classes with at most two negative
-intersections), `period` (tables of factorials and harmonic numbers, then $c_0$, $c_1$ and the
+A *pass* runs the stages modulo `NL` primes: `candidates` (from a `CandidateSource`: either
+the sums of the Hilbert basis elements of each $K_T$ of the cone data, skipping cones contained
+in another and two-divisor cones whose form $Q_s K^{(k)} Q_u$ vanishes, as the C does, or the
+whole semigroup of the generators up to `max_deg`, enumerated in order of degree and filtered
+to the classes with at most two negative intersections; the cones are much faster and give
+every lattice point of the Mori cone, the enumeration only those the generators generate),
+`period` (tables of factorials and harmonic numbers, then $c_0$, $c_1$ and the
 second derivatives already contracted with the bilinear forms, $S_2$), `instanton` (sparse
 products and reciprocal, $\alpha$, and the instanton series $I$), `extraction` (the
 coefficients of $I$ in the basis $z^C \exp(C\cdot\alpha)$, curve by curve in order of degree,
@@ -191,8 +200,11 @@ indices differently (the first index is a reference surface in the n-fold case).
   to `reference` otherwise or when the curve classes do not fit `modular`'s keys; `Modular`
   makes an unsupported request a `ComputeError::Unsupported`; `Reference` always runs
   `run_hkty`. The entry points return `Result<_, ComputeError>`, but only `modular`'s errors
-  and invalid strata (checked up front by `check_strata`) get there: `run_hkty` still panics on
-  invalid input. Both give only the nonzero invariants.
+  and invalid strata and cone data (checked up front by `check_strata` and `check_cone_data`)
+  get there: `run_hkty` still panics on invalid input. Both give only the nonzero invariants.
+  `modular` takes its candidates from the cone data when there is any (the reference ignores
+  it), and with cone data the generators may have no columns, in which case a request that
+  needs the reference is a `ComputeError::MissingGenerators`.
   `run_hkty<T>` is generic over the coefficient type, which is only ever `rug::Rational` today,
   and takes the `InvariantKind` and `CYKind` enums at runtime. Adding an option means touching
   all of the dispatch sites. The computation is always exact: floating-point arithmetic (the old
@@ -235,10 +247,14 @@ stdout, flushing after each one. `--threads` and `--method` override the `n_thre
 `method` fields of every document. All of the parsing, validation, and formatting lives in
 `src/io.rs`, whose `Input` struct mirrors the arguments of `run_hkty` and whose field conventions
 match the Python API (each inner list is a *column*). `Input::from_yaml` rejects unknown fields and
-validates shapes eagerly — including a `process_int_nums` dry run, and `method: modular` without
-`max_deg` — because `run_hkty` itself still unwraps its errors. `Input::compute` sorts the results by degree and then lexicographically by
+validates shapes eagerly — including a `process_int_nums` dry run, `method: modular` without
+`max_deg`, the cone data, and leaving out `generators` for a request that needs them — because
+`run_hkty` itself still unwraps its errors. `Input::compute` sorts the results by degree and then lexicographically by
 curve class, since the order in which curve classes of equal degree come out of `run_hkty` is not
 deterministic. Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
+`tests/data/*.yaml` holds cone data computed with Normaliz for `benches/data/h11_9.yaml` (the
+whole Mori cone, and a facet with its generators), which `tests/cones.rs` and the modular
+pipeline's comparison tests append to that file; it is excluded from the published crate.
 
 The whole CLI sits behind the default `cli` feature: `clap` and `yaml-rust2` are optional
 dependencies, `[[bin]]` declares `required-features = ["cli"]`, and both `io` (in `src/lib.rs`) and
