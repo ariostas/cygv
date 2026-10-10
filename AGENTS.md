@@ -161,11 +161,17 @@ The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
    as **columns** of a `DMatrix<i32>`, sorted by degree under the grading vector; downstream code
    relies on that sort order and on element 0 being the identity.
 2. **`fundamental_period`** — computes $\omega$, $\omega^{-1}$, and first/second derivatives of its
-   coefficients (`FundamentalPeriod { c0, c1, c2, c0_inv }`). Curves are bucketed by how many
+   coefficients (`FundamentalPeriod { c0, c1, c2, c0_inv, vex }`). Curves are bucketed by how many
    negative intersections they have with the GLSM charge matrix `q` (`group_by_neg_int`), and each
-   bucket has its own coefficient routine (`compute_c_0neg` / `_1neg` / `_2neg`).
+   bucket has its own coefficient routine (`compute_c_0neg` / `_1neg` / `_2neg`). Curves of
+   negative anticanonical degree $m$ stay out of those: in a vex phase of the toric variety
+   (`Stratum` in `src/lib.rs`, the `strata` input; threefold hypersurfaces only) one that meets
+   exactly the three divisors of a stratum negatively gets the stratum term of `compute_c_vex`
+   in `vex[t]`, every other one contributes nothing, and $m < 0$ with fewer than two negative
+   intersections is an error. The formula comes from the C program of PR #94.
 3. **`instanton`** — derives the alpha, beta, F, instanton, and exp(alpha) polynomials from the
-   fundamental period, returning `InstantonData { inst, expalpha }`.
+   fundamental period, returning `InstantonData { inst, expalpha }`. The stratum terms enter
+   instanton correction $t$ as $c_0^{-1}$ `vex[t]`.
 4. **`series_inversion`** — `invert_series` walks degrees in increasing order, extracting GV/GW
    invariants level by level; it keeps a sliding window of `previous_qn` levels whose size scales
    with $h^{1,1}$.
@@ -181,11 +187,12 @@ indices differently (the first index is a reference surface in the n-fold case).
   `compute_gvgw_strings` in the same file, which is the runtime dispatch used by both
   `src/python.rs` and the CLI — goes through the private `dispatch::compute`, which picks the
   pipeline from the `Method`: `Auto` (the default) runs `modular` when the request has
-  `max_deg` and no `min_points` or `target_points` (see `modular_unsupported`), and falls back
+  `max_deg` and no `min_points`, `target_points` or `strata` (see `modular_unsupported`), and falls back
   to `reference` otherwise or when the curve classes do not fit `modular`'s keys; `Modular`
   makes an unsupported request a `ComputeError::Unsupported`; `Reference` always runs
   `run_hkty`. The entry points return `Result<_, ComputeError>`, but only `modular`'s errors
-  get there: `run_hkty` still panics on invalid input. Both give only the nonzero invariants.
+  and invalid strata (checked up front by `check_strata`) get there: `run_hkty` still panics on
+  invalid input. Both give only the nonzero invariants.
   `run_hkty<T>` is generic over the coefficient type, which is only ever `rug::Rational` today,
   and takes the `InvariantKind` and `CYKind` enums at runtime. Adding an option means touching
   all of the dispatch sites. The computation is always exact: floating-point arithmetic (the old

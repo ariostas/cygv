@@ -342,22 +342,62 @@ impl Scenario {
 
         match (self.variant, m.cy_kind) {
             (Variant::GvRat, CYKind::Threefold) => compute_gv_rat_threefold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, method,
+                gens,
+                grading,
+                deg,
+                None,
+                None,
+                q,
+                nefpart,
+                intnums,
+                vec![],
+                threads,
+                method,
             )
             .unwrap()
             .len(),
             (Variant::GwRat, CYKind::Threefold) => compute_gw_rat_threefold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, method,
+                gens,
+                grading,
+                deg,
+                None,
+                None,
+                q,
+                nefpart,
+                intnums,
+                vec![],
+                threads,
+                method,
             )
             .unwrap()
             .len(),
             (Variant::GvRat, CYKind::Nfold) => compute_gv_rat_nfold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, method,
+                gens,
+                grading,
+                deg,
+                None,
+                None,
+                q,
+                nefpart,
+                intnums,
+                vec![],
+                threads,
+                method,
             )
             .unwrap()
             .len(),
             (Variant::GwRat, CYKind::Nfold) => compute_gw_rat_nfold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, method,
+                gens,
+                grading,
+                deg,
+                None,
+                None,
+                q,
+                nefpart,
+                intnums,
+                vec![],
+                threads,
+                method,
             )
             .unwrap()
             .len(),

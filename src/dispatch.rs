@@ -1,9 +1,9 @@
 //! Entry points that pick a pipeline and run it.
 //!
 //! Every entry point takes a [`Method`]. The modular pipeline only supports truncation by a
-//! maximum degree; with [`Method::Auto`] the other requests, and those whose curve classes do
-//! not fit its keys, go to the reference pipeline instead. Both give the nonzero invariants
-//! only.
+//! maximum degree, and no vex phases yet; with [`Method::Auto`] the other requests, and those
+//! whose curve classes do not fit its keys, go to the reference pipeline instead. Both give
+//! the nonzero invariants only.
 //!
 //! The reference pipeline still panics on invalid input, while the errors of the modular one
 //! are returned.
@@ -11,7 +11,7 @@
 use crate::modular::key::KeyError;
 use crate::modular::{self, CurveInvariants, Geometry, Options};
 use crate::reference::run_hkty;
-use crate::{CYKind, InvariantKind, Method};
+use crate::{check_strata, CYKind, InvariantKind, Method, Stratum};
 use core::fmt;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use num_bigint::{BigInt, Sign};
@@ -29,6 +29,8 @@ pub type Labeled<T> = ((DVector<i32>, usize), T);
 pub enum ComputeError {
     /// The modular method was requested for something it does not support, which is named.
     Unsupported(&'static str),
+    /// The strata do not fit the geometry, for the given reason.
+    InvalidStrata(&'static str),
     /// The modular pipeline failed.
     Modular(modular::Error),
 }
@@ -40,6 +42,7 @@ impl fmt::Display for ComputeError {
                 f,
                 "the modular method does not support {what}; use the auto or reference method"
             ),
+            Self::InvalidStrata(reason) => write!(f, "{reason}"),
             Self::Modular(e) => write!(f, "{e}"),
         }
     }
@@ -58,8 +61,11 @@ pub(crate) fn modular_unsupported(
     max_deg: Option<u32>,
     min_points: Option<u32>,
     has_target_points: bool,
+    has_strata: bool,
 ) -> Option<&'static str> {
-    if min_points.is_some() {
+    if has_strata {
+        Some("strata")
+    } else if min_points.is_some() {
         Some("min_points")
     } else if has_target_points {
         Some("target_points")
@@ -85,6 +91,7 @@ fn compute(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    strata: Vec<Stratum>,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
     max_deg: Option<u32>,
@@ -93,7 +100,14 @@ fn compute(
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Results, ComputeError> {
-    let unsupported = modular_unsupported(max_deg, min_points, target_points.is_some());
+    check_strata(&strata, q.nrows(), q.ncols(), cy_kind, nefpart.is_empty())
+        .map_err(ComputeError::InvalidStrata)?;
+    let unsupported = modular_unsupported(
+        max_deg,
+        min_points,
+        target_points.is_some(),
+        !strata.is_empty(),
+    );
     let modular_max_deg = match (method, unsupported) {
         (Method::Reference, _) | (Method::Auto, Some(_)) => None,
         (Method::Modular, Some(what)) => return Err(ComputeError::Unsupported(what)),
@@ -128,6 +142,7 @@ fn compute(
         q,
         nefpart,
         intnums,
+        strata,
         n_threads,
     )))
 }
@@ -239,6 +254,7 @@ pub fn compute_gvgw_strings(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    strata: Vec<Stratum>,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
     max_deg: Option<u32>,
@@ -253,6 +269,7 @@ pub fn compute_gvgw_strings(
         q,
         nefpart,
         intnums,
+        strata,
         invariant_kind,
         cy_kind,
         max_deg,
@@ -295,6 +312,7 @@ pub fn compute_gv_rat_threefold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    strata: Vec<Stratum>,
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Vec<(DVector<i32>, Integer)>, ComputeError> {
@@ -304,6 +322,7 @@ pub fn compute_gv_rat_threefold(
         q,
         nefpart,
         intnums,
+        strata,
         InvariantKind::GV,
         CYKind::Threefold,
         max_deg,
@@ -329,6 +348,7 @@ pub fn compute_gw_rat_threefold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    strata: Vec<Stratum>,
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Vec<(DVector<i32>, Rational)>, ComputeError> {
@@ -338,6 +358,7 @@ pub fn compute_gw_rat_threefold(
         q,
         nefpart,
         intnums,
+        strata,
         InvariantKind::GW,
         CYKind::Threefold,
         max_deg,
@@ -363,6 +384,7 @@ pub fn compute_gv_rat_nfold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    strata: Vec<Stratum>,
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Vec<Labeled<Integer>>, ComputeError> {
@@ -372,6 +394,7 @@ pub fn compute_gv_rat_nfold(
         q,
         nefpart,
         intnums,
+        strata,
         InvariantKind::GV,
         CYKind::Nfold,
         max_deg,
@@ -393,6 +416,7 @@ pub fn compute_gw_rat_nfold(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    strata: Vec<Stratum>,
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Vec<Labeled<Rational>>, ComputeError> {
@@ -402,6 +426,7 @@ pub fn compute_gw_rat_nfold(
         q,
         nefpart,
         intnums,
+        strata,
         InvariantKind::GW,
         CYKind::Nfold,
         max_deg,

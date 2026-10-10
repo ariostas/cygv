@@ -1,0 +1,188 @@
+//! Tests of vex phases of the ambient toric variety, which need strata.
+//!
+//! The geometries come from the vex references of the C program of PR #94 (`cgv/tests/refs_vex`):
+//! the charges and intersection numbers there, and the Hilbert basis of the Mori cone and the
+//! strata that `cgv/tools/cgv_phase.py` derives from the fans. The tests only check properties
+//! of the results, not the stored tables.
+
+use cygv::dispatch::{compute_gv_rat_threefold, ComputeError};
+use cygv::modular;
+use cygv::{Method, Stratum};
+use nalgebra::{DMatrix, DVector, RowDVector};
+use rug::Integer;
+use std::collections::HashMap;
+
+/// The data of a threefold hypersurface, with the vectors as rows.
+struct Phase {
+    generators: &'static [&'static [i32]],
+    grading_vector: &'static [i32],
+    q: &'static [&'static [i32]],
+    intnums: &'static [[i32; 4]],
+    strata: Vec<Stratum>,
+}
+
+impl Phase {
+    fn gv(&self, max_deg: u32, method: Method) -> Result<HashMap<Vec<i32>, Integer>, ComputeError> {
+        let columns = |rows: &[&[i32]]| {
+            DMatrix::from_iterator(
+                rows[0].len(),
+                rows.len(),
+                rows.iter().flat_map(|r| r.iter().copied()),
+            )
+        };
+        let res = compute_gv_rat_threefold(
+            columns(self.generators),
+            RowDVector::from_row_slice(self.grading_vector),
+            Some(max_deg),
+            None,
+            None,
+            columns(self.q),
+            Vec::new(),
+            self.intnums
+                .iter()
+                .map(|&[a, b, c, v]| ((a as usize, b as usize, c as usize), v))
+                .collect(),
+            self.strata.clone(),
+            None,
+            method,
+        )?;
+        Ok(res
+            .into_iter()
+            .map(|(c, gv)| (c.as_slice().to_vec(), gv))
+            .collect())
+    }
+}
+
+/// A vex phase with $h^{1,1} = 2$, a flop of the resolved $\mathbb{P}(1,1,2,2,2)[8]$, whose
+/// fiber class carries the familiar invariants (`liam_h2_fan1`).
+fn h2_vex() -> Phase {
+    Phase {
+        generators: &[&[0, 1], &[1, -1]],
+        grading_vector: &[2, 1],
+        q: &[&[1, 0, -1, 1, 0, 1], &[0, 1, 1, 1, 1, 0]],
+        intnums: &[[0, 1, 1, 4], [1, 1, 1, 2]],
+        strata: vec![Stratum {
+            divisors: [1, 2, 4],
+            class: vec![(1, 1), (-1, 1)],
+        }],
+    }
+}
+
+#[test]
+fn test_h2_vex() {
+    let gv = h2_vex().gv(6, Method::Auto).unwrap();
+    for (c, expected) in [
+        ([0, 1], 640),
+        ([0, 2], 10032),
+        ([0, 3], 288384),
+        ([1, -1], 1),
+        ([1, 0], 20),
+        ([1, 1], 6474),
+    ] {
+        assert_eq!(gv[&c[..]], expected, "{c:?}");
+    }
+
+    // Without its strata, the modular pipeline cannot find integer invariants.
+    let mut phase = h2_vex();
+    phase.strata.clear();
+    assert_eq!(
+        phase.gv(6, Method::Auto),
+        Err(ComputeError::Modular(modular::Error::NotStable))
+    );
+
+    // The modular pipeline does not support strata yet, and the strata are checked.
+    assert_eq!(
+        h2_vex().gv(6, Method::Modular),
+        Err(ComputeError::Unsupported("strata"))
+    );
+    let mut phase = h2_vex();
+    phase.strata[0].divisors = [1, 2, 6];
+    assert!(matches!(
+        phase.gv(6, Method::Auto),
+        Err(ComputeError::InvalidStrata(_))
+    ));
+}
+
+/// A vex phase with $h^{1,1} = 4$ and an FRST of a different polytope with the same CY
+/// (`pair_h4_1`): the curve classes are related by `T`, and the invariants must agree.
+#[test]
+fn test_vex_and_frst_agree() {
+    let vex = Phase {
+        generators: &[
+            &[0, 0, -1, 0],
+            &[0, 0, 1, 1],
+            &[0, 1, 0, -1],
+            &[1, -1, 0, -1],
+            &[1, 0, -2, -4],
+        ],
+        grading_vector: &[7, 3, -1, 2],
+        q: &[
+            &[1, 0, 0, 0, 2, 0, 0, 1],
+            &[0, 1, 0, -2, 1, -1, 0, 1],
+            &[0, 0, 1, 2, -1, 1, 0, -3],
+            &[0, 0, 0, -1, 1, 0, 1, 0],
+        ],
+        intnums: &[
+            [0, 1, 3, 1],
+            [0, 2, 3, 1],
+            [0, 0, 0, 8],
+            [0, 0, 1, 1],
+            [0, 0, 2, 3],
+            [0, 0, 3, 2],
+            [0, 1, 1, -1],
+            [0, 2, 2, 1],
+            [0, 3, 3, -4],
+            [1, 1, 1, 1],
+            [1, 1, 3, -1],
+            [1, 3, 3, -1],
+            [2, 3, 3, -2],
+            [3, 3, 3, 7],
+        ],
+        strata: vec![Stratum {
+            divisors: [3, 5, 6],
+            class: vec![(0, 1), (1, 1), (0, 1), (-1, 1)],
+        }],
+    };
+    let frst = Phase {
+        generators: &[&[0, 0, 0, 1], &[0, 0, 1, -3], &[0, 1, -1, 3], &[1, 0, 0, 0]],
+        // The vex grading vector in the basis of the FRST, T^{-1} w.
+        grading_vector: &[2, 2, 4, 1],
+        q: &[
+            &[1, 0, -1, -1, 1, 0, 4, 0],
+            &[0, 1, 0, 1, 0, 0, -2, 0],
+            &[0, 0, 3, -2, -2, 1, 0, 0],
+            &[0, 0, 1, -1, -1, 0, 0, 1],
+        ],
+        intnums: &[
+            [0, 1, 2, 6],
+            [0, 0, 0, 8],
+            [0, 0, 1, 16],
+            [0, 0, 2, 3],
+            [0, 1, 1, 28],
+            [0, 2, 2, 1],
+            [1, 1, 1, 48],
+            [1, 1, 2, 10],
+            [1, 2, 2, 2],
+            [2, 2, 3, 1],
+            [2, 3, 3, -3],
+            [3, 3, 3, 9],
+        ],
+        strata: Vec::new(),
+    };
+    let t = DMatrix::from_row_slice(4, 4, &[1, 2, 0, 1, 0, 1, 0, 1, 0, -1, 1, -3, 0, 1, 0, 0]);
+
+    let max_deg = 10;
+    let gv_vex = vex.gv(max_deg, Method::Auto).unwrap();
+    let gv_frst = frst.gv(max_deg, Method::Auto).unwrap();
+    let mapped: HashMap<Vec<i32>, Integer> = gv_vex
+        .into_iter()
+        .map(|(c, gv)| {
+            (
+                (t.transpose() * DVector::from_vec(c)).as_slice().to_vec(),
+                gv,
+            )
+        })
+        .collect();
+    assert!(mapped.len() > 50);
+    assert_eq!(mapped, gv_frst);
+}

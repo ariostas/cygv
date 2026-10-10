@@ -7,6 +7,11 @@ use core::fmt;
 pub enum FundamentalPeriodError {
     CYDimLessThanThree,
     InconsistentNefPartition,
+    /// A curve has negative anticanonical degree but fewer than two negative intersections
+    /// with the toric divisors.
+    NegativeAnticanonicalDegree,
+    /// The strata do not fit the geometry, for the given reason.
+    InvalidStrata(&'static str),
 }
 
 /// Implement Display trait for SemigroupError.
@@ -19,6 +24,11 @@ impl fmt::Display for FundamentalPeriodError {
             FundamentalPeriodError::InconsistentNefPartition => {
                 "the nef partition data is inconsistent"
             }
+            FundamentalPeriodError::NegativeAnticanonicalDegree => {
+                "a curve has negative anticanonical degree but fewer than two negative \
+                 intersections with the toric divisors"
+            }
+            FundamentalPeriodError::InvalidStrata(reason) => reason,
         };
         write!(f, "{message}")
     }

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from collections.abc import Sized
+from collections.abc import Iterable, Sized
 from fractions import Fraction
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection, wait
@@ -30,6 +30,7 @@ def _compute_gvgw_subprocess(
     nefpart: Sized | None = None,
     n_threads: int | None = None,
     method: str | None = None,
+    strata: list[Any] | None = None,
 ) -> None:
     with stderr_path.open("wb") as f:
         os.dup2(f.fileno(), 2)
@@ -48,6 +49,7 @@ def _compute_gvgw_subprocess(
                 nefpart,
                 n_threads,
                 method,
+                strata,
             )
         )
     # Errors that the Rust side reports, such as invalid input, keep their type.
@@ -76,6 +78,7 @@ def _wrapped_compute_gvgw(
     nefpart: Sized | None = None,
     n_threads: int | None = None,
     method: str | None = None,
+    strata: list[Any] | None = None,
 ) -> Any:
     parent_conn, child_conn = Pipe(duplex=False)
     with tempfile.NamedTemporaryFile(delete=False) as f:
@@ -97,6 +100,7 @@ def _wrapped_compute_gvgw(
             nefpart,
             n_threads,
             method,
+            strata,
         ),
     )
     process.start()
@@ -143,6 +147,24 @@ def _regularize_target_points(
     return target_points
 
 
+def _regularize_strata(
+    strata: Iterable[tuple[ArrayLike, Iterable[Any]]] | None,
+) -> list[Any] | None:
+    """Turn the strata into (divisors, class) pairs with the class as (num, den) pairs."""
+    if strata is None:
+        return None
+    res = []
+    for divisors, cls in strata:
+        fracs = [Fraction(x) for x in cls]
+        res.append(
+            (
+                [int(d) for d in np.asarray(divisors).ravel()],
+                [(f.numerator, f.denominator) for f in fracs],
+            )
+        )
+    return res
+
+
 def compute_gv(
     generators: ArrayLike,
     grading_vector: ArrayLike,
@@ -154,6 +176,7 @@ def compute_gv(
     nefpart: Sized | None = None,
     n_threads: int | None = None,
     method: str | None = None,
+    strata: Iterable[tuple[ArrayLike, Iterable[Any]]] | None = None,
 ) -> list[Any]:
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
@@ -173,6 +196,7 @@ def compute_gv(
         nefpart,
         n_threads,
         method,
+        _regularize_strata(strata),
     )
     if is_threefold:
         res = [(tuple(v), int(gv)) for ((v, _), gv) in res_tmp]
@@ -192,6 +216,7 @@ def compute_gw(
     nefpart: Sized | None = None,
     n_threads: int | None = None,
     method: str | None = None,
+    strata: Iterable[tuple[ArrayLike, Iterable[Any]]] | None = None,
 ) -> list[Any]:
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
@@ -211,6 +236,7 @@ def compute_gw(
         nefpart,
         n_threads,
         method,
+        _regularize_strata(strata),
     )
     if is_threefold:
         res = [(tuple(v), Fraction(gw)) for ((v, _), gw) in res_tmp]

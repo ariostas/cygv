@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b and 4 done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4 and 4b done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -393,12 +393,35 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     measure `reference`, explicitly.
   - Moved to phase 6: `generators` optional in `io::Input` when `mori_hyperplanes` is given,
     since that field arrives with the cone data.
-- [ ] **4b. Vex phases in the reference pipeline** (6.3, 6.11).
-  - [ ] The `strata` input through the front end.
-  - [ ] The three-negative bucket and the extra term in the reference instanton step.
-  - [ ] $m < 0$ kept out of the 1/2-negative routines (this also fixes the `as u32` wrap of
-    section 7), and the error for $m < 0$ with fewer than two negatives.
-  - [ ] Tests against `cgv/tests/refs_vex` and the C oracle.
+- [x] **4b. Vex phases in the reference pipeline** (6.3, 6.11).
+  - [x] The `strata` input through the front end. `Stratum { divisors: [usize; 3], class:
+    Vec<(i64, i64)> }` in `src/lib.rs`, checked by `check_strata` (threefold hypersurfaces only,
+    distinct in-range divisors, one entry per Kähler parameter, positive denominators, no two
+    strata on the same divisors) in `dispatch` (`ComputeError::InvalidStrata`), `io` and
+    `compute_omega`. A new argument of `run_hkty` and of every entry point, after `intnums`;
+    `strata:` in the YAML (`{divisors, class}` mappings, entries integers or `"p/q"`), `strata=`
+    in Python (`(divisors, class)` pairs, entries anything `Fraction` takes). `modular` does not
+    support strata until 6c, so `auto` falls back to the reference for them.
+  - [x] The three-negative bucket and the extra term in the reference instanton step:
+    `group_by_neg_int` returns `CurveGroups`, whose `vex` list holds the $m < 0$ curves on a
+    stratum; `compute_c_vex` gives $U_0\, d_{S,t}$ into `FundamentalPeriod::vex[t]`, and
+    `compute_instanton_data` adds $c_0^{-1}$ `vex[t]` to instanton correction $t$. The
+    derivation of section 6.3 (the per-$t$ split) holds: see the tests below.
+  - [x] $m < 0$ kept out of the 1/2-negative routines (this also fixes the `as u32` wrap of
+    section 7), and the error for $m < 0$ with fewer than two negatives
+    (`FundamentalPeriodError::NegativeAnticanonicalDegree`).
+  - [x] Tests against `cgv/tests/refs_vex` and the C oracle, development only (scratch scripts,
+    since the inputs need `cgv_phase.py` and normaliz): the reference, given the Hilbert basis
+    of the Mori cone as generators and the strata from `cgv_phase.prepare`, reproduces all 16
+    references at their stored degrees (20 for `liam_h2_*` and the pairs, 14 for `liam_h3_*`;
+    for the pairs also the FRST side under the mapped grading), and the C oracle at higher
+    degrees (`liam_h2_fan1` at 30, `liam_h3_fan7/8/9` at 22/20/20, `pair_h4_1` at 24). Without
+    the strata every vex case fails with non-integer invariants. Committed: unit tests of the
+    grouping and of $U_0$, `tests/vex.rs` (`liam_h2_fan1` with a few invariants that are those
+    of the familiar fiber class, and `pair_h4_1`, vex against FRST through `T` at degree 10),
+    and YAML and Python tests. These use the geometry of two references (charges, intersection
+    numbers, derived generators and strata), not their stored tables; whether that needs the
+    PR author's confirmation too is open (phase 9).
 - [ ] **6. Cone fast path through optional input.** Runs before phase 5, and fixes the
   interface that phase 7 plugs into.
   - [ ] Cone data (6.1) accepted by the Rust API and YAML. The Mori cone may be described by
@@ -488,7 +511,8 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
 Outside the phases:
 
 - [ ] Optional: a minimal fix (an error) for the `as u32` wrap in `compute_c_1neg` /
-  `compute_c_2neg` on `main`, independently of this work (section 7).
+  `compute_c_2neg` on `main`, independently of this work (section 7). Fixed on this branch by
+  phase 4b.
 
 Follow-ups after the main plan, not tracked here: GPU and the other C features (6.8).
 
@@ -961,7 +985,7 @@ Layers, from cheapest to most independent:
   `compute_c_1neg` and `compute_c_2neg` (`src/fundamental_period.rs`) convert $q_0 \cdot C$ with
   `as u32`. In a vex phase that value can be negative, so it wraps to a huge factorial argument
   instead of failing. The same holds for any inconsistent input. Phase 4b gives it defined
-  behaviour; a minimal fix (an error) could also go to `main` on its own.
+  behaviour (done); a minimal fix (an error) could also go to `main` on its own.
 
 - **Faces of the Mori cone must keep working.** Passing only the generators of a
   lower-dimensional face computes the invariants along that face, because a face $F$ satisfies

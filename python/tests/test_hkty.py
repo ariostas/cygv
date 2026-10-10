@@ -203,3 +203,29 @@ def test_methods() -> None:
         compute_gv(*args, min_points=3, method="modular")
     with pytest.raises(ValueError, match="unknown method"):
         compute_gv(*args, max_deg=3, method="fast")
+
+
+def test_vex_phase() -> None:
+    # A vex phase with h11 = 2, a flop of the resolved P(1,1,2,2,2)[8], which needs its
+    # stratum: three divisors and a class, whose entries may be fractions.
+    generators = [[0, 1], [1, -1]]
+    grading_vector = [2, 1]
+    q = [[1, 0, -1, 1, 0, 1], [0, 1, 1, 1, 1, 0]]
+    intnums = {(0, 1, 1): 4, (1, 1, 1): 2}
+    args = (generators, grading_vector, q, intnums)
+    strata = [((1, 2, 4), (1, Fraction(-1)))]
+
+    gv = dict(compute_gv(*args, max_deg=4, strata=strata))
+    assert gv[(0, 1)] == 640
+    assert gv[(1, -1)] == 1
+    assert gv[(1, 0)] == 20
+    as_strings = [([1, 2, 4], ["1", "-2/2"])]
+    assert (
+        dict(compute_gv(*args, max_deg=4, strata=as_strings, method="reference")) == gv
+    )
+
+    # Without the stratum the invariants are not integers.
+    with pytest.raises(ValueError, match="not integers"):
+        compute_gv(*args, max_deg=6)
+    with pytest.raises(ValueError, match="strata"):
+        compute_gv(*args, max_deg=4, strata=strata, method="modular")

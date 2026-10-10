@@ -31,6 +31,15 @@
 //! method: auto
 //! ```
 //!
+//! A vex phase of the ambient toric variety also needs its strata (see [`Stratum`]), each
+//! given by three divisors and a class whose entries may be fractions.
+//!
+//! ```yaml
+//! strata:
+//!   - divisors: [1, 2, 4]
+//!     class: [1, "-1/2"]
+//! ```
+//!
 //! The results are written back as one YAML document per input document.
 //!
 //! ```yaml
@@ -50,7 +59,7 @@ pub mod error;
 
 use crate::dispatch::{compute_gvgw_strings, modular_unsupported, ComputeError};
 use crate::reference::misc::process_int_nums;
-use crate::{CYKind, InvariantKind, Method};
+use crate::{check_strata, CYKind, InvariantKind, Method, Stratum};
 use error::IoError;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
@@ -59,7 +68,7 @@ use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
 /// The fields that are accepted in an input document.
-const INPUT_FIELDS: [&str; 13] = [
+const INPUT_FIELDS: [&str; 14] = [
     "name",
     "generators",
     "grading_vector",
@@ -73,6 +82,7 @@ const INPUT_FIELDS: [&str; 13] = [
     "is_threefold",
     "n_threads",
     "method",
+    "strata",
 ];
 
 /// The specification of a single computation of GV or GW invariants.
@@ -93,6 +103,8 @@ pub struct Input {
     pub nefpart: Vec<DVector<i32>>,
     /// The triple intersection numbers.
     pub intnums: HashMap<(usize, usize, usize), i32>,
+    /// The strata of a vex phase. It is empty otherwise.
+    pub strata: Vec<Stratum>,
     /// Which invariants to compute.
     pub invariant_kind: InvariantKind,
     /// The kind of CY the invariants are computed for.
@@ -165,6 +177,10 @@ impl Input {
             None => Vec::new(),
             Some(y) => as_vectors(y, "nefpart")?,
         };
+        let strata = match get_field(hash, "strata") {
+            None => Vec::new(),
+            Some(y) => as_strata(y)?,
+        };
 
         let invariant_kind = match get_field(hash, "invariants") {
             None => InvariantKind::GV,
@@ -220,7 +236,12 @@ impl Input {
             return Err(IoError::ConflictingTruncations);
         }
         if method == Method::Modular {
-            if let Some(what) = modular_unsupported(max_deg, min_points, target_points.is_some()) {
+            if let Some(what) = modular_unsupported(
+                max_deg,
+                min_points,
+                target_points.is_some(),
+                !strata.is_empty(),
+            ) {
                 return Err(IoError::invalid_field(
                     "method",
                     ComputeError::Unsupported(what).to_string(),
@@ -247,6 +268,8 @@ impl Input {
                 format!("the dimension of the CY must be at least three, but it is {cy_dim}"),
             ));
         }
+        check_strata(&strata, q.nrows(), h11, cy_kind, nefpart.is_empty())
+            .map_err(|reason| IoError::invalid_field("strata", reason))?;
         // The intersection numbers are canonicalized differently depending on the
         // dimension of the CY, so they can only be checked once it is known.
         process_int_nums(intnums.clone(), cy_kind)
@@ -259,6 +282,7 @@ impl Input {
             q,
             nefpart,
             intnums,
+            strata,
             invariant_kind,
             cy_kind,
             max_deg,
@@ -304,6 +328,7 @@ impl Input {
             self.q.clone(),
             self.nefpart.clone(),
             self.intnums.clone(),
+            self.strata.clone(),
             self.invariant_kind,
             self.cy_kind,
             self.max_deg,
@@ -447,6 +472,71 @@ fn as_matrix(data: &Yaml, field: &str) -> Result<DMatrix<i32>, IoError> {
         n_cols,
         columns.into_iter().flatten(),
     ))
+}
+
+/// Read the strata of a vex phase, a list of mappings with the three `divisors` and the
+/// `class`, whose entries are integers or fractions written as strings.
+fn as_strata(data: &Yaml) -> Result<Vec<Stratum>, IoError> {
+    let field = "strata";
+    let entries = data.as_vec().ok_or_else(|| {
+        IoError::invalid_field(field, "expected a list of mappings with divisors and class")
+    })?;
+    entries
+        .iter()
+        .map(|e| {
+            let hash = e.as_hash().ok_or_else(|| {
+                IoError::invalid_field(
+                    field,
+                    "each stratum must be a mapping with divisors and class",
+                )
+            })?;
+            if hash
+                .keys()
+                .any(|k| !matches!(k.as_str(), Some("divisors" | "class")))
+            {
+                return Err(IoError::invalid_field(
+                    field,
+                    "the fields of a stratum are divisors and class",
+                ));
+            }
+            let divisors = as_int_vec(require_field(hash, "divisors")?, field)?;
+            let divisors: [usize; 3] = divisors
+                .iter()
+                .map(|&d| usize::try_from(d).ok())
+                .collect::<Option<Vec<_>>>()
+                .and_then(|d| d.try_into().ok())
+                .ok_or_else(|| {
+                    IoError::invalid_field(field, "the divisors must be three non-negative indices")
+                })?;
+            let class = require_field(hash, "class")?
+                .as_vec()
+                .ok_or_else(|| IoError::invalid_field(field, "the class must be a list"))?
+                .iter()
+                .map(as_fraction)
+                .collect::<Result<_, _>>()?;
+            Ok(Stratum { divisors, class })
+        })
+        .collect()
+}
+
+/// Read a fraction, given as an integer or as a string of the form `"p/q"` or `"p"`.
+fn as_fraction(data: &Yaml) -> Result<(i64, i64), IoError> {
+    let invalid = || {
+        IoError::invalid_field(
+            "strata",
+            "the entries of a class must be integers or fractions such as \"-1/2\"",
+        )
+    };
+    match data {
+        Yaml::Integer(n) => Ok((*n, 1)),
+        Yaml::String(s) => {
+            let (num, den) = s.split_once('/').unwrap_or((s, "1"));
+            let num = num.trim().parse().map_err(|_| invalid())?;
+            let den = den.trim().parse().map_err(|_| invalid())?;
+            Ok((num, den))
+        }
+        _ => Err(invalid()),
+    }
 }
 
 /// Read the target points, which can be given either as a single vector or as a list
@@ -644,6 +734,66 @@ min_points: 20
         assert_eq!(input.max_deg, None);
         assert_eq!(input.target_points, None);
         assert_eq!(input.method, Method::default());
+    }
+
+    #[test]
+    fn test_parse_strata() {
+        let base = THREEFOLD.replace("min_points: 20\n", "max_deg: 5\n");
+        let input = load_one(&format!(
+            "{base}strata:\n  - {{divisors: [3, 1, 2], class: [1, \"-1/2\"]}}\n  \
+             - {{divisors: [0, 1, 5], class: [\"3\", 0]}}\n"
+        ))
+        .unwrap();
+        assert_eq!(
+            input.strata,
+            [
+                Stratum {
+                    divisors: [3, 1, 2],
+                    class: vec![(1, 1), (-1, 2)]
+                },
+                Stratum {
+                    divisors: [0, 1, 5],
+                    class: vec![(3, 1), (0, 1)]
+                }
+            ]
+        );
+        assert!(load_one(&base).unwrap().strata.is_empty());
+
+        for bad in [
+            "[{divisors: [1, 2], class: [1, 1]}]",
+            "[{divisors: [1, 2, 6], class: [1, 1]}]",
+            "[{divisors: [1, 2, 2], class: [1, 1]}]",
+            "[{divisors: [1, 2, 3], class: [1]}]",
+            "[{divisors: [1, 2, 3], class: [1, \"1/0\"]}]",
+            "[{divisors: [1, 2, 3], class: [1, \"a\"]}]",
+            "[{divisors: [1, 2, 3], class: [1, 1], extra: 1}]",
+            "[{divisors: [1, 2, 3], class: [1, 1]}, {divisors: [3, 2, 1], class: [0, 1]}]",
+            "[[1, 2, 3], [1, 1]]",
+        ] {
+            assert!(
+                matches!(
+                    load_one(&format!("{base}strata: {bad}\n")),
+                    Err(IoError::InvalidField { field, .. }) if field == "strata"
+                ),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            load_one(&format!("{base}strata: [{{divisors: [1, 2, 3]}}]\n")),
+            Err(IoError::MissingField("class"))
+        );
+        // Strata are only supported for threefold hypersurfaces, and not by the modular
+        // method yet.
+        let strata = "strata: [{divisors: [1, 2, 3], class: [1, 1]}]\n";
+        assert!(matches!(
+            load_one(&format!("{base}{strata}is_threefold: false\n")),
+            Err(IoError::InvalidField { field, .. }) if field == "strata"
+        ));
+        assert!(matches!(
+            load_one(&format!("{base}{strata}method: modular\n")),
+            Err(IoError::InvalidField { field, reason })
+                if field == "method" && reason.contains("strata")
+        ));
     }
 
     #[test]

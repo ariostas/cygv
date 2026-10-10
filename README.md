@@ -39,7 +39,12 @@ compute_gw(generators, grading_vector, q, intnums, max_deg=3)
 How many curve classes are computed is controlled by `max_deg`, `min_points`, or `target_points`,
 of which at most one may be given. When none of them is given, the generators are taken to be the
 complete list of curve classes to use. Complete intersections are specified by passing the nef
-partition as `nefpart`. The computation is exact.
+partition as `nefpart`. A vex phase of the ambient toric variety (MacFadden–Sheridan,
+arXiv:2512.14817), whose curves of negative anticanonical degree need the class of the stratum
+they force into the CY, is specified by passing those strata as `strata`, a list of
+`(divisors, class)` pairs: the three toric divisors (indices of the rays) and the class of the
+stratum, whose entries may be `Fraction`s. Strata are only supported for threefold
+hypersurfaces. The computation is exact.
 
 Two implementations of the computation are available, selected with `method`. The `modular` one
 computes modulo word-sized primes and recovers the exact integers by the Chinese remainder theorem,

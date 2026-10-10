@@ -58,6 +58,61 @@ impl CYKind {
     }
 }
 
+/// A stratum of a vex phase of the ambient toric variety.
+///
+/// In a vex phase (MacFadden–Sheridan, arXiv:2512.14817) some curves have negative
+/// anticanonical degree, where the HKTY coefficient has a pole. It cancels against the class of
+/// the stratum $V_S$ that such a curve forces into the CY, where $S$ is the set of toric
+/// divisors the curve meets negatively (McAllister's prescription, via Wang,
+/// arXiv:1910.14440). For fine fans on the boundary points of reflexive 4-polytopes $S$ is a
+/// 3-cone of the fan and $V_S$ a toric curve, so each stratum is given by the three divisors
+/// and the class $d_S$ of $V_S$, with $d_{S,t} = J_t \cdot V_S$ in the basis of the charges.
+/// Only threefold hypersurfaces support strata.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Stratum {
+    /// The indices of the three toric divisors, i.e. of rows of the charge matrix.
+    pub divisors: [usize; 3],
+    /// The class $d_S$, as fractions (numerator, positive denominator), one per Kähler
+    /// parameter.
+    pub class: Vec<(i64, i64)>,
+}
+
+/// Checks that the strata fit a threefold hypersurface with `n_divisors` toric divisors and
+/// `h11` Kähler parameters, and that no two of them have the same divisors, returning what is
+/// wrong otherwise.
+pub(crate) fn check_strata(
+    strata: &[Stratum],
+    n_divisors: usize,
+    h11: usize,
+    cy_kind: CYKind,
+    is_hypersurface: bool,
+) -> Result<(), &'static str> {
+    if strata.is_empty() {
+        return Ok(());
+    }
+    if !cy_kind.is_threefold() || !is_hypersurface {
+        return Err("strata are only supported for threefold hypersurfaces");
+    }
+    let mut seen = std::collections::HashSet::new();
+    for s in strata {
+        let mut d = s.divisors;
+        d.sort_unstable();
+        if d[2] >= n_divisors || d[0] == d[1] || d[1] == d[2] {
+            return Err("the divisors of a stratum must be three distinct rows of the charges");
+        }
+        if !seen.insert(d) {
+            return Err("two strata have the same divisors");
+        }
+        if s.class.len() != h11 {
+            return Err("the class of a stratum must have one entry per Kähler parameter");
+        }
+        if s.class.iter().any(|&(_, den)| den <= 0) {
+            return Err("the denominators of the class of a stratum must be positive");
+        }
+    }
+    Ok(())
+}
+
 /// The likely causes of GV invariants that are not integers, for the error messages of both
 /// pipelines.
 pub(crate) const NON_INTEGER_CAUSES: &str = "this usually means that the input is \

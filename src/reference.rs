@@ -8,7 +8,7 @@ pub mod polynomial;
 pub mod semigroup;
 pub mod series_inversion;
 
-use crate::{CYKind, InvariantKind};
+use crate::{CYKind, InvariantKind, Stratum};
 use nalgebra::{DMatrix, DVector, RowDVector};
 use polynomial::{coefficient::PolynomialCoeff, properties::PolynomialProperties};
 use semigroup::Semigroup;
@@ -28,6 +28,7 @@ pub fn run_hkty<T>(
     q: DMatrix<i32>,
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
+    strata: Vec<Stratum>,
     n_threads: Option<u32>,
 ) -> Vec<((DVector<i32>, usize), T)>
 where
@@ -66,9 +67,16 @@ where
         .expect("failed to build the worker thread pool");
 
     let gv = pool.install(|| {
-        let fp =
-            fundamental_period::compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs)
-                .unwrap();
+        let fp = fundamental_period::compute_omega(
+            &poly_props,
+            &sg,
+            &q,
+            &nefpart,
+            &intnum_idxpairs,
+            cy_kind,
+            &strata,
+        )
+        .unwrap();
 
         let inst_data = instanton::compute_instanton_data(
             fp,

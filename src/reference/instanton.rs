@@ -101,10 +101,20 @@ where
         })
         .collect();
 
-    // Compute instanton corrections
+    // Compute instanton corrections, with the terms of the strata of a vex phase, which add
+    // to the second derivatives contracted with the intersection numbers.
     let inst: Vec<Polynomial<T>> = (0..n_indices)
         .into_par_iter()
-        .map(|t| compute_inst(t, &f_poly, poly_props, intnum_dict, cy_kind))
+        .map(|t| {
+            let mut p = compute_inst(t, &f_poly, poly_props, intnum_dict, cy_kind);
+            if let Some(vex) = fp.vex.get(t).filter(|v| !v.nonzero.is_empty()) {
+                let mut v = fp.c0_inv.mul(vex, poly_props);
+                v.clean_up();
+                p.add_assign(&v, &poly_props.zero);
+                p.clean_up();
+            }
+            p
+        })
         .collect();
 
     // Compute expalpha polynomials. Collecting into a `Result` stops the
@@ -141,7 +151,15 @@ mod tests {
         let nefpart = Vec::new();
         let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
-        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs);
+        let fp = compute_omega(
+            &poly_props,
+            &sg,
+            &q,
+            &nefpart,
+            &intnum_idxpairs,
+            CYKind::Threefold,
+            &[],
+        );
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 

@@ -5,7 +5,7 @@ pub mod error;
 use crate::reference::factorial::{factorial_prod, harmonic};
 use crate::reference::polynomial::{coefficient::PolynomialCoeff, Polynomial};
 use crate::reference::semigroup::Semigroup;
-use crate::PolynomialProperties;
+use crate::{check_strata, CYKind, PolynomialProperties, Stratum};
 use error::FundamentalPeriodError;
 use nalgebra::{DMatrix, DMatrixView, DVector};
 use rayon::prelude::*;
@@ -13,24 +13,55 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::thread;
 
-/// Group curves by the number of negative intersections with the GLSM
-/// basis.
-fn group_by_neg_int(curves_dot_q: DMatrixView<i32>) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
-    let mut neg0 = Vec::new();
-    let mut neg1 = Vec::new();
-    let mut neg2 = Vec::new();
+/// The curves that carry period data, grouped by how they get it.
+#[derive(Debug, Default, PartialEq)]
+struct CurveGroups {
+    /// The curves with zero, one and two negative intersections with the toric divisors and
+    /// non-negative anticanonical degrees.
+    neg: [Vec<usize>; 3],
+    /// The curves of negative anticanonical degree whose three negative intersections are
+    /// with the divisors of a stratum, with the index of that stratum.
+    vex: Vec<(usize, usize)>,
+}
 
-    for (i, col) in curves_dot_q.column_iter().enumerate() {
-        let neg_ints = col.iter().filter(|s| s.is_negative()).count();
-        match neg_ints {
-            0 => neg0.push(i),
-            1 => neg1.push(i),
-            2 => neg2.push(i),
-            _ => (),
+/// Groups the curves by the number of negative intersections with the toric divisors.
+///
+/// A curve with a negative anticanonical degree only contributes through a stratum, when it
+/// meets exactly the divisors of one negatively. Every other such curve contributes nothing,
+/// and it is an error for one to have fewer than two negative intersections.
+fn group_by_neg_int(
+    curves_dot_q: DMatrixView<i32>,
+    curves_dot_q0: DMatrixView<i32>,
+    strata: &[Stratum],
+) -> Result<CurveGroups, FundamentalPeriodError> {
+    let strata: Vec<[usize; 3]> = strata
+        .iter()
+        .map(|s| {
+            let mut d = s.divisors;
+            d.sort_unstable();
+            d
+        })
+        .collect();
+    let mut groups = CurveGroups::default();
+    let mut neg = Vec::new();
+    for (i, (col, col0)) in curves_dot_q
+        .column_iter()
+        .zip(curves_dot_q0.column_iter())
+        .enumerate()
+    {
+        neg.clear();
+        neg.extend((0..col.len()).filter(|&r| col[r] < 0));
+        if col0.iter().all(|&m| m >= 0) {
+            if let Some(group) = groups.neg.get_mut(neg.len()) {
+                group.push(i);
+            }
+        } else if neg.len() < 2 {
+            return Err(FundamentalPeriodError::NegativeAnticanonicalDegree);
+        } else if let Some(k) = strata.iter().position(|d| d[..] == neg[..]) {
+            groups.vex.push((i, k));
         }
     }
-
-    (neg0, neg1, neg2)
+    Ok(groups)
 }
 
 /// One coefficient of the fundamental period or of one of its derivatives: the
@@ -287,14 +318,67 @@ fn compute_c_2neg<T>(
     }
 }
 
+/// Computes the coefficients of the stratum terms at a curve of negative anticanonical degree
+/// $m$ whose negative intersections $-k_i$ are with the divisors of a stratum: $U_0\, d_{S,t}$
+/// for each $t$, with
+/// $U_0 = (-1)^{e} \prod_{i \in S} (k_i - 1)! \,/\, \big(\prod_{i \notin S} b_i!\,
+/// (\lvert m \rvert - 1)!\big)$, $e = \lvert m \rvert - 1 + \sum_{i \in S} (k_i - 1)$ and $b_i$ the
+/// other intersections. The formula is the one of the C program of PR #94.
+fn compute_c_vex<T>(
+    t: usize,
+    stratum: &Stratum,
+    template_var: &T,
+    curves_dot_q: DMatrixView<i32>,
+    curves_dot_q0: DMatrixView<i32>,
+) -> Vec<(usize, T)>
+where
+    T: PolynomialCoeff<T>,
+{
+    let m = -curves_dot_q0[(0, t)];
+    let mut n = Vec::new();
+    let mut d = vec![(m - 1) as u32];
+    let mut e = m - 1;
+    for &c in curves_dot_q.column(t).iter() {
+        if c < 0 {
+            n.push((-c - 1) as u32);
+            e += -c - 1;
+        } else {
+            d.push(c as u32);
+        }
+    }
+    let mut u0 = template_var.clone();
+    factorial_prod(&n, &d, &mut u0);
+    if e % 2 != 0 {
+        u0 *= -1;
+    }
+    stratum
+        .class
+        .iter()
+        .enumerate()
+        .filter(|(_, &(num, _))| num != 0)
+        .map(|(a, &(num, den))| {
+            let mut x = u0.clone();
+            x *= num;
+            x /= den;
+            (a, x)
+        })
+        .collect()
+}
+
 /// A struct to keep information about the fundamental period.
 /// c0 is the fundamental period, while c1 and c2 are the first and second derivatives of the coefficients.
 /// c0_inv is the inverse of the fundamental period.
+///
+/// In a vex phase, `vex[t]` holds $U_0\, d_{S,t}$ at each curve that meets the divisors of a
+/// stratum $S$ negatively (see [`Stratum`]). These terms add to the second derivatives
+/// contracted with the intersection numbers, so they enter instanton correction $t$ as
+/// $c_0^{-1}$ times `vex[t]`. Without strata the polynomials are empty.
 pub struct FundamentalPeriod<T> {
     pub c0: Polynomial<T>,
     pub c1: Vec<Polynomial<T>>,
     pub c2: HashMap<(usize, usize), Polynomial<T>>,
     pub c0_inv: Polynomial<T>,
+    pub vex: Vec<Polynomial<T>>,
 }
 
 /// Runs one of the `compute_c_*neg` routines over a set of curves in parallel,
@@ -386,15 +470,16 @@ fn file_coeff<T>(
     }
 }
 
-// -> Result<(Polynomial<T>,Vec<Polynomial<T>>,HashMap<(u32,u32),Polynomial<T>>),FundamentalPeriodError>
 /// Computes the fundamental period $\omega$, its inverse $\omega^{-1}$, and polynomials with first
-/// and second derivatives of its coefficients.
+/// and second derivatives of its coefficients, plus the terms of the strata of a vex phase.
 pub fn compute_omega<T>(
     poly_props: &PolynomialProperties<T>,
     sg: &Semigroup,
     q: &DMatrix<i32>,
     nefpart: &[DVector<i32>],
     intnum_idxpairs: &HashSet<(usize, usize)>,
+    cy_kind: CYKind,
+    strata: &[Stratum],
 ) -> Result<FundamentalPeriod<T>, FundamentalPeriodError>
 where
     T: PolynomialCoeff<T>,
@@ -416,6 +501,8 @@ where
     {
         return Err(FundamentalPeriodError::InconsistentNefPartition);
     }
+    check_strata(strata, h11pd, h11, cy_kind, nefpart.is_empty())
+        .map_err(FundamentalPeriodError::InvalidStrata)?;
 
     let mut q0 = DMatrix::<i32>::zeros(cy_codim, h11);
     if nefpart.is_empty() {
@@ -433,7 +520,10 @@ where
     let curves_dot_q = q.clone() * curves;
     let curves_dot_q0 = q0.clone() * curves;
     let beta_pairs: Vec<_> = intnum_idxpairs.iter().cloned().collect();
-    let (neg0, neg1, neg2) = group_by_neg_int(curves_dot_q.as_view());
+    let CurveGroups {
+        neg: [neg0, neg1, neg2],
+        vex: vex_curves,
+    } = group_by_neg_int(curves_dot_q.as_view(), curves_dot_q0.as_view(), strata)?;
 
     let mut c0 = Polynomial::new();
     let mut c1: Vec<Polynomial<T>> = (0..h11).map(|_| Polynomial::new()).collect();
@@ -518,7 +608,37 @@ where
         p.clean_up();
     }
 
-    Ok(FundamentalPeriod { c0, c1, c2, c0_inv })
+    let mut vex: Vec<Polynomial<T>> = (0..h11).map(|_| Polynomial::new()).collect();
+    let vex_coeffs: Vec<_> = vex_curves
+        .par_iter()
+        .map(|&(t, k)| {
+            let c = compute_c_vex(
+                t,
+                &strata[k],
+                &poly_props.zero,
+                curves_dot_q.as_view(),
+                curves_dot_q0.as_view(),
+            );
+            (t, c)
+        })
+        .collect();
+    for (t, c) in vex_coeffs {
+        for (a, x) in c {
+            vex[a].coeffs.insert(t, x);
+        }
+    }
+    for p in vex.iter_mut() {
+        p.nonzero = p.coeffs.keys().cloned().collect();
+        p.nonzero.sort_unstable();
+    }
+
+    Ok(FundamentalPeriod {
+        c0,
+        c1,
+        c2,
+        c0_inv,
+        vex,
+    })
 }
 
 // Notes regarding shapes of matrices. Recall that nalgebra is column-major.
@@ -535,6 +655,65 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn test_group_by_neg_int() {
+        // The intersections of six curves with five divisors, and the anticanonical degrees.
+        let dq = DMatrix::from_column_slice(
+            5,
+            6,
+            &[
+                1, 0, 2, 0, 1, // no negatives
+                -1, 2, 0, 0, 1, // one
+                -1, -1, 1, 1, 2, // two
+                -1, -1, -1, 1, 1, // three, m < 0, on a stratum
+                -1, -1, 0, -1, 2, // three, m < 0, on no stratum
+                -2, -1, 0, 0, 1, // two, m < 0
+            ],
+        );
+        let m: Vec<i32> = dq.column_iter().map(|c| c.sum()).collect();
+        let dq0 = DMatrix::from_row_slice(1, 6, &m);
+        let strata = [Stratum {
+            divisors: [2, 0, 1],
+            class: vec![(1, 1)],
+        }];
+        let groups = group_by_neg_int(dq.as_view(), dq0.as_view(), &strata).unwrap();
+        assert_eq!(
+            groups,
+            CurveGroups {
+                neg: [vec![0], vec![1], vec![2]],
+                vex: vec![(3, 0)],
+            }
+        );
+        // Without strata, curves of negative anticanonical degree contribute nothing.
+        let groups = group_by_neg_int(dq.as_view(), dq0.as_view(), &[]).unwrap();
+        assert!(groups.vex.is_empty());
+
+        // A negative anticanonical degree with a single negative intersection is an error.
+        let dq = DMatrix::from_column_slice(3, 1, &[-3, 1, 1]);
+        let dq0 = DMatrix::from_row_slice(1, 1, &[-1]);
+        assert_eq!(
+            group_by_neg_int(dq.as_view(), dq0.as_view(), &[]),
+            Err(FundamentalPeriodError::NegativeAnticanonicalDegree)
+        );
+    }
+
+    #[test]
+    fn test_c_vex() {
+        // k = (1, 2, 1) on the stratum, b = (0, 3) off it, and m = -1, so that
+        // U_0 = (-1)^1 0! 1! 0! / (0! 3! 0!) = -1/6.
+        let dq = DMatrix::from_column_slice(5, 1, &[-1, -2, -1, 0, 3]);
+        let dq0 = DMatrix::from_row_slice(1, 1, &[-1]);
+        let stratum = Stratum {
+            divisors: [0, 1, 2],
+            class: vec![(1, 2), (0, 1), (-3, 1)],
+        };
+        let res = compute_c_vex(0, &stratum, &Rational::new(), dq.as_view(), dq0.as_view());
+        assert_eq!(
+            res,
+            vec![(0, Rational::from((-1, 12))), (2, Rational::from((1, 2)))]
+        );
+    }
+
+    #[test]
     fn test_omega() {
         let generators = DMatrix::from_column_slice(2, 2, &[0, -1, 1, 2]);
         let grading_vector = RowDVector::from_row_slice(&[3, -1]);
@@ -545,7 +724,15 @@ mod tests {
         let nefpart = Vec::new();
         let intnum_idxpairs = [(0, 0), (0, 1), (1, 1)].iter().cloned().collect();
 
-        let fp = compute_omega(&poly_props, &sg, &q, &nefpart, &intnum_idxpairs);
+        let fp = compute_omega(
+            &poly_props,
+            &sg,
+            &q,
+            &nefpart,
+            &intnum_idxpairs,
+            CYKind::Threefold,
+            &[],
+        );
         assert!(fp.is_ok());
         let fp = fp.unwrap();
 

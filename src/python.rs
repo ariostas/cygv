@@ -1,5 +1,5 @@
 use crate::dispatch::compute_gvgw_strings;
-use crate::{CYKind, InvariantKind, Method};
+use crate::{CYKind, InvariantKind, Method, Stratum};
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ fn to_matrix(m: Vec<Vec<i32>>, name: &str) -> PyResult<DMatrix<i32>> {
 /// Compute GV or GW invariants
 #[pyfunction]
 #[pyo3(name = "_compute_gvgw")]
-#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, method=None))]
+#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, method=None, strata=None))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
@@ -42,6 +42,7 @@ pub fn compute_gvgw(
     nefpart: Option<Vec<Vec<i32>>>,
     n_threads: Option<u32>,
     method: Option<&str>,
+    strata: Option<Vec<(Vec<usize>, Vec<(i64, i64)>)>>,
 ) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
     CTRLC_HANDLER.call_once(|| {
         ctrlc::set_handler(|| std::process::exit(1)).expect("failed to install ctrl-c handler");
@@ -63,6 +64,18 @@ pub fn compute_gvgw(
         InvariantKind::GW
     };
     let cy_kind = CYKind::from_is_threefold(is_threefold);
+    let strata = strata
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(divisors, class)| {
+            let divisors = divisors.try_into().map_err(|_| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "the divisors of a stratum must be three indices",
+                )
+            })?;
+            Ok(Stratum { divisors, class })
+        })
+        .collect::<PyResult<_>>()?;
     let method = match method {
         None => Method::default(),
         Some(name) => Method::from_name(name).ok_or_else(|| {
@@ -78,6 +91,7 @@ pub fn compute_gvgw(
         q,
         nefpart,
         intnums,
+        strata,
         invariant_kind,
         cy_kind,
         max_deg,

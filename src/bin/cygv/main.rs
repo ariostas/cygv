@@ -39,6 +39,10 @@ The optional fields are the following.
                  partition when it is not given.
   n_threads      The number of threads to use. It defaults to the number of
                  threads that are available.
+  strata         The strata of a vex phase of the toric variety, a list of
+                 mappings with the three divisors of a stratum and its class,
+                 e.g. {divisors: [1, 2, 4], class: [1, \"-1/2\"]}. Only for
+                 threefold hypersurfaces.
   method         Which pipeline to use: auto, modular or reference. It defaults
                  to auto. The modular pipeline is much faster, but only supports
                  max_deg; auto uses it when it can, and the reference pipeline

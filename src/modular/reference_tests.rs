@@ -109,7 +109,16 @@ fn check(case: &Case) {
     let pp = PolynomialProperties::<Rational>::new(&sg);
     let (intnum_dict, idx_pairs, n_indices) =
         process_int_nums(case.intnums.clone(), case.cy_kind).unwrap();
-    let fp = compute_omega(&pp, &sg, &case.q, &case.nefpart, &idx_pairs).unwrap();
+    let fp = compute_omega(
+        &pp,
+        &sg,
+        &case.q,
+        &case.nefpart,
+        &idx_pairs,
+        case.cy_kind,
+        &[],
+    )
+    .unwrap();
     let ref_c0 = fp.c0.clone(&pp.zero);
     let ref_c1: Vec<_> = fp.c1.iter().map(|p| p.clone(&pp.zero)).collect();
     let ref_c2: HashMap<_, _> = fp.c2.iter().map(|(&k, p)| (k, p.clone(&pp.zero))).collect();
@@ -205,6 +214,7 @@ fn check_gv(case: &Case, options: &Options) {
         case.q.clone(),
         case.nefpart.clone(),
         case.intnums.clone(),
+        Vec::new(),
         None,
     );
     let expected: HashMap<(Vec<i32>, usize), String> = reference
@@ -251,6 +261,7 @@ fn check_gw(case: &Case) {
             case.q.clone(),
             case.nefpart.clone(),
             case.intnums.clone(),
+            Vec::new(),
             InvariantKind::GW,
             case.cy_kind,
             Some(case.max_deg),
