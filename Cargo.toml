@@ -39,7 +39,9 @@ clap = { version = "4.5.16", features = ["derive"], optional = true }
 ctrlc = { version = "3.4.4", optional = true }
 nalgebra = "0.35.0"
 rayon = "1.12.0"
-rug = "1.25.0"
+# Only exact rationals are needed, so `rug`'s float and complex features (and with
+# them the MPFR and MPC builds) are left out.
+rug = { version = "1.25.0", default-features = false, features = ["rational", "std"] }
 rustc-hash = "2"
 yaml-rust2 = { version = "0.13", optional = true }
 
@@ -50,16 +52,14 @@ optional = true
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
-# Only used by the memory benchmark, to route GMP/MPFR allocations through a
-# counting allocator. Must stay compatible with the version `rug` links against.
-# The feature list must match `rug`'s exactly (it depends on this crate with
-# `default-features = false`): cargo fingerprints feature *names*, so enabling
-# `default` here — even though it expands to the same set — would create a second
-# build unit and rebuild GMP and MPFR from source a second time.
-gmp-mpfr-sys = { version = "1.7", default-features = false, features = [
-  "mpc",
-  "mpfr",
-] }
+# Only used by the memory benchmark, to route GMP allocations through a counting
+# allocator. Must stay compatible with the version `rug` links against. The
+# feature list must match what `rug` requests exactly (it depends on this crate
+# with `default-features = false` and, without its float feature, no features):
+# cargo fingerprints feature *names*, so a different list would create a second
+# build unit and rebuild GMP from source a second time, plus MPFR if it is asked
+# for.
+gmp-mpfr-sys = { version = "1.7", default-features = false }
 
 # Both benchmarks load their larger models from `benches/data` through the `io`
 # module, which is part of the `cli` feature.

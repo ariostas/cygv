@@ -64,13 +64,13 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      # See the Rust workflow: this caches the compiled GMP and MPFR libraries,
+      # See the Rust workflow: this caches the compiled GMP library,
       # which is where nearly all of the build time goes. Their contents depend
       # only on the target and the C compiler, so the whole matrix — and the Rust
       # workflow — share a single key per OS.
       - name: Point gmp-mpfr-sys at a cacheable directory
         run: echo "GMP_MPFR_SYS_CACHE=${{ runner.temp }}/gmp-mpfr-sys" >> "$GITHUB_ENV"
-      - name: Cache GMP and MPFR builds
+      - name: Cache GMP builds
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/gmp-mpfr-sys

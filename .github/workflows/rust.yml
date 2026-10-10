@@ -29,7 +29,7 @@ jobs:
     env:
       # `gmp-mpfr-sys` keys its build cache on the compiler, so this has to be
       # set for the whole job: a cargo step that ran without it would miss the
-      # cache and build GMP and MPFR from source again.
+      # cache and build GMP from source again.
       CC: clang
     steps:
       - name: Set up MSYS2
@@ -50,15 +50,15 @@ jobs:
             curl
       - name: Check out repo
         uses: actions/checkout@v7
-      # `rug` builds GMP and MPFR from source, which dominates the job (~13 min
-      # on Windows). `gmp-mpfr-sys` keeps the built libraries in the directory
+      # `rug` builds GMP from source, which dominates the job (it took ~13 min
+      # on Windows when MPFR was built too). `gmp-mpfr-sys` keeps the built libraries in the directory
       # named by GMP_MPFR_SYS_CACHE, keyed internally by version, target and
       # compiler, so restoring it turns the build into a file copy. The variable
       # goes through GITHUB_ENV because the `runner` context is not available in
       # a job-level `env` block.
       - name: Point gmp-mpfr-sys at a cacheable directory
         run: echo "GMP_MPFR_SYS_CACHE=${{ runner.temp }}/gmp-mpfr-sys" >> "$GITHUB_ENV"
-      - name: Cache GMP and MPFR builds
+      - name: Cache GMP builds
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/gmp-mpfr-sys

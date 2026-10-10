@@ -42,13 +42,14 @@ uv run pytest python/tests/test_hkty.py::test_threefold
 prek -a --quiet
 ```
 
-`rug` depends on GMP/MPFR, which are compiled from source, so the first build is slow and needs a C
+`rug` depends on GMP, which is compiled from source, so the first build is slow and needs a C
 toolchain plus `m4` and `make` (`configure: error: No usable m4 in $PATH` means `m4` is missing).
 CI sets `CC=clang` on all platforms; locally the default compiler is usually fine, and forcing
 `CC=clang` fails outright if clang is not installed. Windows builds go through MSYS2/MINGW64.
 
-That source build dominates CI (~13 min on Windows, where it used to be more than half the job),
-so both CI workflows cache it. `gmp-mpfr-sys` keeps the built libraries in the directory named by
+That source build dominates CI, so both CI workflows cache it. (The timings below date from when
+MPFR was built too, before `rug`'s float feature was dropped, so GMP alone takes less. Back then
+it took ~13 min on Windows, where it used to be more than half the job.) `gmp-mpfr-sys` keeps the built libraries in the directory named by
 `GMP_MPFR_SYS_CACHE`, under a subdirectory keyed by version, target triple, `CC` and `CFLAGS`, and
 copies them back instead of rebuilding — about 3.5 MB, and a ~240 s build becomes ~8 s. The
 workflows point that variable at `$RUNNER_TEMP/gmp-mpfr-sys` and restore it with `actions/cache`.
@@ -244,19 +245,19 @@ some drop generators above the highest degree any scenario reaches.
 - `benches/memory.rs` measures allocations. `cargo bench --bench memory` prints peak live bytes,
   total bytes allocated, allocation count, peak RSS and wall clock per scenario.
 
-Memory needs care because the bulk of it lives in GMP/MPFR numbers, which C code allocates and
-Rust's global allocator therefore never sees. `benches/memory.rs` installs its own allocation
-functions through `gmp_mpfr_sys::gmp::set_memory_functions` (MPFR routes through the same hooks
-when built against GMP, which is how `gmp-mpfr-sys` builds it) plus a `GlobalAlloc` wrapper, so
+Memory needs care because the bulk of it lives in GMP numbers, which C code allocates and Rust's
+global allocator therefore never sees. `benches/memory.rs` installs its own allocation functions
+through `gmp_mpfr_sys::gmp::set_memory_functions` plus a `GlobalAlloc` wrapper, so
 both sides feed the same counters. GMP passes the block size back on free and realloc, so no
 bookkeeping headers are needed. The hooks must be installed before any GMP object exists, which is
 why it happens first thing in `main`. Each scenario then runs in a child process (`--run <id>`,
 spawned by the parent), so peaks do not leak between scenarios and `VmHWM` reflects one scenario
 only. The `gmp-mpfr-sys` dev-dependency must stay compatible with the version `rug` links against,
-and must request exactly the features `rug` does (`default-features = false`, `mpc` and `mpfr`).
-Cargo fingerprints feature *names*, not what they expand to, so enabling `default` here — which
-resolves to the very same two features — splits it into a second build unit and compiles GMP and
-MPFR from source a second time, doubling every cold CI build.
+and must request exactly the features `rug` does: `default-features = false` and none at all,
+since `rug` is used with only its `rational` and `std` features. Cargo fingerprints feature
+*names*, not what they expand to, so a different list here splits it into a second build unit and
+compiles GMP from source a second time, doubling every cold CI build. Turning `rug`'s `float`
+feature back on would bring MPFR back, and this list would then have to name `mpfr` too.
 
 Scenarios come in three `Tier`s. The high-degree ones are gated behind `CYGV_BENCH_HEAVY` because
 criterion has to run each of them ten or more times; the memory target runs everything once, so
