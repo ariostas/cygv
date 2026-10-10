@@ -1,4 +1,4 @@
-use crate::hkty::compute_gvgw_strings;
+use crate::dispatch::compute_gvgw_strings;
 use crate::{CYKind, InvariantKind};
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;

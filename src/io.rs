@@ -45,8 +45,8 @@
 
 pub mod error;
 
-use crate::hkty::compute_gvgw_strings;
-use crate::misc::process_int_nums;
+use crate::dispatch::compute_gvgw_strings;
+use crate::reference::misc::process_int_nums;
 use crate::{CYKind, InvariantKind};
 use error::IoError;
 use nalgebra::{DMatrix, DVector, RowDVector};

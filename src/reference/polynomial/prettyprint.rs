@@ -51,7 +51,7 @@ impl<'a, T: fmt::Display> fmt::Display for PrettyPrintPolynomial<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semigroup::Semigroup;
+    use crate::reference::semigroup::Semigroup;
     use nalgebra::{DMatrix, DVector, RowDVector};
     use rug::{Assign, Rational};
 

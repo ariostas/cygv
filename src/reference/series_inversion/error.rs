@@ -1,6 +1,6 @@
 //! A module for errors that can happen in series inversions.
 
-use crate::polynomial::error::PolynomialError;
+use crate::reference::polynomial::error::PolynomialError;
 use core::fmt;
 
 /// An error structure for semigroup errors.

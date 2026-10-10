@@ -1,7 +1,7 @@
 //! A module for properties of polynomials.
 
-use crate::polynomial::coefficient::PolynomialCoeff;
-use crate::semigroup::Semigroup;
+use crate::reference::polynomial::coefficient::PolynomialCoeff;
+use crate::reference::semigroup::Semigroup;
 use nalgebra::DVectorView;
 use rustc_hash::FxHashMap as HashMap;
 

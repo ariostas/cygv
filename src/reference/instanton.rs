@@ -1,7 +1,7 @@
 //! Instanton corrections.
 
-use crate::fundamental_period::FundamentalPeriod;
-use crate::polynomial::{
+use crate::reference::fundamental_period::FundamentalPeriod;
+use crate::reference::polynomial::{
     coefficient::PolynomialCoeff, error::PolynomialError, properties::PolynomialProperties,
     Polynomial,
 };
@@ -125,7 +125,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{fundamental_period::compute_omega, misc::process_int_nums, Semigroup};
+    use crate::reference::{fundamental_period::compute_omega, misc::process_int_nums};
+    use crate::Semigroup;
     use nalgebra::{DMatrix, RowDVector};
     use rug::Rational;
 

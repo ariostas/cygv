@@ -2,9 +2,9 @@
 
 pub mod error;
 
-use crate::factorial::{factorial_prod, harmonic};
-use crate::polynomial::{coefficient::PolynomialCoeff, Polynomial};
-use crate::semigroup::Semigroup;
+use crate::reference::factorial::{factorial_prod, harmonic};
+use crate::reference::polynomial::{coefficient::PolynomialCoeff, Polynomial};
+use crate::reference::semigroup::Semigroup;
 use crate::PolynomialProperties;
 use error::FundamentalPeriodError;
 use nalgebra::{DMatrix, DMatrixView, DVector};

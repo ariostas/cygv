@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use cygv::hkty::{
+use cygv::dispatch::{
     compute_gv_float_nfold, compute_gv_float_threefold, compute_gv_rat_nfold,
     compute_gv_rat_threefold, compute_gw_float_nfold, compute_gw_float_threefold,
     compute_gw_rat_nfold, compute_gw_rat_threefold,

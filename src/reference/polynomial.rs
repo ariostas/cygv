@@ -413,7 +413,7 @@ macro_rules! polynomial {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semigroup;
+    use crate::reference::semigroup;
     use nalgebra::{DMatrix, RowDVector};
     use rug::{Assign, Rational};
     use semigroup::Semigroup;

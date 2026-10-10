@@ -114,7 +114,14 @@ PR titles must follow conventional commits (enforced by `.github/workflows/pr_ti
 
 ## Architecture
 
-The computation is a four-stage pipeline, orchestrated by `hkty::run_hkty` (`src/hkty.rs`):
+The modules split into the pipeline and the front end shared by everything that calls it.
+`src/reference.rs` and `src/reference/` hold the pipeline, a faithful implementation of the HKTY
+procedure (named *reference* because a faster, differently structured pipeline is planned beside
+it; see `PLAN.md`). `src/dispatch.rs` holds the public entry points, and `src/io.rs`, the CLI and
+`src/python.rs` sit on top of those.
+
+The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
+(`src/reference.rs`), whose stages are submodules of `reference`:
 
 1. **`semigroup`** — builds the truncated affine semigroup $S_\sigma = \sigma \cap \mathbb{Z}^n$ of
    curve classes in the Mori cone. Four constructors select which points get computed:
@@ -137,18 +144,18 @@ indices differently (the first index is a reference surface in the n-fold case).
 
 ### Key cross-cutting patterns
 
-- **Const generics select variants at compile time.** `run_hkty<T, FIND_GV, IS_THREEFOLD>` is
-  monomorphized over `T ∈ {Rational, Float}` and the two bools. Every entry point — the eight
-  `compute_g{v,w}_{rat,float}_{threefold,nfold}` wrappers in `src/hkty.rs`, and
-  `compute_gvgw_strings` in the same file, which is the single runtime dispatch used by both
-  `src/python.rs` and the CLI — is just a dispatch into that one generic. Adding an option here
-  means touching all of those dispatch sites.
-- **`PolynomialCoeff<T>`** (`src/polynomial/coefficient.rs`) is the compound trait that lets the
+- **Generics select the coefficient type at compile time.** `run_hkty<T>` is monomorphized over
+  `T ∈ {Rational, Float}`, and takes the `InvariantKind` and `CYKind` enums at runtime. Every
+  entry point — the eight `compute_g{v,w}_{rat,float}_{threefold,nfold}` wrappers in
+  `src/dispatch.rs`, and `compute_gvgw_strings` in the same file, which is the single runtime
+  dispatch used by both `src/python.rs` and the CLI — is just a dispatch into that one generic.
+  Adding an option here means touching all of those dispatch sites.
+- **`PolynomialCoeff<T>`** (`src/reference/polynomial/coefficient.rs`) is the compound trait that lets the
   same code run over exact `rug::Rational` and arbitrary-precision `rug::Float`. It is built almost
   entirely from `*Assign` traits: coefficient arithmetic is done in place to avoid allocating
   bignums. When adding a numeric operation, add it as an in-place trait (see `RecipMut`,
   `RoundMut`, `AbsMut`) rather than a by-value one.
-- **`Polynomial<T>`** (`src/polynomial.rs`) is sparse over the fixed monomial set of the semigroup:
+- **`Polynomial<T>`** (`src/reference/polynomial.rs`) is sparse over the fixed monomial set of the semigroup:
   `coeffs: HashMap<monomial index, T>` plus a sorted `nonzero: Vec<usize>` index list. Both must be
   kept consistent — code that inserts into `coeffs` directly (e.g. when assembling from worker
   threads) must rebuild and re-sort `nonzero` afterwards. `PolynomialProperties` carries the
@@ -171,7 +178,7 @@ indices differently (the first index is a reference surface in the n-fold case).
   thread falls behind (a busy machine is enough), which keeps the peak at its floor instead of
   swinging by tens of MiB from run to run. Where a worker needs bignum scratch space it gets it from
   `for_each_init`, which builds it once per rayon job instead of once per item (see `CScratch` in
-  `src/fundamental_period.rs`).
+  `src/reference/fundamental_period.rs`).
 
 ### Command line interface
 
@@ -194,7 +201,7 @@ dependencies, `[[bin]]` declares `required-features = ["cli"]`, and both `io` (i
 ### Python layer
 
 `src/python.rs` exposes a single `_compute_gvgw` PyO3 function (module built with `gil_used =
-false`) that forwards to `hkty::compute_gvgw_strings`; results are returned as **strings** and
+false`) that forwards to `dispatch::compute_gvgw_strings`; results are returned as **strings** and
 parsed on the Python side into `int`, `fractions.Fraction`, or `mpmath.mpf` depending on
 `find_gv`/`prec`.
 

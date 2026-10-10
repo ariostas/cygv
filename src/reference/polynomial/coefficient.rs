@@ -1,6 +1,6 @@
 //! Polynomial coefficients
 
-use crate::factorial::RecipMut;
+use crate::reference::factorial::RecipMut;
 use core::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
 use rug::{Assign, Float, Rational};
 use std::fmt::Display;

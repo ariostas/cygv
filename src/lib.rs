@@ -1,17 +1,11 @@
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 
-pub mod factorial;
-pub mod fundamental_period;
-pub mod hkty;
-pub mod instanton;
+pub mod dispatch;
 #[cfg(feature = "cli")]
 pub mod io;
-pub mod misc;
-pub mod polynomial;
 #[cfg(feature = "python")]
 pub mod python;
-pub mod semigroup;
-pub mod series_inversion;
+pub mod reference;
 
 /// Which invariants to compute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,16 +59,15 @@ impl CYKind {
 
 // Re-export the main structs
 #[doc(inline)]
-pub use polynomial::{
+pub use reference::polynomial::{
     prettyprint::PrettyPrintPolynomial, properties::PolynomialProperties, Polynomial,
 };
 #[doc(inline)]
-#[doc(inline)]
-pub use semigroup::Semigroup;
+pub use reference::semigroup::Semigroup;
 
 // Re-export main trait
 #[doc(inline)]
-pub use polynomial::coefficient::PolynomialCoeff;
+pub use reference::polynomial::coefficient::PolynomialCoeff;
 
 // Re-export python module
 #[cfg(feature = "python")]
@@ -83,4 +76,6 @@ pub use python::cygv;
 
 // Re-export main functions
 #[doc(inline)]
-pub use hkty::*;
+pub use dispatch::*;
+#[doc(inline)]
+pub use reference::run_hkty;

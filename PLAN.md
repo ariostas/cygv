@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 and 0d done, nothing implemented yet.** Progress is
+Status: **investigation done, phases 0, 0b and 0d done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -254,12 +254,16 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
 
 - [x] **0. Branch hygiene** (6.6): the PR's integration glue is removed and `cgv/*.c` stays as
   a development oracle and performance baseline.
-- [ ] **0b. Move the existing pipeline under `src/reference/`** (6.7), as a commit of its own
+- [x] **0b. Move the existing pipeline under `src/reference/`** (6.7), as a commit of its own
   with no functional change. Done before any new code so that the diff stays a pure move.
-  - [ ] `git mv` the modules and fix the `use` paths in `src`, `tests/`, `benches/` and the
+  - [x] `git mv` the modules and fix the `use` paths in `src`, `tests/`, `benches/` and the
     CLI.
-  - [ ] Split `src/hkty.rs` into `reference.rs` and `dispatch.rs`.
-  - [ ] Update CLAUDE.md.
+  - [x] Split `src/hkty.rs` into `reference.rs` (`run_hkty`) and `dispatch.rs` (the string
+    dispatch and the eight typed wrappers).
+  - [x] Update CLAUDE.md.
+  - The crate root still re-exports `Semigroup`, `Polynomial`, `PolynomialProperties`,
+    `PolynomialCoeff`, `run_hkty` and everything in `dispatch`; whether it keeps doing so is the
+    open question of 6.7.
 - [ ] **0c. Drop floating-point computation** (6.9), as its own commit.
   - [ ] Check whether CYTools or other callers pass `prec` (before starting).
   - [ ] Remove `prec` and the `Float` variants from the Rust code, `io::Input` and the CLI.
