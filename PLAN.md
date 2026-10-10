@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2 and 3 done, 3b mostly.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3 and 3b done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -340,7 +340,7 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     Single-threaded release timings on `h11_9`: at degree 14, enumeration 1.7 s, then
     period 0.10 s, instanton 0.04 s, extraction 0.15 s, multicover 3 ms; at degree 18,
     enumeration 17 s, then 0.5 / 0.3 / 2.9 / 0.02 s.
-- [ ] **3b. Complete intersections and n-folds** (6.3). Done before tuning so that phase 5
+- [x] **3b. Complete intersections and n-folds** (6.3). Done before tuning so that phase 5
   optimises the final data layout.
   - [x] Multi-row `q0`. Done in phase 2: `period` is the only stage that reads it.
   - [x] The $M$-component $I$, consumed by the extraction (phase 3).
@@ -355,8 +355,12 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
   - [x] Differential tests against the reference on the fourfold CICY, end to end at degree
     10 (183 invariants, 30 of them on curves with gcd above one). The stage-level ones exist
     since phase 2.
-  - [ ] Fix `examples/fourfold.yaml` as above, and its expected output in `tests/cli.rs` if
-    that changes.
+  - [x] Fix `examples/fourfold.yaml` as above, and its expected output in `tests/cli.rs` if
+    that changes. It has the nef partition now, and its comment says what it is (as a
+    hypersurface the same data would even be a fivefold: 12 rays and 6 charges). Its output
+    changed (56 invariants instead of 79), and the CLI test pins the first one and the count.
+    The stage-level test still also runs the data without the nef partition, which covers an
+    n-fold with a single row.
 - [ ] **4. Front end.**
   - [ ] The `Method { Auto, Modular, Reference }` argument through `dispatch`, `io::Input`,
     the CLI and Python. `auto` falls back to `reference` for requests `modular` does not
@@ -561,9 +565,9 @@ Layers, from cheapest to most independent:
    Converted in phase 9 at the latest, before `cgv/` is removed. They also catch a bug shared by
    both implementations, which layer 3 cannot. Excluded from the published crate (`exclude` in
    `Cargo.toml`). Gap: there is no independent reference for complete intersections or n-folds;
-   look for published tables to use as fixtures. Also open: `examples/fourfold.yaml` describes
-   itself as a hypersurface while the `fourfold` bench model has a nef partition; check which
-   geometry each one is before relying on them. And before shipping `refs_vex` as fixtures,
+   look for published tables to use as fixtures. (`examples/fourfold.yaml` used to describe
+   itself as a hypersurface; it is the complete intersection of the `fourfold` bench model,
+   and has its nef partition since phase 3b.) And before shipping `refs_vex` as fixtures,
    confirm with the PR author that their provenance allows it.
 5. *Stress test*, in the spirit of `cgv/tests/stress.py`: repeated runs at several thread
    counts, outputs compared with each other, to catch races in phase 5's parallel code. Marked

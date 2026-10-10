@@ -2,7 +2,9 @@
 #
 #   cygv --file examples/fourfold.yaml --output invariants.yaml
 #
-# It computes the GV invariants of a CY fourfold hypersurface with h^{1,1} = 6.
+# It computes the GV invariants of a CY fourfold with h^{1,1} = 6, the complete
+# intersection of two hypersurfaces in a six-dimensional toric variety, given by
+# the nef partition of its 12 rays into the two parts below.
 # For CYs of dimension greater than three the invariants are labeled by a curve
 # class and by the index of a reference surface, which is the first index of the
 # intersection numbers.
@@ -23,6 +25,9 @@ q:
   - [0, 0, 0, 0, 0, 0, -2, -3, -2, 1, 0, 0]
   - [0, 0, 0, 0, 0, 0, -2, -2, -1, 0, 1, 0]
   - [0, 0, 0, 0, 0, 0, -3, -4, -2, 0, 0, 1]
+nefpart:
+  - [0, 1, 2, 3]
+  - [4, 5, 6, 7, 8, 9, 10, 11]
 intnums:
   - [0, 0, 2, 1]
   - [0, 1, 1, -8]

@@ -96,7 +96,19 @@ fn test_file_to_file() {
     assert_eq!(docs[0]["name"].as_str(), Some("fourfold"));
     assert_eq!(docs[0]["is_threefold"].as_bool(), Some(false));
     // The invariants of CYs that are not threefolds carry a reference surface index.
-    assert!(docs[0]["results"][0]["surface_index"].as_i64().is_some());
+    let first = &docs[0]["results"][0];
+    assert_eq!(first["surface_index"].as_i64(), Some(4));
+    // These are the invariants of the complete intersection; read as a hypersurface, the
+    // same data gives 79 instead, starting with a class that has none here.
+    let class: Vec<i64> = first["curve_class"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_i64().unwrap())
+        .collect();
+    assert_eq!(class, [0, 0, 0, 0, -2, 1]);
+    assert_eq!(first["gv"].as_i64(), Some(-64));
+    assert_eq!(docs[0]["results"].as_vec().unwrap().len(), 56);
 }
 
 #[test]

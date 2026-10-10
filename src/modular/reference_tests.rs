@@ -392,19 +392,18 @@ fn test_h11_9() {
     ));
 }
 
-/// The fourfold of the examples, an n-fold with fourteen reference surfaces, both as the
-/// hypersurface the file describes and as the complete intersection of the `fourfold` bench
-/// model, which has two anticanonical rows.
+/// The fourfold of the examples, a complete intersection with two anticanonical rows and
+/// fourteen reference surfaces. The stages are also compared on the same data without the
+/// nef partition, read as a fivefold hypersurface: that is not a consistent geometry, but it
+/// covers an n-fold with a single row.
 #[test]
 #[cfg(feature = "cli")]
 fn test_fourfold() {
     let mut case = load("fourfold", include_str!("../../examples/fourfold.yaml"), 5);
+    assert_eq!(case.nefpart.len(), 2);
     check(&case);
-    case.name = "fourfold CICY";
-    case.nefpart = vec![
-        DVector::from_column_slice(&[0, 1, 2, 3]),
-        DVector::from_column_slice(&[4, 5, 6, 7, 8, 9, 10, 11]),
-    ];
+    case.name = "fivefold hypersurface";
+    case.nefpart.clear();
     check(&case);
 }
 
@@ -429,18 +428,11 @@ bench_gv_tests! {
     test_h11_11_gv: "h11_11", 5;
 }
 
-/// The fourfold of the examples as the complete intersection of the `fourfold` bench model.
-/// Read as the hypersurface the file describes, the reference finds GV invariants that are
-/// not integers, so its intersection numbers are presumably those of the complete
-/// intersection.
+/// The fourfold of the examples, a complete intersection. (Without its nef partition the
+/// reference finds GV invariants that are not integers.)
 #[test]
 #[cfg(feature = "cli")]
 fn test_fourfold_gv() {
-    let mut case = load("fourfold", include_str!("../../examples/fourfold.yaml"), 10);
-    case.name = "fourfold CICY";
-    case.nefpart = vec![
-        DVector::from_column_slice(&[0, 1, 2, 3]),
-        DVector::from_column_slice(&[4, 5, 6, 7, 8, 9, 10, 11]),
-    ];
+    let case = load("fourfold", include_str!("../../examples/fourfold.yaml"), 10);
     check_gv(&case, &Options::default());
 }
