@@ -53,6 +53,43 @@ numbers, so each entry looks like `(((0, -2, 0, 1, 0, 2), 3), -24)` instead.
 The computation runs in a subprocess, so it can be interrupted with ctrl+c without losing the
 Python session.
 
+### The cgv backend
+
+For hypersurface threefolds with `max_deg`, `backend="cgv"` computes the same GV and GW invariants
+with [cgv](cgv/), a C implementation that is also exact and much faster on deep degrees:
+
+```python
+compute_gv(generators, grading_vector, q, intnums, max_deg=30, backend="cgv")
+```
+
+It needs [normaliz](https://github.com/Normaliz/Normaliz) on the `PATH` (e.g. `conda install -c
+conda-forge normaliz`). cgv uses only the cone the generators span (every lattice point of it), so any
+vectors spanning the Mori cone will do.
+
+cgv can also run on a GPU: `device="auto"` (the default) picks a suitable GPU if there is one, else
+the CPU; `"cpu"`, `"gpu"` and `"gpu:N"` choose explicitly. The prebuilt wheels are CPU-only. For the
+GPU, install from source (needs a Rust toolchain) on a Linux machine with CUDA's `nvcc` or ROCm's `hipcc`:
+
+```bash
+pip install --no-binary cygv cygv
+```
+
+This builds for the GPUs in the machine; `CGV_CUDA_ARCH` or `CGV_HIP_ARCH` choose other
+architectures (e.g. `CGV_CUDA_ARCH=sm_89,sm_120`). AMD GPUs that ROCm does not officially support
+need the nearest supported architecture when building and an override when running, e.g. for an
+RX 6700 XT (gfx1031): `CGV_HIP_ARCH=gfx1030` when installing, `HSA_OVERRIDE_GFX_VERSION=10.3.0`
+when running.
+
+#### Any phase, including vex fans
+
+`compute_gv_phase(cones, q, intnums, max_deg)` (and `compute_gw_phase`) computes the invariants in a given phase of the
+ambient toric variety, given its fan (maximal cones as column indices of `q`): an FRST or a vex fan, where curves of
+negative anticanonical degree exist and are handled with a pole-free prescription. Optional: `mori_rays` (vectors
+spanning the Mori cone; default its wall curves), `grading_vector`, `device` as above, and `lightcone`: curve classes
+whose backward lightcones alone are computed (the classes C with p - C in the Mori cone, exactly those feeding into p;
+`max_deg` is then optional). It needs
+[normaliz](https://github.com/Normaliz/Normaliz) and uses cgv; see `cgv/README.md`, "Any phase".
+
 ## Command line interface
 
 This project also ships a `cygv` executable, so that it can be used without Python. It reads
