@@ -24,6 +24,7 @@
 
 use super::field::Ring;
 use super::key::KeyLayout;
+use super::lightcone::Lightcone;
 use super::table::{DegreeHeap, LevelTable, SlotMap, SparsePoly};
 use super::Error;
 
@@ -153,7 +154,8 @@ impl<K: super::key::Key, E: Copy + Default + PartialEq> ExpWorkspace<K, E> {
 /// per term as `inst`.
 ///
 /// `alpha` holds the $\alpha_a$, one value per coordinate of `layout`, and must have no
-/// constant term; `inv` holds the inverses of the integers up to `max_deg` at least.
+/// constant term; `inv` holds the inverses of the integers up to `max_deg` at least. Only the
+/// curves in `lightcone` are subtracted, so the coefficients are only right in there.
 pub fn extract<R: Ring, L: KeyLayout>(
     ring: &R,
     layout: &L,
@@ -161,6 +163,7 @@ pub fn extract<R: Ring, L: KeyLayout>(
     inst: &SparsePoly<L::Key, R::Elem>,
     inv: &[R::Elem],
     max_deg: u32,
+    lightcone: &Lightcone<L::Key>,
 ) -> Result<SparsePoly<L::Key, R::Elem>, Error> {
     let h11 = layout.dim();
     if alpha.width() != h11 || inv.len() <= max_deg as usize {
@@ -196,6 +199,10 @@ pub fn extract<R: Ring, L: KeyLayout>(
         }
         let kc = map.key(slot);
         layout.unpack(kc, &mut curve);
+        // A curve outside the lightcones only changes curves outside them.
+        if !lightcone.contains(kc, &curve) {
+            continue;
+        }
         ws.exp(ring, &curve, alpha, &ints, inv, max_deg - d, |m, e, f| {
             let (t, created) = map.insert(kc + m, d + e);
             if created {
@@ -321,7 +328,7 @@ mod tests {
                     .copy_from_slice(v);
             }
             let inst = inst_map.take();
-            let got = extract(&lf, &layout, &alpha, &inst, &inv, max_deg).unwrap();
+            let got = extract(&lf, &layout, &alpha, &inst, &inv, max_deg, &Lightcone::All).unwrap();
             let got: HashMap<PackedKey, Vec<E>> = (0..got.len())
                 .map(|i| (got.keys()[i], got.values(i).to_vec()))
                 .collect();
@@ -339,15 +346,25 @@ mod tests {
         let empty = SparsePoly::new(2);
         let inst = SparsePoly::new(1);
         assert_eq!(
-            extract(&lf, &layout, &empty, &inst, &inv, 5),
+            extract(&lf, &layout, &empty, &inst, &inv, 5, &Lightcone::All),
             Err(Error::DimensionMismatch)
         );
         assert_eq!(
-            extract(&lf, &layout, &SparsePoly::new(3), &inst, &inv, 4),
+            extract(
+                &lf,
+                &layout,
+                &SparsePoly::new(3),
+                &inst,
+                &inv,
+                4,
+                &Lightcone::All
+            ),
             Err(Error::DimensionMismatch)
         );
-        assert!(extract(&lf, &layout, &empty, &inst, &inv, 4)
-            .unwrap()
-            .is_empty());
+        assert!(
+            extract(&lf, &layout, &empty, &inst, &inv, 4, &Lightcone::All)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

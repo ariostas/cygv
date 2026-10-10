@@ -12,17 +12,16 @@ def test_threefold() -> None:
     grading_vector = [3, -1]
     q = [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]
     intnums = {(0, 0, 0): 2, (0, 0, 1): 1, (0, 1, 1): -1, (1, 1, 1): 5}
-    # For now, these are just smoke tests
-    compute_gv(generators, grading_vector, q, intnums, min_points=100)
-    compute_gw(generators, grading_vector, q, intnums, min_points=100)
-    compute_gv(generators, grading_vector, q, intnums, target_points=[10, 10])
-    compute_gv(
-        generators, grading_vector, q, intnums, target_points=[[10, 10], [12, 10]]
-    )
-    compute_gw(generators, grading_vector, q, intnums, target_points=[10, 10])
-    compute_gw(
-        generators, grading_vector, q, intnums, target_points=[[10, 10], [12, 10]]
-    )
+    # For now, these are just smoke tests. This is not a consistent geometry, on which the
+    # modular method finds invariants that are not integers, so the reference method is
+    # requested explicitly where the modular one would run.
+    args = (generators, grading_vector, q, intnums)
+    compute_gv(*args, min_points=100)
+    compute_gw(*args, min_points=100)
+    compute_gv(*args, target_points=[10, 10], method="reference")
+    compute_gv(*args, target_points=[[10, 10], [12, 10]], method="reference")
+    compute_gw(*args, target_points=[10, 10], method="reference")
+    compute_gw(*args, target_points=[[10, 10], [12, 10]], method="reference")
 
     generators = [
         [-1, 0, 0, 0, 0, 1, -1],
@@ -195,7 +194,14 @@ def test_methods() -> None:
     assert expected[1] == ((2,), Fraction(609250 * 8 + 2875, 8))
     assert sorted(compute_gw(*args, max_deg=5, method="modular")) == expected
 
-    # The modular method only supports max_deg, and auto falls back to the reference.
+    # Target points, below which both methods compute the same invariants, optionally
+    # with a lower maximum degree.
+    expected = sorted(compute_gv(*args, target_points=[4], method="reference"))
+    assert expected == sorted(compute_gv(*args, max_deg=4, method="reference"))
+    assert sorted(compute_gv(*args, target_points=[4], method="modular")) == expected
+    assert sorted(compute_gv(*args, target_points=[4], max_deg=3)) == expected[:3]
+
+    # The modular method does not support min_points, and auto falls back to the reference.
     expected = sorted(compute_gv(*args, min_points=3, method="reference"))
     assert expected
     assert sorted(compute_gv(*args, min_points=3, method="auto")) == expected
@@ -282,6 +288,23 @@ def test_cone_data() -> None:
         cones=face_cones,
     )
     assert sorted(res) == [(c, gv) for (c, gv) in expected if c[1] == 0]
+
+    # Below the targets (2, 2) and (4, 0), i.e. the classes (x, y) with x, y <= 2, or
+    # with x <= 4 and y = 0.
+    res = compute_gv(
+        None,
+        grading_vector,
+        q,
+        intnums,
+        target_points=[[2, 2], [4, 0]],
+        mori_hyperplanes=hyperplanes,
+        cones=cones,
+    )
+    assert sorted(res) == [
+        (c, gv)
+        for (c, gv) in expected
+        if (c[0] <= 2 and c[1] <= 2) or c in ((3, 0), (4, 0))
+    ]
 
     # Both parts are needed, the generators are needed by the reference method, and the
     # cone data is checked.

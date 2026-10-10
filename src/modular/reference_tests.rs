@@ -236,6 +236,7 @@ fn check_gv(case: &Case, options: &Options) {
         CandidateSource::Generators(&gens),
         &case.grading_vector,
         case.max_deg,
+        &[],
         &geometry,
         options,
     )
@@ -377,6 +378,7 @@ fn test_invalid_options() {
                 CandidateSource::Generators(&gens),
                 &[1, 1],
                 4,
+                &[],
                 &geometry,
                 &options
             ),
@@ -394,6 +396,7 @@ fn test_invalid_options() {
             CandidateSource::Generators(&gens),
             &[1, 1],
             4,
+            &[],
             &geometry,
             &options
         ),
@@ -523,6 +526,127 @@ fn test_cone_candidates() {
     let w = input.grading_vector.as_slice();
     let geometry = Geometry::from_toric(&input.q, &[], &input.intnums, input.cy_kind, w).unwrap();
     let gens: Vec<&[i32]> = input.generators.as_slice().chunks(w.len()).collect();
-    let cones = &input.cone_data.as_ref().unwrap().cones;
-    assert!(super::candidates::tests::check_cones(cones, &gens, w, 8, &geometry) > 0);
+    let cone_data = input.cone_data.as_ref().unwrap();
+    assert!(super::candidates::tests::check_cones(cone_data, &gens, w, 8, &geometry) > 0);
+}
+
+/// The invariants that [`compute_gvgw_strings`] gives with `method`, up to `case.max_deg` or
+/// below `targets`.
+fn strings(
+    case: &Case,
+    kind: InvariantKind,
+    max_deg: Option<u32>,
+    targets: Option<&DMatrix<i32>>,
+    method: Method,
+) -> HashMap<(Vec<i32>, usize), String> {
+    compute_gvgw_strings(
+        case.generators.clone(),
+        RowDVector::from_row_slice(&case.grading_vector),
+        case.q.clone(),
+        case.nefpart.clone(),
+        case.intnums.clone(),
+        Vec::new(),
+        None,
+        kind,
+        case.cy_kind,
+        max_deg,
+        None,
+        targets.cloned(),
+        None,
+        method,
+    )
+    .unwrap()
+    .into_iter()
+    .map(|((c, k), v)| ((c.as_slice().to_vec(), k), v))
+    .collect()
+}
+
+/// Checks that both methods give the same invariants below the targets that `pick` chooses
+/// among the curves with nonzero GV invariants up to `case.max_deg`, and that these are those
+/// of the full computation, on fewer curves.
+fn check_targets(case: &Case, pick: impl Fn(&[Vec<i32>]) -> Vec<Vec<i32>>) {
+    let degree = |c: &[i32]| -> i64 { super::dot(c, &case.grading_vector) };
+    // The generators of higher degree change nothing, but slow the reference's semigroup with
+    // target points down a lot.
+    let h11 = case.grading_vector.len();
+    let gens: Vec<i32> = case
+        .generators
+        .as_slice()
+        .chunks(h11)
+        .filter(|g| degree(g) <= case.max_deg as i64)
+        .flatten()
+        .copied()
+        .collect();
+    let case = &Case {
+        generators: DMatrix::from_column_slice(h11, gens.len() / h11, &gens),
+        grading_vector: case.grading_vector.clone(),
+        q: case.q.clone(),
+        nefpart: case.nefpart.clone(),
+        intnums: case.intnums.clone(),
+        ..*case
+    };
+    let full = strings(
+        case,
+        InvariantKind::GV,
+        Some(case.max_deg),
+        None,
+        Method::Modular,
+    );
+    let mut curves: Vec<Vec<i32>> = full.keys().map(|(c, _)| c.clone()).collect();
+    curves.sort_unstable_by_key(|c| (degree(c), c.clone()));
+    curves.dedup();
+    let targets = pick(&curves);
+    let targets = DMatrix::from_iterator(h11, targets.len(), targets.into_iter().flatten());
+    let top = targets
+        .column_iter()
+        .map(|p| degree(p.as_slice()))
+        .max()
+        .unwrap();
+
+    for kind in [InvariantKind::GV, InvariantKind::GW] {
+        let expected = strings(case, kind, None, Some(&targets), Method::Reference);
+        let got = strings(case, kind, None, Some(&targets), Method::Modular);
+        assert_eq!(got, expected, "{}: {kind:?}", case.name);
+        if kind == InvariantKind::GV {
+            assert!(got.len() < full.len(), "{}: nothing dropped", case.name);
+            for (c, v) in &got {
+                assert_eq!(full.get(c), Some(v), "{}: {c:?}", case.name);
+            }
+            for p in targets.column_iter() {
+                assert!(got.keys().any(|(c, _)| c == p.as_slice()), "{}", case.name);
+            }
+        }
+        // A maximum degree truncates the lightcones further.
+        let lower = Some(top as u32 - 1);
+        let expected = strings(case, kind, lower, Some(&targets), Method::Reference);
+        let got = strings(case, kind, lower, Some(&targets), Method::Modular);
+        assert_eq!(got, expected, "{}: {kind:?}, lower", case.name);
+        assert!(got.keys().all(|(c, _)| degree(c) < top), "{}", case.name);
+    }
+}
+
+/// Target points, against the reference's semigroup with target points.
+#[test]
+fn test_target_points() {
+    check_targets(&quintic(12), |_| vec![vec![9]]);
+    // Two targets of different degrees, so that the union matters.
+    let pick_two = |curves: &[Vec<i32>]| {
+        let n = curves.len();
+        vec![curves[n - 1].clone(), curves[n * 3 / 4].clone()]
+    };
+    check_targets(&p11222(10), pick_two);
+}
+
+#[test]
+#[cfg(feature = "cli")]
+fn test_target_points_realistic() {
+    let pick_two = |curves: &[Vec<i32>]| {
+        let n = curves.len();
+        vec![curves[n - 1].clone(), curves[n / 2].clone()]
+    };
+    let yaml = include_str!("../../benches/data/h11_9.yaml");
+    check_targets(&load("h11_9", yaml, 6), pick_two);
+    // The complete intersection, an n-fold.
+    let yaml = include_str!("../../examples/fourfold.yaml");
+    check_targets(&load("fourfold", yaml, 8), pick_two);
 }

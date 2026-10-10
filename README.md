@@ -36,9 +36,11 @@ compute_gw(generators, grading_vector, q, intnums, max_deg=3)
 # [((0, 1), Fraction(4, 1)), ((1, 0), Fraction(640, 1)), ((0, 2), Fraction(1, 2)), ...]
 ```
 
-How many curve classes are computed is controlled by `max_deg`, `min_points`, or `target_points`,
-of which at most one may be given. When none of them is given, the generators are taken to be the
-complete list of curve classes to use. Complete intersections are specified by passing the nef
+How many curve classes are computed is controlled by `max_deg`, `min_points`, or `target_points`.
+`target_points` computes the backward lightcones of the given curve classes $P$, i.e. the curve
+classes $C$ with $P - C$ in the Mori cone, up to the largest degree of the $P$, or up to `max_deg`
+if it is given too. `min_points` cannot be combined with the other two. When none of them is
+given, the generators are taken to be the complete list of curve classes to use. Complete intersections are specified by passing the nef
 partition as `nefpart`. A vex phase of the ambient toric variety (MacFadden–Sheridan,
 arXiv:2512.14817), whose curves of negative anticanonical degree need the class of the stratum
 they force into the CY, is specified by passing those strata as `strata`, a list of
@@ -48,9 +50,9 @@ hypersurfaces. The computation is exact.
 
 Two implementations of the computation are available, selected with `method`. The `modular` one
 computes modulo word-sized primes and recovers the exact integers by the Chinese remainder theorem,
-which is much faster, but it only supports `max_deg`. The `reference` one is a faithful
-implementation of the HKTY procedure with exact rational arithmetic, and supports everything. The
-default, `auto`, uses the modular one whenever it can. `n_threads` sets the number of threads,
+which is much faster, but it does not support `min_points` or strata yet. The `reference` one is a
+faithful implementation of the HKTY procedure with exact rational arithmetic, and supports
+everything. The default, `auto`, uses the modular one whenever it can. `n_threads` sets the number of threads,
 which defaults to one per core (the modular implementation only uses one so far).
 
 The modular implementation is much faster again with *cone data*, which a program such as

@@ -15,7 +15,7 @@ pub enum IoError {
     MissingField(&'static str),
     /// A field that is not part of the input schema was found.
     UnknownField(String),
-    /// More than one of the fields that select the curve classes to compute was given.
+    /// `min_points` was given together with `max_deg` or `target_points`.
     ConflictingTruncations,
     /// A field has an invalid type, shape, or value.
     InvalidField {
@@ -50,8 +50,8 @@ impl fmt::Display for IoError {
             IoError::UnknownField(field) => write!(f, "unknown field \"{field}\""),
             IoError::ConflictingTruncations => write!(
                 f,
-                "at most one of the fields \"max_deg\", \"min_points\", and \
-                 \"target_points\" may be given"
+                "the field \"min_points\" cannot be given together with \"max_deg\" or \
+                 \"target_points\""
             ),
             IoError::InvalidField { field, reason } => {
                 write!(f, "invalid value for the field \"{field}\": {reason}")

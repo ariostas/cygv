@@ -22,12 +22,16 @@
 //!   - [1, 1, 1, 5]
 //! # Whether to compute GV or GW invariants. Defaults to gv.
 //! invariants: gv
-//! # How many curve classes to compute. At most one of max_deg, min_points, and
-//! # target_points may be given. When none of them is given, the generators are
-//! # taken to be the complete list of curve classes to use.
+//! # How many curve classes to compute: those up to a maximum degree (max_deg), at
+//! # least a number of them (min_points), or those below target points
+//! # (target_points), i.e. that leave a target in the Mori cone when subtracted.
+//! # max_deg may be given with target_points, and lowers the largest degree of the
+//! # targets. When none of them is given, the generators are taken to be the
+//! # complete list of curve classes to use.
 //! min_points: 100
 //! # Which pipeline to use: auto, modular or reference. Defaults to auto, which
-//! # uses the modular one, which is much faster, whenever max_deg is given.
+//! # uses the modular one, which is much faster, whenever max_deg or target_points
+//! # is given.
 //! method: auto
 //! ```
 //!
@@ -73,7 +77,9 @@
 pub mod error;
 
 use crate::cone::{check_cone_data, CandidateCone, ConeData};
-use crate::dispatch::{compute_gvgw_strings, modular_unsupported, ComputeError};
+use crate::dispatch::{
+    check_target_points, compute_gvgw_strings, modular_unsupported, ComputeError,
+};
 use crate::reference::misc::process_int_nums;
 use crate::{check_strata, CYKind, InvariantKind, Method, Stratum};
 use error::IoError;
@@ -269,16 +275,12 @@ impl Input {
                     .ok_or_else(|| IoError::invalid_field("is_threefold", "expected a boolean"))?,
             ),
         };
-        let n_truncations = [
-            max_deg.is_some(),
-            min_points.is_some(),
-            target_points.is_some(),
-        ]
-        .iter()
-        .filter(|c| **c)
-        .count();
-        if n_truncations > 1 {
+        if min_points.is_some() && (max_deg.is_some() || target_points.is_some()) {
             return Err(IoError::ConflictingTruncations);
+        }
+        if let Some(target_points) = &target_points {
+            check_target_points(target_points, &grading_vector)
+                .map_err(|reason| IoError::invalid_field("target_points", reason))?;
         }
         let unsupported = modular_unsupported(
             max_deg,
@@ -1032,7 +1034,7 @@ cones:
             load_one(&format!("{base}method: fast\n")),
             Err(IoError::InvalidField { field, .. }) if field == "method"
         ));
-        // The modular method only supports max_deg, which is checked eagerly.
+        // The modular method does not support min_points, which is checked eagerly.
         assert!(load_one(&format!("{THREEFOLD}method: auto\n")).is_ok());
         assert!(matches!(
             load_one(&format!("{THREEFOLD}method: modular\n")),
@@ -1069,14 +1071,32 @@ cones:
         let input = load_one(&format!("{base}target_points: [[1, 2], [3, 4]]\n")).unwrap();
         assert_eq!(input.target_points, Some(dmatrix![1, 3; 2, 4]));
 
+        // With a maximum degree, which the modular method supports too.
+        let input = load_one(&format!(
+            "{base}target_points: [1, 2]\nmax_deg: 3\nmethod: modular\n"
+        ))
+        .unwrap();
+        assert_eq!(input.max_deg, Some(3));
+
         assert_eq!(
             load_one(&format!("{THREEFOLD}target_points: [1, 2]\n")),
             Err(IoError::ConflictingTruncations)
         );
-        assert!(matches!(
-            load_one(&format!("{base}target_points: [[1, 2, 3]]\n")),
-            Err(IoError::InvalidField { field, .. }) if field == "target_points"
-        ));
+        assert_eq!(
+            load_one(&format!(
+                "{}target_points: [1, 2]\n",
+                THREEFOLD.replace("min_points: 20\n", "max_deg: 3\n")
+            ))
+            .unwrap()
+            .max_deg,
+            Some(3)
+        );
+        for bad in ["[[1, 2, 3]]", "[0, 0]", "[[1, 2], [-1, -1]]"] {
+            assert!(matches!(
+                load_one(&format!("{base}target_points: {bad}\n")),
+                Err(IoError::InvalidField { field, .. }) if field == "target_points"
+            ));
+        }
     }
 
     #[test]

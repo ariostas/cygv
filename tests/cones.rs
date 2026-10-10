@@ -118,6 +118,113 @@ fn test_facet() {
     );
 }
 
+/// The curve classes of `results` below one of the columns of `targets`, i.e. those that leave
+/// it in the cone of `cone_data` when subtracted from it.
+fn below(results: &Results, cone_data: &ConeData, targets: &DMatrix<i32>) -> Results {
+    let dot =
+        |h: &[i32], c: &[i32]| -> i64 { h.iter().zip(c).map(|(&x, &y)| x as i64 * y as i64).sum() };
+    let h11 = cone_data.hyperplanes.nrows();
+    let in_cone = |c: &[i32]| {
+        cone_data
+            .hyperplanes
+            .as_slice()
+            .chunks(h11)
+            .all(|h| dot(h, c) >= 0)
+            && cone_data
+                .equations
+                .as_slice()
+                .chunks(h11)
+                .all(|e| dot(e, c) == 0)
+    };
+    results
+        .iter()
+        .filter(|((c, _), _)| {
+            targets.column_iter().any(|p| {
+                let d: Vec<i32> = p.iter().zip(c).map(|(x, y)| x - y).collect();
+                in_cone(&d)
+            })
+        })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// The curves of the two highest degrees in `results`, the last of each.
+fn two_targets(input: &Input, results: &Results) -> DMatrix<i32> {
+    let degree =
+        |c: &[i32]| -> i32 { input.grading_vector.iter().zip(c).map(|(w, x)| w * x).sum() };
+    let mut curves: Vec<&Vec<i32>> = results.keys().map(|(c, _)| c).collect();
+    curves.sort_unstable_by_key(|c| (degree(c), c.to_vec()));
+    let top = degree(curves[curves.len() - 1]);
+    let lower = curves.iter().rev().find(|c| degree(c) < top).unwrap();
+    let h11 = input.grading_vector.len();
+    DMatrix::from_iterator(
+        h11,
+        2,
+        curves[curves.len() - 1].iter().chain(lower.iter()).copied(),
+    )
+}
+
+/// The invariants below the targets, with and without the generators, are those of the full
+/// computation there, the same as from the semigroup of the generators, which has every lattice
+/// point of the Mori cone in these degrees.
+#[test]
+fn test_target_points() {
+    let full = input(H11_9, true, 8, H11_9_CONES);
+    let expected_full = results(&full, Method::Modular).unwrap();
+    let cone_data = full.cone_data.clone().unwrap();
+    let targets = two_targets(&full, &expected_full);
+    let expected = below(&expected_full, &cone_data, &targets);
+    assert!(expected.len() < expected_full.len() / 2);
+    for generators in [true, false] {
+        let mut input = input(H11_9, generators, 8, H11_9_CONES);
+        input.max_deg = None;
+        input.target_points = Some(targets.clone());
+        assert_eq!(results(&input, Method::Auto).unwrap(), expected);
+        assert_eq!(results(&input, Method::Modular).unwrap(), expected);
+        if generators {
+            assert_eq!(
+                results(&without_cones(&input), Method::Modular).unwrap(),
+                expected
+            );
+        }
+        // With a maximum degree below that of the first target.
+        input.max_deg = Some(7);
+        let lower: Results = expected
+            .iter()
+            .filter(|((c, _), _)| {
+                c.iter()
+                    .zip(full.grading_vector.iter())
+                    .map(|(x, w)| x * w)
+                    .sum::<i32>()
+                    <= 7
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        assert!(lower.len() < expected.len());
+        assert_eq!(results(&input, Method::Modular).unwrap(), lower);
+    }
+}
+
+/// Targets on a facet, with its cone data, and off it, where nothing is below them.
+#[test]
+fn test_facet_target_points() {
+    let mut input = input(H11_9, false, 10, H11_9_FACET);
+    let expected_full = results(&input, Method::Modular).unwrap();
+    let cone_data = input.cone_data.clone().unwrap();
+    let targets = two_targets(&input, &expected_full);
+    let expected = below(&expected_full, &cone_data, &targets);
+    assert!(expected.len() < expected_full.len() / 2);
+    input.max_deg = None;
+    input.target_points = Some(targets);
+    assert_eq!(results(&input, Method::Modular).unwrap(), expected);
+    assert_eq!(results(&input, Method::Reference).unwrap(), expected);
+    // (0, 1, 0, ..., 0) has degree 1 and is off the facet's span.
+    let mut off = DMatrix::zeros(9, 1);
+    off[(1, 0)] = 1;
+    input.target_points = Some(off);
+    assert_eq!(results(&input, Method::Modular).unwrap(), Results::new());
+}
+
 /// The cone data of P(1,1,2,2,2)[8], with the Mori cone spanned by (1, 0) and (0, 1).
 fn p11222_cone_data() -> ConeData {
     let mut cones = Vec::new();

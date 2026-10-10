@@ -24,6 +24,7 @@ pub mod extraction;
 pub mod field;
 pub mod instanton;
 pub mod key;
+pub mod lightcone;
 pub mod multicover;
 pub mod period;
 pub mod table;
@@ -37,6 +38,7 @@ use core::fmt;
 use crt::Residues;
 use field::{LaneField, Lanes};
 use key::{KeyError, KeyLayout, PackedLayout};
+use lightcone::Lightcone;
 use nalgebra::{DMatrix, DVector};
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -348,27 +350,105 @@ pub struct CurveInvariants<T = BigInt> {
 /// Computes the GV invariants of the curve classes of degree at most `max_deg` that the
 /// candidates of `source` give, in increasing order of degree and then key, leaving out those
 /// where all of them vanish.
+///
+/// With `targets`, only the curve classes in their backward lightcones are computed, i.e.
+/// those that some target minus the class leaves in the Mori cone (see [`lightcone`]), and
+/// `max_deg` is lowered to the largest degree of the targets.
 pub fn compute_gv(
     source: CandidateSource<'_>,
     grading_vector: &[i32],
     max_deg: u32,
+    targets: &[&[i32]],
     geometry: &Geometry,
     options: &Options,
 ) -> Result<Vec<CurveInvariants>, Error> {
+    run(
+        source,
+        grading_vector,
+        max_deg,
+        targets,
+        geometry,
+        options,
+        |gv, _, _| gv,
+    )
+}
+
+/// Computes the GW invariants of the curve classes of degree at most `max_deg` that the
+/// candidates of `source` give, in increasing order of degree and then curve class, leaving
+/// out those where all of them vanish, and restricted to the backward lightcones of `targets`
+/// as in [`compute_gv`]. They come from the GV invariants of [`compute_gv`], by
+/// [`multicover::gw_from_gv`].
+pub fn compute_gw(
+    source: CandidateSource<'_>,
+    grading_vector: &[i32],
+    max_deg: u32,
+    targets: &[&[i32]],
+    geometry: &Geometry,
+    options: &Options,
+) -> Result<Vec<CurveInvariants<BigRational>>, Error> {
+    run(
+        source,
+        grading_vector,
+        max_deg,
+        targets,
+        geometry,
+        options,
+        |gv, max_deg, in_lightcone| {
+            let mut gw = multicover::gw_from_gv(geometry.kind(), &gv, max_deg);
+            // Every divisor of a curve in the lightcones is in them, so the GW invariants are
+            // right there, but not at the multiples outside them.
+            gw.retain(|inv| in_lightcone(&inv.curve));
+            gw
+        },
+    )
+}
+
+/// Computes the GV invariants as [`compute_gv`] describes, and hands them to `finish` with the
+/// maximum degree, lowered to the largest degree of the targets if there are any, and a test
+/// of whether a curve class of at most that degree is in their backward lightcones.
+fn run<T>(
+    source: CandidateSource<'_>,
+    grading_vector: &[i32],
+    max_deg: u32,
+    targets: &[&[i32]],
+    geometry: &Geometry,
+    options: &Options,
+    finish: impl FnOnce(Vec<CurveInvariants>, u32, &dyn Fn(&[i32]) -> bool) -> T,
+) -> Result<T, Error> {
     if options.check_primes == 0 || !(1..=4).contains(&options.lanes) {
         return Err(Error::InvalidOptions);
     }
-    let bounds = source.coordinate_bounds(grading_vector, max_deg)?;
+    let max_deg = if targets.is_empty() {
+        max_deg
+    } else {
+        max_deg.min(lightcone::max_degree(targets, grading_vector)?)
+    };
+    let bounds = source.coordinate_bounds(grading_vector, max_deg, targets)?;
     let layout = PackedLayout::new(&bounds)?;
-    let cands = source.candidates(&layout, grading_vector, max_deg, geometry)?;
+    let candidates::Candidates {
+        points: cands,
+        lightcone,
+    } = source.candidates(&layout, grading_vector, max_deg, targets, geometry)?;
+    let in_lightcone = |c: &[i32]| layout.fits(c) && lightcone.contains(layout.pack(c), c);
+    // Without zero, which is the only class of degree zero, nothing is below the targets.
+    if cands.first().is_none_or(|&(_, deg)| deg != 0) {
+        return Ok(finish(Vec::new(), max_deg, &in_lightcone));
+    }
+    let run = Run {
+        layout: &layout,
+        geometry,
+        cands: &cands,
+        max_deg,
+        lightcone: &lightcone,
+    };
     let residues = match options.lanes {
-        1 => passes::<1, _>(&layout, geometry, &cands, max_deg, options),
-        2 => passes::<2, _>(&layout, geometry, &cands, max_deg, options),
-        3 => passes::<3, _>(&layout, geometry, &cands, max_deg, options),
-        _ => passes::<4, _>(&layout, geometry, &cands, max_deg, options),
+        1 => passes::<1, _>(&run, options),
+        2 => passes::<2, _>(&run, options),
+        3 => passes::<3, _>(&run, options),
+        _ => passes::<4, _>(&run, options),
     }?;
     let mut curve = vec![0; layout.dim()];
-    Ok(residues
+    let gv = residues
         .lift()
         .into_iter()
         .map(|(key, degree, values)| {
@@ -379,38 +459,30 @@ pub fn compute_gv(
                 values,
             }
         })
-        .collect())
+        .collect();
+    Ok(finish(gv, max_deg, &in_lightcone))
 }
 
-/// Computes the GW invariants of the curve classes of degree at most `max_deg` that the
-/// candidates of `source` give, in increasing order of degree and then curve class, leaving
-/// out those where all of them vanish. They come from the GV invariants of [`compute_gv`], by
-/// [`multicover::gw_from_gv`].
-pub fn compute_gw(
-    source: CandidateSource<'_>,
-    grading_vector: &[i32],
+/// What the passes of one run share.
+struct Run<'a, L: KeyLayout> {
+    layout: &'a L,
+    geometry: &'a Geometry,
+    cands: &'a [(L::Key, u32)],
     max_deg: u32,
-    geometry: &Geometry,
-    options: &Options,
-) -> Result<Vec<CurveInvariants<BigRational>>, Error> {
-    let gv = compute_gv(source, grading_vector, max_deg, geometry, options)?;
-    Ok(multicover::gw_from_gv(geometry.kind(), &gv, max_deg))
+    lightcone: &'a Lightcone<L::Key>,
 }
 
 /// Runs passes over `NL` primes each, taken in order from [`field::primes`], until the lift
 /// is stable.
 fn passes<const NL: usize, L: KeyLayout>(
-    layout: &L,
-    geometry: &Geometry,
-    cands: &[(L::Key, u32)],
-    max_deg: u32,
+    run: &Run<'_, L>,
     options: &Options,
 ) -> Result<Residues<L::Key>, Error> {
-    let mut residues = Residues::new(geometry.n_forms());
+    let mut residues = Residues::new(run.geometry.n_forms());
     let mut primes = field::primes();
     for _ in 0..options.max_passes {
         let ring = LaneField::<NL>::new(core::array::from_fn(|_| primes.next().unwrap()));
-        residues.add_pass(&ring, &pass(&ring, layout, geometry, cands, max_deg)?);
+        residues.add_pass(&ring, &pass(&ring, run)?);
         if residues.primes().len() >= options.min_primes && residues.is_stable(options.check_primes)
         {
             return Ok(residues);
@@ -422,16 +494,38 @@ fn passes<const NL: usize, L: KeyLayout>(
 /// The GV invariants modulo the primes of `ring`.
 fn pass<const NL: usize, L: KeyLayout>(
     ring: &LaneField<NL>,
-    layout: &L,
-    geometry: &Geometry,
-    cands: &[(L::Key, u32)],
-    max_deg: u32,
+    run: &Run<'_, L>,
 ) -> Result<SparsePoly<L::Key, Lanes<NL>>, Error> {
+    let Run {
+        layout,
+        geometry,
+        cands,
+        max_deg,
+        lightcone,
+    } = *run;
     let pd = period::period(ring, layout, geometry, cands, max_deg)?;
     let inst = instanton::instanton(ring, geometry, &pd, max_deg)?;
     let inv = &pd.tables.inv;
-    let coeffs = extraction::extract(ring, layout, &inst.alpha, &inst.inst, inv, max_deg)?;
-    multicover::multicover(ring, layout, geometry.kind(), &coeffs, inv, max_deg)
+    let coeffs = extraction::extract(
+        ring,
+        layout,
+        &inst.alpha,
+        &inst.inst,
+        inv,
+        max_deg,
+        lightcone,
+    )?;
+    let mut gv = multicover::multicover(ring, layout, geometry.kind(), &coeffs, inv, max_deg)?;
+    // The products of curves in the lightcones reach curves outside them, where the values
+    // miss the curves that were dropped.
+    if !lightcone.is_all() {
+        let mut curve = vec![0; layout.dim()];
+        gv.retain(|key| {
+            layout.unpack(key, &mut curve);
+            lightcone.contains(key, &curve)
+        });
+    }
+    Ok(gv)
 }
 
 /// The intersection of a curve class with a divisor, computed in `i64`.

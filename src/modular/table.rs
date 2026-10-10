@@ -312,6 +312,24 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
         self.vals.extend_from_slice(values);
     }
 
+    /// Keeps only the terms whose key satisfies `keep`, in their order.
+    pub fn retain(&mut self, mut keep: impl FnMut(K) -> bool) {
+        let mut n = 0;
+        for i in 0..self.len() {
+            if !keep(self.keys[i]) {
+                continue;
+            }
+            self.keys[n] = self.keys[i];
+            self.degs[n] = self.degs[i];
+            self.vals
+                .copy_within(i * self.width..(i + 1) * self.width, n * self.width);
+            n += 1;
+        }
+        self.keys.truncate(n);
+        self.degs.truncate(n);
+        self.vals.truncate(n * self.width);
+    }
+
     /// The number of terms of degree at most `deg`, i.e. the end of their range.
     #[inline]
     pub fn len_upto(&self, deg: u32) -> usize {
@@ -598,6 +616,14 @@ mod tests {
             pushed.push(*k, *d, v);
         }
         assert_eq!(pushed, poly);
+        // Retaining keeps the order and the values of the kept terms.
+        let mut kept = SparsePoly::new(2);
+        for (d, k, v) in model.iter().filter(|e| e.1 .0 % 3 != 0) {
+            kept.push(*k, *d, v);
+        }
+        pushed.retain(|k| k.0 % 3 != 0);
+        assert_eq!(pushed, kept);
+        assert!(kept.len() < poly.len());
         // The map is usable again after taking.
         assert_eq!(map.insert(PackedKey(5), 0), (0, true));
         assert!(SparsePoly::<PackedKey, u64>::new(1).is_empty());

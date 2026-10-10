@@ -34,7 +34,8 @@ The optional fields are the following.
   invariants     Either gv or gw. It defaults to gv.
   max_deg        The maximum degree of the curve classes to compute.
   min_points     The minimum number of curve classes to compute.
-  target_points  The curve classes that must be included in the computation.
+  target_points  Curve classes P whose backward lightcones are computed: the
+                 classes C such that P - C is in the Mori cone.
   is_threefold   Whether the CY is a threefold. It is deduced from q and the nef
                  partition when it is not given.
   n_threads      The number of threads to use. It defaults to the number of
@@ -44,9 +45,9 @@ The optional fields are the following.
                  e.g. {divisors: [1, 2, 4], class: [1, \"-1/2\"]}. Only for
                  threefold hypersurfaces.
   method         Which pipeline to use: auto, modular or reference. It defaults
-                 to auto. The modular pipeline is much faster, but only supports
-                 max_deg; auto uses it when it can, and the reference pipeline
-                 otherwise.
+                 to auto. The modular pipeline is much faster, but does not
+                 support min_points or strata; auto uses it when it can, and the
+                 reference pipeline otherwise.
 
 The modular pipeline is much faster with cone data, which programs such as
 Normaliz compute (see examples/cones.yaml). With it the generators can be left
@@ -61,9 +62,11 @@ out, but then only the modular pipeline can run.
                     e.g. {divisors: [0, 5], hilbert_basis: [[1, 0], [0, 1]]}.
                     The elements above max_deg can be left out.
 
-At most one of max_deg, min_points, and target_points may be given. When none of
-them is given, the generators are taken to be the complete list of curve classes
-to use, which must then include the origin.";
+min_points cannot be combined with max_deg or target_points. max_deg can be
+combined with target_points, and then lowers their largest degree, which is the
+maximum degree otherwise. When none of them is given, the generators are taken
+to be the complete list of curve classes to use, which must then include the
+origin.";
 
 /// Compute GV and GW invariants of the CY manifolds specified in the input.
 #[derive(Parser, Debug)]

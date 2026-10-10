@@ -151,8 +151,13 @@ next primes until `crt::Residues` gives a stable lift (the lift from all but the
 `check_primes` primes must agree with those), with `Options` for the lane count and a minimum
 number of primes; big integers come from `num-bigint`, a provisional choice confined to `crt`.
 `compute_gw` derives the GW invariants from the lifted GV invariants
-(`multicover::gw_from_gv`, in `num-rational`), since they are not integers. It only supports
-truncation by `max_deg`, and everything is single-threaded so far. `Geometry` in `src/modular.rs` holds the integer data
+(`multicover::gw_from_gv`, in `num-rational`), since they are not integers. Both truncate by
+`max_deg` and optionally by target points: `lightcone` holds the union of their backward
+lightcones (the $C$ with $P - C$ in the Mori cone), tested by the Mori cone's hyperplanes with
+cone data and by membership in the generated semigroup otherwise (which is then enumerated up
+to the targets' degree, matching the reference), and applied at the C's three points: the
+candidates, the curves the extraction subtracts, and each pass's output (GW too, since the
+multiples of a curve leave the lightcones). Everything is single-threaded so far. `Geometry` in `src/modular.rs` holds the integer data
 the stages read: the CY kind, the charges, one anticanonical row per part of the nef
 partition, and $M$ bilinear forms, one for a threefold ($\sum_t w_t \kappa_{tab}$) and one per
 reference surface for an n-fold, which give $I$ $M$ components. `src/modular/reference_tests.rs`
@@ -196,12 +201,14 @@ indices differently (the first index is a reference surface in the n-fold case).
   `compute_gvgw_strings` in the same file, which is the runtime dispatch used by both
   `src/python.rs` and the CLI — goes through the private `dispatch::compute`, which picks the
   pipeline from the `Method`: `Auto` (the default) runs `modular` when the request has
-  `max_deg` and no `min_points`, `target_points` or `strata` (see `modular_unsupported`), and falls back
+  `max_deg` or `target_points`, and no `min_points` or `strata` (see `modular_unsupported`), and falls back
   to `reference` otherwise or when the curve classes do not fit `modular`'s keys; `Modular`
   makes an unsupported request a `ComputeError::Unsupported`; `Reference` always runs
   `run_hkty`. The entry points return `Result<_, ComputeError>`, but only `modular`'s errors
-  and invalid strata and cone data (checked up front by `check_strata` and `check_cone_data`)
-  get there: `run_hkty` still panics on invalid input. Both give only the nonzero invariants.
+  and invalid strata, cone data and target points (checked up front by `check_strata`,
+  `check_cone_data` and `check_target_points`) get there: `run_hkty` still panics on invalid
+  input. `max_deg` may come with `target_points` (the reference then truncates its results by
+  degree, since its semigroup only takes the targets). Both give only the nonzero invariants.
   `modular` takes its candidates from the cone data when there is any (the reference ignores
   it), and with cone data the generators may have no columns, in which case a request that
   needs the reference is a `ComputeError::MissingGenerators`.
@@ -248,7 +255,8 @@ stdout, flushing after each one. `--threads` and `--method` override the `n_thre
 `src/io.rs`, whose `Input` struct mirrors the arguments of `run_hkty` and whose field conventions
 match the Python API (each inner list is a *column*). `Input::from_yaml` rejects unknown fields and
 validates shapes eagerly — including a `process_int_nums` dry run, `method: modular` without
-`max_deg`, the cone data, and leaving out `generators` for a request that needs them — because
+`max_deg` or `target_points`, the cone data, the target points, and leaving out `generators` for a
+request that needs them — because
 `run_hkty` itself still unwraps its errors. `Input::compute` sorts the results by degree and then lexicographically by
 curve class, since the order in which curve classes of equal degree come out of `run_hkty` is not
 deterministic. Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.

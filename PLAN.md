@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b and 6 done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6 and 6b done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -366,8 +366,8 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     the CLI and Python. `auto` falls back to `reference` for requests `modular` does not
     support; an explicit `modular` returns an error for them. `Method` is in `src/lib.rs`;
     every entry point takes it last and returns `Result<_, ComputeError>` (only `modular`'s
-    errors get there; `run_hkty` still panics). Unsupported: `min_points`, `target_points`,
-    and no truncation at all; `auto` also falls back when the curve classes do not fit the
+    errors get there; `run_hkty` still panics). Unsupported: `min_points`, `target_points`
+    (until 6b), and no truncation at all; `auto` also falls back when the curve classes do not fit the
     keys (`KeyError::TooWide` / `BoundTooLarge`). `method` in the YAML (checked eagerly for
     `modular`), `--method` / `-m` in the CLI, `method=` in Python (`None` means the Rust
     default). Python exceptions from the subprocess now keep their type (`ValueError`).
@@ -473,11 +473,39 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     0.19 / 0.97 s; `h11_11` deg 10 / 12: 0.05 / 0.11 s against 0.66 / 3.62 s. The C with cone
     data took 0.15 s for `h11_9` at 14 on 8 threads (section 2). Normaliz itself took 2.5–7 s
     per geometry for all the cones.
-- [ ] **6b. Target points for `modular`** (6.3).
-  - [ ] The facet test at the three filter points (listing candidates, choosing the curves to
-    apply in the extraction, the output).
-  - [ ] Optional `max_deg`, defaulting to the largest degree of the targets.
-  - [ ] Differential tests against the full computation and the C's lightcone mode.
+- [x] **6b. Target points for `modular`** (6.3).
+  - [x] The facet test at the three filter points (listing candidates, choosing the curves to
+    apply in the extraction, the output). `modular::lightcone::Lightcone`, built by
+    `CandidateSource::candidates` and applied in `candidates`, `extraction::extract` and after
+    the multicover of each pass (so the CRT never sees the garbage values outside). Two tests:
+    with cone data, $h \cdot C \le h \cdot P$ over the Mori cone's hyperplanes (targets off the
+    span of a face have nothing below them); without, membership of $C$ and $P - C$ in the
+    generated semigroup, which is then enumerated up to the targets' degree, i.e. exactly the
+    reference's `with_target_points` set, so it needs no facets and no phase 7a.
+    `CandidateSource::Cones` now holds the whole `ConeData` for the hyperplanes. GW is filtered
+    too: `gw_from_gv` also writes the multiples of a curve, which leave the lightcones with
+    incomplete sums. Without zero among the candidates (every target off the cone) the result
+    is empty instead of failing to invert $c_0$.
+  - [x] Optional `max_deg`, defaulting to the largest degree of the targets. `max_deg` and
+    `target_points` may now be combined everywhere (YAML, CLI, Python), the degree lowering the
+    targets' largest; only `min_points` still excludes the others. `compute_gv`/`compute_gw`
+    take `targets` after `max_deg` and lower it themselves; the dispatch passes no degree as
+    `u32::MAX`. The reference applies `max_deg` to its results, since its semigroup only takes
+    the targets. Targets are checked up front (`check_target_points`: dimensions, positive
+    degree, `ComputeError::InvalidTargetPoints`), since `run_hkty` panics on a nonpositive one.
+  - [x] Differential tests against the full computation and the C's lightcone mode. Unit tests
+    of both lightcone tests; `reference_tests::check_targets` (GV and GW, both methods through
+    `compute_gvgw_strings`, with and without a lower `max_deg`, against the full run restricted
+    to the lightcones) on the quintic, P11222, `h11_9` and the fourfold CICY; `tests/cones.rs`
+    on `h11_9` with cones, with and without generators, and on the facet with targets on and
+    off it; YAML and Python tests. The reference's `with_target_points` is slow on thousands of
+    generators (87 s in debug on `h11_9`, against 1.2 s with those of degree up to the
+    targets'), so the tests drop the generators above it. Against the C's lightcone mode
+    (scratch script, Normaliz cone data, one thread): identical on `h11_9` (degree 10, one to
+    three targets, and with `max_deg` 8), `h11_8` (16, three targets: 881 invariants, 0.52 s
+    against the C's 0.46 s; with `max_deg` 13) and `h11_11` (14 and 12). The toy threefold's
+    target-point smoke tests in Python now ask for the reference: `auto` routes them to
+    `modular`, where that inconsistent geometry has no integer invariants.
 - [ ] **6c. Vex phases in `modular`** (6.3).
   - [ ] The $m < 0$ period branch.
   - [ ] The extra $K_T$ per stratum.
