@@ -3,7 +3,7 @@
 use crate::polynomial::coefficient::PolynomialCoeff;
 use crate::semigroup::Semigroup;
 use nalgebra::DVectorView;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 /// A structure containing properties of a polynomial.
 ///
@@ -27,7 +27,7 @@ impl<'a, T: PolynomialCoeff<T>> PolynomialProperties<'a, T> {
         zero.assign(0i32);
         let mut poly_props = Self {
             semigroup,
-            monomial_map: HashMap::new(),
+            monomial_map: HashMap::default(),
             zero_cutoff: zero_cutoff.clone(),
             zero,
         };
