@@ -1,10 +1,16 @@
-//! Stage-level comparisons with the reference pipeline.
+//! Comparisons with the reference pipeline.
 //!
-//! The candidates, period and instanton stages are run on the same inputs as the reference's
-//! `Semigroup::with_max_degree`, `compute_omega` and `compute_instanton_data`, and $c_0$,
-//! $c_{1,a}$, $S_2^{(k)}$ and $I^{(k)}$ are compared at every curve class, with the reference's
-//! rationals reduced modulo each prime. A mismatch is thereby pinned to a stage. These
-//! comparisons hold for any input, consistent geometry or not.
+//! Stage by stage: the candidates, period and instanton stages are run on the same inputs as
+//! the reference's `Semigroup::with_max_degree`, `compute_omega` and
+//! `compute_instanton_data`, and $c_0$, $c_{1,a}$, $S_2^{(k)}$ and $I^{(k)}$ are compared at
+//! every curve class, with the reference's rationals reduced modulo each prime. A mismatch is
+//! thereby pinned to a stage. These comparisons hold for any input, consistent geometry or
+//! not.
+//!
+//! End to end: [`compute_gv`] and `run_hkty` must give the same GV invariants. This only
+//! holds for consistent geometries: on others the reference reads each invariant off the
+//! first nonzero coordinate of the curve, and the modular pipeline off the grading-weighted
+//! sum, which disagree.
 
 use super::candidates::candidates_by_enumeration;
 use super::field::{primes, LaneField, Lanes};
@@ -12,13 +18,14 @@ use super::instanton::instanton;
 use super::key::{coordinate_bounds, KeyLayout, PackedKey, PackedLayout};
 use super::period::period;
 use super::table::SparsePoly;
-use super::Geometry;
+use super::{compute_gv, Geometry, Options};
 use crate::reference::fundamental_period::compute_omega;
 use crate::reference::instanton::compute_instanton_data;
 use crate::reference::misc::process_int_nums;
 use crate::reference::polynomial::properties::PolynomialProperties;
+use crate::reference::run_hkty;
 use crate::reference::semigroup::Semigroup;
-use crate::CYKind;
+use crate::{CYKind, InvariantKind};
 use nalgebra::{DMatrix, DVector, RowDVector};
 use rug::{Integer, Rational};
 use std::collections::HashMap;
@@ -184,9 +191,58 @@ fn check(case: &Case) {
     });
 }
 
-#[test]
-fn test_quintic() {
-    check(&Case {
+/// Checks that the modular pipeline gives the GV invariants of the reference pipeline.
+fn check_gv(case: &Case, options: &Options) {
+    let reference = run_hkty::<Rational>(
+        case.generators.clone(),
+        RowDVector::from_row_slice(&case.grading_vector),
+        InvariantKind::GV,
+        case.cy_kind,
+        Some(case.max_deg),
+        None,
+        None,
+        case.q.clone(),
+        case.nefpart.clone(),
+        case.intnums.clone(),
+        None,
+    );
+    let expected: HashMap<(Vec<i32>, usize), String> = reference
+        .into_iter()
+        .map(|((c, k), gv)| ((c.as_slice().to_vec(), k), gv.to_string()))
+        .collect();
+
+    let geometry = Geometry::from_toric(
+        &case.q,
+        &case.nefpart,
+        &case.intnums,
+        case.cy_kind,
+        &case.grading_vector,
+    )
+    .unwrap();
+    let h11 = case.grading_vector.len();
+    let gens: Vec<&[i32]> = case.generators.as_slice().chunks(h11).collect();
+    let result = compute_gv(
+        &gens,
+        &case.grading_vector,
+        case.max_deg,
+        &geometry,
+        options,
+    )
+    .unwrap();
+    let mut got = HashMap::new();
+    for inv in result {
+        for (k, v) in inv.values.iter().enumerate() {
+            if *v != 0.into() {
+                got.insert((inv.curve.clone(), k), v.to_string());
+            }
+        }
+    }
+    assert!(!expected.is_empty(), "{}: no invariants", case.name);
+    assert_eq!(got, expected, "{}", case.name);
+}
+
+fn quintic(max_deg: u32) -> Case {
+    Case {
         name: "quintic",
         generators: DMatrix::from_column_slice(1, 1, &[1]),
         grading_vector: vec![1],
@@ -194,15 +250,14 @@ fn test_quintic() {
         nefpart: vec![],
         intnums: HashMap::from([((0, 0, 0), 5)]),
         cy_kind: CYKind::Threefold,
-        max_deg: 10,
-    });
+        max_deg,
+    }
 }
 
 /// $\mathbb{P}(1,1,2,2,2)[8]$, whose second generator meets the exceptional divisor
 /// negatively.
-#[test]
-fn test_p11222() {
-    check(&Case {
+fn p11222(max_deg: u32) -> Case {
+    Case {
         name: "P11222",
         generators: DMatrix::from_column_slice(2, 2, &[1, 0, 0, 1]),
         grading_vector: vec![1, 1],
@@ -210,8 +265,83 @@ fn test_p11222() {
         nefpart: vec![],
         intnums: HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]),
         cy_kind: CYKind::Threefold,
-        max_deg: 10,
-    });
+        max_deg,
+    }
+}
+
+#[test]
+fn test_quintic() {
+    check(&quintic(10));
+}
+
+/// The GV invariants of degree 7 and up no longer fit one prime, so the default options take
+/// a second pass.
+#[test]
+fn test_quintic_gv() {
+    check_gv(&quintic(12), &Options::default());
+}
+
+/// One prime per pass and at least five primes, so that the lift merges five passes and
+/// goes through big integers.
+#[test]
+fn test_several_passes() {
+    let options = Options {
+        lanes: 1,
+        min_primes: 5,
+        ..Options::default()
+    };
+    check_gv(&quintic(12), &options);
+    check_gv(&p11222(8), &options);
+    // Two check primes, with three lanes.
+    let options = Options {
+        lanes: 3,
+        check_primes: 2,
+        ..Options::default()
+    };
+    check_gv(&quintic(12), &options);
+}
+
+#[test]
+fn test_p11222_gv() {
+    check_gv(&p11222(12), &Options::default());
+}
+
+#[test]
+fn test_invalid_options() {
+    let case = p11222(4);
+    let geometry =
+        Geometry::from_toric(&case.q, &[], &case.intnums, case.cy_kind, &[1, 1]).unwrap();
+    let gens: Vec<&[i32]> = case.generators.as_slice().chunks(2).collect();
+    for options in [
+        Options {
+            check_primes: 0,
+            ..Options::default()
+        },
+        Options {
+            lanes: 5,
+            ..Options::default()
+        },
+    ] {
+        assert_eq!(
+            compute_gv(&gens, &[1, 1], 4, &geometry, &options),
+            Err(super::Error::InvalidOptions)
+        );
+    }
+    // Never stable with a single pass of one prime.
+    let options = Options {
+        lanes: 1,
+        max_passes: 1,
+        ..Options::default()
+    };
+    assert_eq!(
+        compute_gv(&gens, &[1, 1], 4, &geometry, &options),
+        Err(super::Error::NotStable)
+    );
+}
+
+#[test]
+fn test_p11222() {
+    check(&p11222(10));
 }
 
 /// The toy threefold of `examples/threefold.yaml`, which is not a consistent geometry but
@@ -276,4 +406,41 @@ fn test_fourfold() {
         DVector::from_column_slice(&[4, 5, 6, 7, 8, 9, 10, 11]),
     ];
     check(&case);
+}
+
+/// The realistic threefolds of the benchmarks, against the reference end to end, one test
+/// each so that they run in parallel.
+#[cfg(feature = "cli")]
+macro_rules! bench_gv_tests {
+    ($($test:ident: $name:literal, $max_deg:literal;)*) => {$(
+        #[test]
+        fn $test() {
+            let yaml = include_str!(concat!("../../benches/data/", $name, ".yaml"));
+            check_gv(&load($name, yaml, $max_deg), &Options::default());
+        }
+    )*};
+}
+
+#[cfg(feature = "cli")]
+bench_gv_tests! {
+    test_h11_8_gv: "h11_8", 6;
+    test_h11_9_gv: "h11_9", 6;
+    test_h11_10_gv: "h11_10", 5;
+    test_h11_11_gv: "h11_11", 5;
+}
+
+/// The fourfold of the examples as the complete intersection of the `fourfold` bench model.
+/// Read as the hypersurface the file describes, the reference finds GV invariants that are
+/// not integers, so its intersection numbers are presumably those of the complete
+/// intersection.
+#[test]
+#[cfg(feature = "cli")]
+fn test_fourfold_gv() {
+    let mut case = load("fourfold", include_str!("../../examples/fourfold.yaml"), 10);
+    case.name = "fourfold CICY";
+    case.nefpart = vec![
+        DVector::from_column_slice(&[0, 1, 2, 3]),
+        DVector::from_column_slice(&[4, 5, 6, 7, 8, 9, 10, 11]),
+    ];
+    check_gv(&case, &Options::default());
 }

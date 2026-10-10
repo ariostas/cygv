@@ -136,6 +136,7 @@ mod tests {
     use super::*;
     use crate::modular::key::{coordinate_bounds, PackedKey, PackedLayout};
     use crate::reference::semigroup::Semigroup;
+    use crate::CYKind;
     use nalgebra::{DMatrix, RowDVector};
     use std::collections::HashSet;
 
@@ -266,6 +267,7 @@ mod tests {
         // With that divisor counted three times, (a, b) with 2b > a has three.
         let q = DMatrix::from_row_slice(8, 2, &[0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, -2, 1, -2, 1, -2]);
         let geometry = Geometry::new(
+            CYKind::Threefold,
             2,
             q.transpose().as_slice().to_vec(),
             vec![6, -4],

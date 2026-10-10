@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1 and 2 done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2 and 3 done, 3b mostly.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -312,25 +312,51 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     (one and two negatives), `h11_9` at degree 5, and the fourfold of `examples/` both as
     the hypersurface it describes and as the CICY of the bench model (14 forms, two
     anticanonical rows). Checked to fail when a sign or the 1/2 in $V$ is broken.
-- [ ] **3. Extraction, multicover, CRT**, single-threaded and simple (`apply_curve` only), for
+- [x] **3. Extraction, multicover, CRT**, single-threaded and simple (`apply_curve` only), for
   threefold hypersurfaces.
-  - [ ] Provisional choice of the pure-Rust big-number crate, confined to `crt` and
-    `multicover` (6.10, phase 5b).
-  - [ ] `extraction`.
-  - [ ] `multicover`.
-  - [ ] `crt`, with the test knob that forces several CRT passes (5.2).
-  - [ ] End-to-end differential tests against `run_hkty` on consistent geometries only (5.2):
-    P(1,1,2,2,2)[8] and `benches/data`, not the toy threefold of `examples/`.
+  - [x] Provisional choice of the pure-Rust big-number crate, confined to `crt` and
+    `multicover` (6.10, phase 5b): `num-bigint` (MIT/Apache, already in `Cargo.lock` through
+    `nalgebra`). Only `crt` needs it: the multicover runs on residues, and the stability check
+    works on Garner's mixed-radix digits in word-sized arithmetic, so big integers are only
+    built for the final values.
+  - [x] `extraction`: `extract` takes the layout, $\alpha$, $I$, the inverses and `max_deg`
+    and returns the coefficients $n_C$ (what is left of $I$ at each curve once the lower
+    curves are subtracted), with as many values per curve as $I$. Plain function for now;
+    the trait of 4.1.1 can come with the second implementation (phase 5). The division by
+    the degree belongs to `multicover`, so the extraction does not depend on the CY kind.
+  - [x] `multicover`, with the threefold rule (divide by the degree, exponent 3) and the
+    n-fold one (exponent 2), by gcd level, adding the multiples of curves with nonzero GV
+    that have no coefficient. `Geometry` now records the CY kind.
+  - [x] `crt` (`Residues`: per-prime columns, merging passes that find different curves) and
+    `compute_gv` in `modular.rs`, the pass loop, with `Options { check_primes, lanes,
+    min_primes, max_passes }`. The test knob is `lanes: 1` with `min_primes: 5`.
+  - [x] End-to-end differential tests against `run_hkty` (`modular/reference_tests.rs`):
+    the quintic at degree 12 (two passes with the default options), P(1,1,2,2,2)[8] at 12,
+    the four `benches/data` models at degree 5–6, several passes with one lane and with
+    three lanes and two check primes. Checked to fail when the exponent or the division by
+    the degree is broken in the multicover, or the degree weight in the Euler recurrence.
+    Also compared by hand with the C oracle (normaliz cone data, 8 threads): identical GVs
+    for `h11_9` at degree 18 (77458), `h11_8` at 16 (42300) and `h11_10` at 12 (15008).
+    Single-threaded release timings on `h11_9`: at degree 14, enumeration 1.7 s, then
+    period 0.10 s, instanton 0.04 s, extraction 0.15 s, multicover 3 ms; at degree 18,
+    enumeration 17 s, then 0.5 / 0.3 / 2.9 / 0.02 s.
 - [ ] **3b. Complete intersections and n-folds** (6.3). Done before tuning so that phase 5
   optimises the final data layout.
   - [x] Multi-row `q0`. Done in phase 2: `period` is the only stage that reads it.
-  - [ ] The $M$-component $I$. `instanton` produces it since phase 2 (tested against the
-    reference); the extraction still has to consume it.
-  - [ ] The exponent-2 multicover.
-  - [ ] Check which geometry `examples/fourfold.yaml` and the `fourfold` bench model each are
-    (5.2).
-  - [ ] Differential tests against the reference on the fourfold models. The stage-level
-    ones (period and instanton) exist since phase 2.
+  - [x] The $M$-component $I$, consumed by the extraction (phase 3).
+  - [x] The exponent-2 multicover (phase 3).
+  - [x] Check which geometry `examples/fourfold.yaml` and the `fourfold` bench model each
+    are (5.2). They are the same data (charges, intersection numbers, generators and grading)
+    except that the bench model has the nef partition `[0..3], [4..11]`. Read as the
+    hypersurface it says it is, the example gives the reference non-integer GV invariants
+    at degree 6, so its intersection numbers are presumably those of the complete
+    intersection, and the example should get the nef partition and a corrected comment (its
+    CLI test uses `min_points: 100`, where the reference happens to succeed).
+  - [x] Differential tests against the reference on the fourfold CICY, end to end at degree
+    10 (183 invariants, 30 of them on curves with gcd above one). The stage-level ones exist
+    since phase 2.
+  - [ ] Fix `examples/fourfold.yaml` as above, and its expected output in `tests/cli.rs` if
+    that changes.
 - [ ] **4. Front end.**
   - [ ] The `Method { Auto, Modular, Reference }` argument through `dispatch`, `io::Input`,
     the CLI and Python. `auto` falls back to `reference` for requests `modular` does not

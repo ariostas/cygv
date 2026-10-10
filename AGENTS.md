@@ -123,21 +123,30 @@ it; see `PLAN.md`). `src/dispatch.rs` holds the public entry points, and `src/io
 
 `src/modular.rs` and `src/modular/` hold that faster pipeline, under construction and not yet
 reachable from `dispatch`. It computes modulo word-sized primes and lifts the results with the
-CRT, and shares no code with `reference`. So far it has its primitives: `field` (Montgomery
-arithmetic, `Lanes<NL>` residues, and the `Ring` trait the stages are written against, which
-takes the primes as a context), `key` (curve classes packed into fixed-size keys that add like
-the classes, with a layout sized per run from coordinate bounds) and `table` (open-addressing
+CRT, and shares no code with `reference`. Its primitives are `field` (Montgomery arithmetic,
+`Lanes<NL>` residues, and the `Ring` trait the stages are written against, which takes the
+primes as a context), `key` (curve classes packed into fixed-size keys that add like the
+classes, with a layout sized per run from coordinate bounds) and `table` (open-addressing
 tables and sparse series over those keys, each entry holding a run-time number of values).
-Then come the first stages: `candidates` (for now the whole semigroup up to `max_deg`,
-enumerated in order of degree, filtered to the classes with at most two negative
-intersections), `period` (tables of factorials and harmonic numbers, then $c_0$, $c_1$ and
-the second derivatives already contracted with the bilinear forms, $S_2$) and `instanton`
-(sparse products and reciprocal, $\alpha$, and the instanton series $I$). `Geometry` in
-`src/modular.rs` holds the integer data they read: the charges, one anticanonical row per part
-of the nef partition, and $M$ bilinear forms, one for a threefold ($\sum_t w_t \kappa_{tab}$)
-and one per reference surface for an n-fold, which give $I$ $M$ components.
-`src/modular/reference_tests.rs` compares $c_0$, $c_1$, $S_2$ and $I$ with the reference stages
-modulo the primes, curve by curve; a mismatch there pins a bug to a stage.
+A *pass* runs the stages modulo `NL` primes: `candidates` (for now the whole semigroup up to
+`max_deg`, enumerated in order of degree, filtered to the classes with at most two negative
+intersections), `period` (tables of factorials and harmonic numbers, then $c_0$, $c_1$ and the
+second derivatives already contracted with the bilinear forms, $S_2$), `instanton` (sparse
+products and reciprocal, $\alpha$, and the instanton series $I$), `extraction` (the
+coefficients of $I$ in the basis $z^C \exp(C\cdot\alpha)$, curve by curve in order of degree,
+each exponential built by the Euler recurrence in per-degree tables) and `multicover` (the GV
+invariants from those, by gcd of the coordinates; exponent 3 and a division by the degree for
+threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats passes with the
+next primes until `crt::Residues` gives a stable lift (the lift from all but the last
+`check_primes` primes must agree with those), with `Options` for the lane count and a minimum
+number of primes; big integers come from `num-bigint`, a provisional choice confined to `crt`.
+Everything is single-threaded so far. `Geometry` in `src/modular.rs` holds the integer data
+the stages read: the CY kind, the charges, one anticanonical row per part of the nef
+partition, and $M$ bilinear forms, one for a threefold ($\sum_t w_t \kappa_{tab}$) and one per
+reference surface for an n-fold, which give $I$ $M$ components. `src/modular/reference_tests.rs`
+compares $c_0$, $c_1$, $S_2$ and $I$ with the reference stages modulo the primes, curve by curve
+(a mismatch there pins a bug to a stage), and the GV invariants of `compute_gv` with those of
+`run_hkty`, which only agree on consistent geometries (not the toy threefold of `examples/`).
 
 The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
 (`src/reference.rs`), whose stages are submodules of `reference`:

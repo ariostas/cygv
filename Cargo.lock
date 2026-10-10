@@ -317,6 +317,7 @@ dependencies = [
  "ctrlc",
  "gmp-mpfr-sys",
  "nalgebra",
+ "num-bigint",
  "pyo3",
  "rayon",
  "rug",

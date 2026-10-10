@@ -4,16 +4,24 @@
 //! remainder theorem, stores curve classes as packed integer keys, and never enumerates the
 //! whole semigroup. The design follows the C program in PR #94 and is described in `PLAN.md`.
 //!
-//! So far this module holds the primitives the stages are built from, the arithmetic
-//! ([`field`]), the curve-class keys ([`key`]) and the tables keyed by them ([`table`]), and
-//! the first three stages: the curve classes that carry period data ([`candidates`]), the
-//! fundamental period at each of them ([`period`]), and the series that the invariants are
-//! extracted from ([`instanton`]).
+//! The primitives the stages are built from are the arithmetic ([`field`]), the curve-class
+//! keys ([`key`]) and the tables keyed by them ([`table`]). A pass, i.e. the computation
+//! modulo a few primes, runs the stages in turn: the curve classes that carry period data
+//! ([`candidates`]), the fundamental period at each of them ([`period`]), the series that the
+//! invariants are extracted from ([`instanton`]), its coefficients in the basis of curves
+//! ([`extraction`]) and the invariants from those ([`multicover`]). [`compute_gv`] repeats
+//! passes with new primes until the lift of the residues ([`crt`]) is stable.
+//!
+//! Not reachable from the rest of the crate yet. Only the full enumeration of the semigroup
+//! is implemented for the candidates, and everything runs on one thread.
 
 pub mod candidates;
+pub mod crt;
+pub mod extraction;
 pub mod field;
 pub mod instanton;
 pub mod key;
+pub mod multicover;
 pub mod period;
 pub mod table;
 
@@ -22,9 +30,13 @@ mod reference_tests;
 
 use crate::CYKind;
 use core::fmt;
-use key::KeyError;
+use crt::Residues;
+use field::{LaneField, Lanes};
+use key::{coordinate_bounds, KeyError, KeyLayout, PackedLayout};
 use nalgebra::{DMatrix, DVector};
+use num_bigint::BigInt;
 use std::collections::{HashMap, HashSet};
+use table::SparsePoly;
 
 /// Errors of the modular pipeline.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +54,10 @@ pub enum Error {
     NegativeAnticanonicalDegree,
     /// A value that has to be inverted is not invertible modulo one of the primes.
     NotInvertible,
+    /// The options are out of range.
+    InvalidOptions,
+    /// The lift of the residues did not stabilize within the allowed number of passes.
+    NotStable,
 }
 
 impl fmt::Display for Error {
@@ -60,6 +76,12 @@ impl fmt::Display for Error {
                  intersections with the toric divisors"
             ),
             Self::NotInvertible => write!(f, "a value is not invertible modulo one of the primes"),
+            Self::InvalidOptions => write!(f, "the options are out of range"),
+            Self::NotStable => write!(
+                f,
+                "the lift of the residues did not stabilize, so the invariants are probably not \
+                 integers, which points to inconsistent input"
+            ),
         }
     }
 }
@@ -82,8 +104,12 @@ impl From<KeyError> for Error {
 ///   instanton series. A threefold has $M = 1$ with $K_{ab} = \sum_t w_t \kappa_{tab}$, $w$
 ///   the grading vector; an n-fold has one form $K^{(k)}_{ab} = \kappa_{kab}$ per reference
 ///   surface $k$.
+///
+/// The kind of the Calabi-Yau also decides how the invariants are read off the instanton
+/// series (see [`multicover`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Geometry {
+    kind: CYKind,
     h11: usize,
     q: Vec<i32>,
     q0: Vec<i32>,
@@ -92,8 +118,14 @@ pub struct Geometry {
 
 impl Geometry {
     /// Assembles the data from flat row-major arrays: `q` and `q0` with rows of `h11` charges,
-    /// and `forms` with `h11 * h11` entries per form.
-    pub fn new(h11: usize, q: Vec<i32>, q0: Vec<i32>, forms: Vec<i64>) -> Result<Self, Error> {
+    /// and `forms` with `h11 * h11` entries per form, of which a threefold has exactly one.
+    pub fn new(
+        kind: CYKind,
+        h11: usize,
+        q: Vec<i32>,
+        q0: Vec<i32>,
+        forms: Vec<i64>,
+    ) -> Result<Self, Error> {
         let n2 = h11 * h11;
         if h11 == 0
             || !q.len().is_multiple_of(h11)
@@ -101,6 +133,7 @@ impl Geometry {
             || !q0.len().is_multiple_of(h11)
             || forms.is_empty()
             || !forms.len().is_multiple_of(n2)
+            || (kind.is_threefold() && forms.len() != n2)
         {
             return Err(Error::DimensionMismatch);
         }
@@ -110,7 +143,13 @@ impl Geometry {
         if !symmetric {
             return Err(Error::InvalidIntersectionNumbers);
         }
-        Ok(Self { h11, q, q0, forms })
+        Ok(Self {
+            kind,
+            h11,
+            q,
+            q0,
+            forms,
+        })
     }
 
     /// Derives the data from the inputs of the reference pipeline: the charge matrix `q` with
@@ -206,7 +245,13 @@ impl Geometry {
                 forms
             }
         };
-        Self::new(h11, rows, q0, forms)
+        Self::new(cy_kind, h11, rows, q0, forms)
+    }
+
+    /// Whether the Calabi-Yau is a threefold or of higher dimension.
+    #[inline]
+    pub fn kind(&self) -> CYKind {
+        self.kind
     }
 
     /// The dimension of the space of curve classes.
@@ -258,6 +303,121 @@ impl Geometry {
             .filter(|&r| dot(c, self.q(r)) < 0)
             .count()
     }
+}
+
+/// The options of [`compute_gv`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Options {
+    /// The number of primes that only check the lift, at least one: the lift from the other
+    /// primes is accepted when it agrees with these at every curve.
+    pub check_primes: usize,
+    /// The number of primes per pass, from 1 to 4.
+    pub lanes: usize,
+    /// The minimum number of primes, even if fewer give a stable lift.
+    pub min_primes: usize,
+    /// The number of passes after which an unstable lift is an error.
+    pub max_passes: usize,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            check_primes: 1,
+            lanes: 2,
+            min_primes: 0,
+            max_passes: 8,
+        }
+    }
+}
+
+/// The invariants of one curve class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurveInvariants {
+    pub curve: Vec<i32>,
+    pub degree: u32,
+    /// One value per component of the instanton series: a single one for a threefold, and
+    /// one per reference surface for an n-fold.
+    pub values: Vec<BigInt>,
+}
+
+/// Computes the GV invariants of the curve classes of degree at most `max_deg` in the
+/// semigroup generated by `generators`, in increasing order of degree and then key, leaving
+/// out those where all of them vanish.
+pub fn compute_gv(
+    generators: &[&[i32]],
+    grading_vector: &[i32],
+    max_deg: u32,
+    geometry: &Geometry,
+    options: &Options,
+) -> Result<Vec<CurveInvariants>, Error> {
+    if options.check_primes == 0 || !(1..=4).contains(&options.lanes) {
+        return Err(Error::InvalidOptions);
+    }
+    let bounds = coordinate_bounds(generators.iter().copied(), grading_vector, max_deg)?;
+    let layout = PackedLayout::new(&bounds)?;
+    let cands = candidates::candidates_by_enumeration(
+        &layout,
+        generators.iter().copied(),
+        grading_vector,
+        max_deg,
+        geometry,
+    )?;
+    let residues = match options.lanes {
+        1 => passes::<1, _>(&layout, geometry, &cands, max_deg, options),
+        2 => passes::<2, _>(&layout, geometry, &cands, max_deg, options),
+        3 => passes::<3, _>(&layout, geometry, &cands, max_deg, options),
+        _ => passes::<4, _>(&layout, geometry, &cands, max_deg, options),
+    }?;
+    let mut curve = vec![0; layout.dim()];
+    Ok(residues
+        .lift()
+        .into_iter()
+        .map(|(key, degree, values)| {
+            layout.unpack(key, &mut curve);
+            CurveInvariants {
+                curve: curve.clone(),
+                degree,
+                values,
+            }
+        })
+        .collect())
+}
+
+/// Runs passes over `NL` primes each, taken in order from [`field::primes`], until the lift
+/// is stable.
+fn passes<const NL: usize, L: KeyLayout>(
+    layout: &L,
+    geometry: &Geometry,
+    cands: &[(L::Key, u32)],
+    max_deg: u32,
+    options: &Options,
+) -> Result<Residues<L::Key>, Error> {
+    let mut residues = Residues::new(geometry.n_forms());
+    let mut primes = field::primes();
+    for _ in 0..options.max_passes {
+        let ring = LaneField::<NL>::new(core::array::from_fn(|_| primes.next().unwrap()));
+        residues.add_pass(&ring, &pass(&ring, layout, geometry, cands, max_deg)?);
+        if residues.primes().len() >= options.min_primes && residues.is_stable(options.check_primes)
+        {
+            return Ok(residues);
+        }
+    }
+    Err(Error::NotStable)
+}
+
+/// The GV invariants modulo the primes of `ring`.
+fn pass<const NL: usize, L: KeyLayout>(
+    ring: &LaneField<NL>,
+    layout: &L,
+    geometry: &Geometry,
+    cands: &[(L::Key, u32)],
+    max_deg: u32,
+) -> Result<SparsePoly<L::Key, Lanes<NL>>, Error> {
+    let pd = period::period(ring, layout, geometry, cands, max_deg)?;
+    let inst = instanton::instanton(ring, geometry, &pd, max_deg)?;
+    let inv = &pd.tables.inv;
+    let coeffs = extraction::extract(ring, layout, &inst.alpha, &inst.inst, inv, max_deg)?;
+    multicover::multicover(ring, layout, geometry.kind(), &coeffs, inv, max_deg)
 }
 
 /// The intersection of a curve class with a divisor, computed in `i64`.
@@ -377,23 +537,23 @@ mod tests {
         .is_ok());
 
         assert_eq!(
-            Geometry::new(2, vec![1, 0], vec![1, 0], vec![0, 1, 2, 0]),
+            Geometry::new(CYKind::Nfold, 2, vec![1, 0], vec![1, 0], vec![0, 1, 2, 0]),
             Err(Error::InvalidIntersectionNumbers)
         );
         assert_eq!(
-            Geometry::new(2, vec![1, 0, 1], vec![1, 0], vec![0; 4]),
+            Geometry::new(CYKind::Nfold, 2, vec![1, 0, 1], vec![1, 0], vec![0; 4]),
             Err(Error::DimensionMismatch)
         );
         assert_eq!(
-            Geometry::new(2, vec![1, 0], vec![], vec![0; 4]),
+            Geometry::new(CYKind::Nfold, 2, vec![1, 0], vec![], vec![0; 4]),
             Err(Error::DimensionMismatch)
         );
         assert_eq!(
-            Geometry::new(2, vec![1, 0], vec![1, 0], vec![0; 3]),
+            Geometry::new(CYKind::Nfold, 2, vec![1, 0], vec![1, 0], vec![0; 3]),
             Err(Error::DimensionMismatch)
         );
         assert_eq!(
-            Geometry::new(0, vec![], vec![], vec![]),
+            Geometry::new(CYKind::Nfold, 0, vec![], vec![], vec![]),
             Err(Error::DimensionMismatch)
         );
     }

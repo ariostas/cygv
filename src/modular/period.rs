@@ -375,6 +375,7 @@ pub fn period<R: Ring, L: KeyLayout>(
 mod tests {
     use super::*;
     use crate::modular::field::{primes, LaneField};
+    use crate::CYKind;
     use rug::{Integer, Rational};
 
     /// The residue of a rational modulo `p`.
@@ -433,13 +434,13 @@ mod tests {
             (layout.pack(&[2]), 2),
         ];
         // C . Q0 = -1 with no negative intersection.
-        let g = Geometry::new(1, vec![1], vec![-1], vec![1]).unwrap();
+        let g = Geometry::new(CYKind::Threefold, 1, vec![1], vec![-1], vec![1]).unwrap();
         assert_eq!(
             period(&lf, &layout, &g, &cands, 2).unwrap_err(),
             Error::NegativeAnticanonicalDegree
         );
         // With two negative intersections the curve contributes nothing.
-        let g = Geometry::new(1, vec![-1, -1], vec![-2], vec![1]).unwrap();
+        let g = Geometry::new(CYKind::Threefold, 1, vec![-1, -1], vec![-2], vec![1]).unwrap();
         let pd = period(&lf, &layout, &g, &cands, 2).unwrap();
         assert_eq!(pd.c0.len(), 1);
         assert!(pd.c1.is_empty() && pd.s2.is_empty());
