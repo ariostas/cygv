@@ -73,8 +73,7 @@ mod tests {
         );
         let grading_vector = RowDVector::from_row_slice(&[1, 1]);
         let sg = Semigroup::from_data(elements, grading_vector).unwrap();
-        let tmp_rational = Rational::new();
-        let poly_props = PolynomialProperties::new(&sg, &tmp_rational);
+        let poly_props = PolynomialProperties::<Rational>::new(&sg);
         let zero = Rational::new();
 
         let index_of = |monomial: &[i32]| {

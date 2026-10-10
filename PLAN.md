@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0, 0b and 0d done.** Progress is
+Status: **investigation done, phase 0 (0–0d) done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -264,12 +264,17 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
   - The crate root still re-exports `Semigroup`, `Polynomial`, `PolynomialProperties`,
     `PolynomialCoeff`, `run_hkty` and everything in `dispatch`; whether it keeps doing so is the
     open question of 6.7.
-- [ ] **0c. Drop floating-point computation** (6.9), as its own commit.
-  - [ ] Check whether CYTools or other callers pass `prec` (before starting).
-  - [ ] Remove `prec` and the `Float` variants from the Rust code, `io::Input` and the CLI.
-  - [ ] Remove the `gv-float` / `gw-float` bench variants.
-  - [ ] Python: `prec` deprecated for one release (`DeprecationWarning`, exact values
-    returned), `mpmath` dropped.
+- [x] **0c. Drop floating-point computation** (6.9), as its own commit.
+  - [x] Check whether CYTools or other callers pass `prec` (before starting). CYTools
+    (`origin/main`, bf598ab) does not, and no public code on GitHub does.
+  - [x] Remove `prec` and the `Float` variants from the Rust code, `io::Input` and the CLI.
+    `zero_cutoff`, `RoundMut`, `AbsMut` and the float trait bounds went too; `IsInteger`
+    replaces the rounding check, and `PolynomialCoeff` now requires `Default` (zero).
+    Outputs checked identical to the previous commit on both examples, `h11_9` and `h11_11`.
+  - [x] Remove the `gv-float` / `gw-float` bench variants (the remaining ids keep their
+    `-rational` suffix so that saved baselines still match).
+  - [x] Python: `prec` removed outright (no deprecation release, since nobody passes it),
+    `mpmath` dropped.
 - [x] **0d. Sync the oracle** (6.6): `cgv/` is the #100 version, without the integration glue.
 - [ ] **1. Primitives.**
   - [ ] `field`, with unit tests of its operations against the big-number crate.
@@ -779,11 +784,9 @@ Layers, from cheapest to most independent:
    - Consequences to put in the release notes: results can change on incomplete generator
      lists (the default now saturates, 6.2), and the Rust module paths moved.
 
-   Still open: what `auto` does when `prec` is given. `modular` is exact, so either fall back
-   to `reference` (reproduces today's floating-point output exactly) or run `modular` and
-   format the exact result as a float (faster). Also whether the crate root keeps re-exporting
-   `Semigroup`, `Polynomial`, `PolynomialProperties` and `PolynomialCoeff`, or those are
-   reached through `cygv::reference`.
+   Still open: whether the crate root keeps re-exporting `Semigroup`, `Polynomial`,
+   `PolynomialProperties` and `PolynomialCoeff`, or those are reached through
+   `cygv::reference`. (The question of what `auto` does with `prec` went away with phase 0c.)
 8. **Features of the C that are not ported now (decided): future options, not ruled out.** The
    GPU extraction stage, the distributed mode (one run split by primes across machines), the
    low-memory switch and the C's tuning knobs are not part of this work, but the Rust code is
@@ -791,7 +794,7 @@ Layers, from cheapest to most independent:
    constraints are in section 4.1 and apply from phase 1. PR #95 (the GPU variant through
    `build.rs`, `device=` in Python) is the reference for the GPU interface when it comes.
 
-9. **Dropping floating-point computation (planned).** Remove `prec` and the `rug::Float`
+9. **Dropping floating-point computation (done, phase 0c).** Remove `prec` and the `rug::Float`
    variants everywhere, including the reference pipeline, so every result is an exact integer
    (GV) or rational (GW).
    - What it removes: half of the dispatch (the four `*_float_*` wrappers and the `Float` arm
@@ -806,9 +809,8 @@ Layers, from cheapest to most independent:
      rationals grow large. `modular` makes that unnecessary where it applies, but requests
      that stay on `reference` (`min_points`, `target_points`, anything `modular` rejects) have
      no float option any more.
-   - To check *before phase 0c starts*: whether CYTools or other callers pass `prec`. And a
-     deprecation path for Python: for one release `compute_gv` / `compute_gw` keep accepting
-     `prec`, emit a `DeprecationWarning` and return the exact values, then the keyword goes.
+   - Checked before phase 0c: neither CYTools nor any other public caller passes `prec`, so it
+     was removed outright instead of going through a deprecation release.
    - Done as its own commit right after phase 0b (phase 0c), before the `Method` argument is
      added, so the dispatch is rewritten once.
 

@@ -51,7 +51,7 @@ where
             p.add_assign(&tmp_poly, &poly_props.zero);
         }
     }
-    p.clean_up(poly_props);
+    p.clean_up();
     p
 }
 
@@ -74,7 +74,7 @@ where
         .into_par_iter()
         .map(|t| {
             let mut a = fp.c0_inv.mul(&fp.c1[t], poly_props);
-            a.clean_up(poly_props);
+            a.clean_up();
             a
         })
         .collect();
@@ -84,7 +84,7 @@ where
         .par_iter()
         .map(|&(t0, t1)| {
             let mut a = fp.c0_inv.mul(&fp.c2[&(t0, t1)], poly_props);
-            a.clean_up(poly_props);
+            a.clean_up();
             ((t0, t1), a)
         })
         .collect();
@@ -96,7 +96,7 @@ where
             let mut p = alpha[t0].mul(&alpha[t1], poly_props);
             p.sub_assign(&beta[&(t0, t1)], &poly_props.zero);
             p.mul_scalar_assign(-1);
-            p.clean_up(poly_props);
+            p.clean_up();
             ((t0, t1), p)
         })
         .collect();
@@ -113,8 +113,8 @@ where
         .into_par_iter()
         .map(|t| {
             let mut p = alpha[t].exp_pos_neg(poly_props)?;
-            p.0.clean_up(poly_props);
-            p.1.clean_up(poly_props);
+            p.0.clean_up();
+            p.1.clean_up();
             Ok(p)
         })
         .collect::<Result<_, PolynomialError>>()?;
@@ -135,8 +135,7 @@ mod tests {
         let generators = DMatrix::from_column_slice(2, 2, &[0, -1, 1, 2]);
         let grading_vector = RowDVector::from_row_slice(&[3, -1]);
         let sg = Semigroup::with_min_elements(generators, grading_vector, 15).unwrap();
-        let zero_rat = Rational::new();
-        let poly_props = PolynomialProperties::new(&sg, &zero_rat);
+        let poly_props = PolynomialProperties::<Rational>::new(&sg);
 
         let q = DMatrix::from_column_slice(6, 2, &[1, 1, 1, 0, 1, 2, 0, 0, -1, 1, 1, -1]);
         let nefpart = Vec::new();

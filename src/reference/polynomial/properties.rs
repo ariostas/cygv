@@ -13,23 +13,18 @@ use rustc_hash::FxHashMap as HashMap;
 pub struct PolynomialProperties<'a, T> {
     pub semigroup: &'a Semigroup,
     pub monomial_map: HashMap<DVectorView<'a, i32>, usize>,
-    pub zero_cutoff: T,
     /// A zero coefficient, kept around as the template new coefficients are
-    /// cloned from. For [`rug::Float`] coefficients it carries the precision
-    /// they all have to be created with.
+    /// cloned from.
     pub zero: T,
 }
 
 impl<'a, T: PolynomialCoeff<T>> PolynomialProperties<'a, T> {
     /// Create a new PolynomialProperties structure.
-    pub fn new(semigroup: &'a Semigroup, zero_cutoff: &T) -> Self {
-        let mut zero = zero_cutoff.clone();
-        zero.assign(0i32);
+    pub fn new(semigroup: &'a Semigroup) -> Self {
         let mut poly_props = Self {
             semigroup,
             monomial_map: HashMap::default(),
-            zero_cutoff: zero_cutoff.clone(),
-            zero,
+            zero: T::default(),
         };
 
         for (i, c) in poly_props.semigroup.elements.column_iter().enumerate() {

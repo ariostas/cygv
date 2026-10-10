@@ -56,7 +56,7 @@ use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
 /// The fields that are accepted in an input document.
-const INPUT_FIELDS: [&str; 13] = [
+const INPUT_FIELDS: [&str; 12] = [
     "name",
     "generators",
     "grading_vector",
@@ -68,7 +68,6 @@ const INPUT_FIELDS: [&str; 13] = [
     "min_points",
     "target_points",
     "is_threefold",
-    "prec",
     "n_threads",
 ];
 
@@ -100,9 +99,6 @@ pub struct Input {
     pub min_points: Option<u32>,
     /// The curve classes that must be included in the computation.
     pub target_points: Option<DMatrix<i32>>,
-    /// The precision, in bits, of the floating-point arithmetic. Exact rational
-    /// arithmetic is used when it is [`None`].
-    pub prec: Option<u32>,
     /// The number of threads to use. It is deduced from the machine when [`None`].
     pub n_threads: Option<u32>,
 }
@@ -186,15 +182,6 @@ impl Input {
         let target_points = get_field(hash, "target_points")
             .map(|y| as_target_points(y, h11))
             .transpose()?;
-        let prec = get_field(hash, "prec")
-            .map(|y| as_u32(y, "prec"))
-            .transpose()?;
-        if prec == Some(0) {
-            return Err(IoError::invalid_field(
-                "prec",
-                "expected a positive integer",
-            ));
-        }
         let n_threads = get_field(hash, "n_threads")
             .map(|y| as_u32(y, "n_threads"))
             .transpose()?;
@@ -254,7 +241,6 @@ impl Input {
             max_deg,
             min_points,
             target_points,
-            prec,
             n_threads,
         })
     }
@@ -300,7 +286,6 @@ impl Input {
             self.min_points,
             self.target_points.clone(),
             self.n_threads,
-            self.prec,
         )
     }
 
@@ -308,9 +293,8 @@ impl Input {
     ///
     /// The degree of each curve class under the grading vector is written along with
     /// it, since it is what the results are sorted by. GV invariants are written as
-    /// integers, while GW invariants are written as quoted strings, since they are
-    /// either fractions or floating-point numbers with a precision that YAML cannot
-    /// represent.
+    /// integers, while GW invariants are written as quoted strings, since YAML has no
+    /// way to represent fractions.
     pub fn write_results(
         &self,
         writer: &mut impl Write,
@@ -634,7 +618,6 @@ min_points: 20
         assert_eq!(input.min_points, Some(20));
         assert_eq!(input.max_deg, None);
         assert_eq!(input.target_points, None);
-        assert_eq!(input.prec, None);
     }
 
     #[test]
@@ -719,10 +702,6 @@ min_points: 20
             load_one(&format!("{THREEFOLD}bad_field: 1\n")),
             Err(IoError::UnknownField("bad_field".to_owned()))
         );
-        assert!(matches!(
-            load_one(&format!("{THREEFOLD}prec: -1\n")),
-            Err(IoError::InvalidField { field, .. }) if field == "prec"
-        ));
         assert!(matches!(
             load_one("generators: [[1, 2], [3]]"),
             Err(IoError::InvalidField { field, .. }) if field == "generators"

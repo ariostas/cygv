@@ -36,8 +36,6 @@ The optional fields are the following.
   target_points  The curve classes that must be included in the computation.
   is_threefold   Whether the CY is a threefold. It is deduced from q and the nef
                  partition when it is not given.
-  prec           The precision, in bits, of the floating-point arithmetic. Exact
-                 rational arithmetic is used when it is not given.
   n_threads      The number of threads to use. It defaults to the number of
                  threads that are available.
 

@@ -63,17 +63,13 @@ where
         self.nonzero.clear();
     }
 
-    /// Clean up the polynomial, removing monomials whose coefficient are
-    /// below a given cutoff.
-    pub fn clean_up(&mut self, poly_props: &PolynomialProperties<T>) {
+    /// Clean up the polynomial, removing monomials whose coefficient is zero.
+    pub fn clean_up(&mut self) {
         let mut new_nonzero = Vec::new();
         let mut to_delete = Vec::new();
-        let pos_cutoff = poly_props.zero_cutoff.clone();
-        let mut neg_cutoff = poly_props.zero_cutoff.clone();
-        neg_cutoff *= -1;
         for i in self.nonzero.drain(..) {
             let c = self.coeffs.get(&i).unwrap();
-            if *c <= pos_cutoff && *c >= neg_cutoff {
+            if *c == 0 {
                 to_delete.push(i);
             } else {
                 new_nonzero.push(i);
@@ -452,8 +448,6 @@ mod tests {
     #[test]
     fn test_cleanup() {
         let tmp_rational = Rational::new();
-        let semigroup = example_semigroup();
-        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
 
         let mut p = polynomial!(
             tmp_rational,
@@ -470,7 +464,7 @@ mod tests {
             (2, 1), // 1*y
             (4, 1)  // 1*x*y
         );
-        p.clean_up(&poly_props);
+        p.clean_up();
         assert_eq!(p, p_res);
     }
 
@@ -478,7 +472,7 @@ mod tests {
     fn test_min_degree() {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
-        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let poly_props = PolynomialProperties::<Rational>::new(&semigroup);
         let zero = Rational::new();
 
         let p0 = Polynomial::one(&zero);
@@ -505,7 +499,7 @@ mod tests {
     fn test_truncated() {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
-        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let poly_props = PolynomialProperties::<Rational>::new(&semigroup);
 
         let p = polynomial!(
             tmp_rational,
@@ -646,7 +640,7 @@ mod tests {
     fn test_mul() {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
-        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let poly_props = PolynomialProperties::<Rational>::new(&semigroup);
 
         let p1 = polynomial!(
             tmp_rational,
@@ -770,7 +764,7 @@ mod tests {
     fn test_recipr() {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
-        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let poly_props = PolynomialProperties::<Rational>::new(&semigroup);
 
         let p1 = polynomial!(
             tmp_rational,
@@ -782,7 +776,7 @@ mod tests {
             (5, 6)  // 6*y^2
         );
         let mut p = p1.recipr(&poly_props).unwrap();
-        p.clean_up(&poly_props);
+        p.clean_up();
         let p_res = polynomial!(
             tmp_rational,
             (0, 1),  // 1
@@ -798,7 +792,7 @@ mod tests {
     fn test_pow() {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
-        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let poly_props = PolynomialProperties::<Rational>::new(&semigroup);
         let zero = Rational::new();
 
         let p = polynomial!(
@@ -835,7 +829,7 @@ mod tests {
     fn test_pow_truncates_to_zero() {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
-        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let poly_props = PolynomialProperties::<Rational>::new(&semigroup);
 
         // The semigroup has maximum degree two, so any power beyond the second of a
         // polynomial with minimum degree one truncates to zero.
@@ -857,7 +851,7 @@ mod tests {
     fn test_exp_pos_neg() {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
-        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let poly_props = PolynomialProperties::<Rational>::new(&semigroup);
 
         let p = polynomial!(
             tmp_rational,
@@ -895,7 +889,7 @@ mod tests {
     fn test_li_2() {
         let tmp_rational = Rational::new();
         let semigroup = example_semigroup();
-        let poly_props = PolynomialProperties::new(&semigroup, &tmp_rational);
+        let poly_props = PolynomialProperties::<Rational>::new(&semigroup);
 
         let p = polynomial!(
             tmp_rational,

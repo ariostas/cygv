@@ -20,7 +20,6 @@ use std::thread;
 pub fn run_hkty<T>(
     generators: DMatrix<i32>,
     grading_vector: RowDVector<i32>,
-    zero_cutoff: T,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
     max_deg: Option<u32>,
@@ -44,7 +43,7 @@ where
         Semigroup::from_data(generators, grading_vector).unwrap()
     };
 
-    let poly_props = PolynomialProperties::new(&sg, &zero_cutoff);
+    let poly_props = PolynomialProperties::new(&sg);
 
     let (intnum_dict, intnum_idxpairs, n_indices) =
         misc::process_int_nums(intnums, cy_kind).unwrap();

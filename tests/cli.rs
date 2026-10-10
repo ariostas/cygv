@@ -100,27 +100,6 @@ fn test_file_to_file() {
 }
 
 #[test]
-fn test_float_arithmetic() {
-    let input = std::fs::read_to_string(example("threefold.yaml")).unwrap();
-    let exact = run(&[], &input);
-    let approx = run(&[], &format!("{input}prec: 300\n"));
-    assert!(
-        approx.status.success(),
-        "{}",
-        String::from_utf8_lossy(&approx.stderr)
-    );
-
-    let exact = YamlLoader::load_from_str(&String::from_utf8(exact.stdout).unwrap()).unwrap();
-    let approx = YamlLoader::load_from_str(&String::from_utf8(approx.stdout).unwrap()).unwrap();
-    // Only the last document carries the added precision field.
-    assert_eq!(exact[0]["results"], approx[0]["results"]);
-    assert_eq!(
-        exact[1]["results"].as_vec().map(Vec::len),
-        approx[1]["results"].as_vec().map(Vec::len)
-    );
-}
-
-#[test]
 fn test_invalid_input() {
     let output = run(&[], "generators: [[1, 0], [0, 1]]\n");
     assert!(!output.status.success());

@@ -144,24 +144,26 @@ indices differently (the first index is a reference surface in the n-fold case).
 
 ### Key cross-cutting patterns
 
-- **Generics select the coefficient type at compile time.** `run_hkty<T>` is monomorphized over
-  `T ∈ {Rational, Float}`, and takes the `InvariantKind` and `CYKind` enums at runtime. Every
-  entry point — the eight `compute_g{v,w}_{rat,float}_{threefold,nfold}` wrappers in
-  `src/dispatch.rs`, and `compute_gvgw_strings` in the same file, which is the single runtime
-  dispatch used by both `src/python.rs` and the CLI — is just a dispatch into that one generic.
-  Adding an option here means touching all of those dispatch sites.
-- **`PolynomialCoeff<T>`** (`src/reference/polynomial/coefficient.rs`) is the compound trait that lets the
-  same code run over exact `rug::Rational` and arbitrary-precision `rug::Float`. It is built almost
-  entirely from `*Assign` traits: coefficient arithmetic is done in place to avoid allocating
-  bignums. When adding a numeric operation, add it as an in-place trait (see `RecipMut`,
-  `RoundMut`, `AbsMut`) rather than a by-value one.
-- **`Polynomial<T>`** (`src/reference/polynomial.rs`) is sparse over the fixed monomial set of the semigroup:
-  `coeffs: HashMap<monomial index, T>` plus a sorted `nonzero: Vec<usize>` index list. Both must be
-  kept consistent — code that inserts into `coeffs` directly (e.g. when assembling from worker
-  threads) must rebuild and re-sort `nonzero` afterwards. `PolynomialProperties` carries the
-  semigroup reference, the monomial→index map, the `zero_cutoff` used by `clean_up` to drop
-  numerically-zero terms, and a `zero` coefficient that new ones are cloned from — for `rug::Float`
-  it is what carries the precision they all have to be created with.
+- **Generics select the coefficient type at compile time.** `run_hkty<T>` is generic over the
+  coefficient type, which is only ever `rug::Rational` today, and takes the `InvariantKind` and
+  `CYKind` enums at runtime. Every entry point — the four
+  `compute_g{v,w}_rat_{threefold,nfold}` wrappers in `src/dispatch.rs`, and
+  `compute_gvgw_strings` in the same file, which is the single runtime dispatch used by both
+  `src/python.rs` and the CLI — is just a dispatch into that one generic. Adding an option here
+  means touching all of those dispatch sites. The computation is always exact: floating-point
+  arithmetic (the old `prec` option) was removed.
+- **`PolynomialCoeff<T>`** (`src/reference/polynomial/coefficient.rs`) is the compound trait the
+  pipeline is written against, so that the exact number type can be swapped (`PLAN.md` plans a
+  pure-Rust one next to `rug::Rational`). It is built almost entirely from `*Assign` traits:
+  coefficient arithmetic is done in place to avoid allocating bignums. When adding a numeric
+  operation, add it as an in-place trait (see `RecipMut`, `IsInteger`) rather than a by-value
+  one. `Default` must give zero.
+- **`Polynomial<T>`** (`src/reference/polynomial.rs`) is sparse over the fixed monomial set of the
+  semigroup: `coeffs: HashMap<monomial index, T>` plus a sorted `nonzero: Vec<usize>` index list.
+  Both must be kept consistent — code that inserts into `coeffs` directly (e.g. when assembling
+  from worker threads) must rebuild and re-sort `nonzero` afterwards, and `clean_up` drops the
+  terms that cancelled to zero. `PolynomialProperties` carries the semigroup reference, the
+  monomial→index map, and a `zero` coefficient that new ones are cloned from.
 - **Threading** uses rayon throughout stages 2–4. `run_hkty` builds a private `ThreadPool` with
   `n_threads` workers and `install`s the pipeline in it, so the stage functions take no thread
   count and simply run in whatever pool they are called from (the global one, when called
@@ -202,8 +204,7 @@ dependencies, `[[bin]]` declares `required-features = ["cli"]`, and both `io` (i
 
 `src/python.rs` exposes a single `_compute_gvgw` PyO3 function (module built with `gil_used =
 false`) that forwards to `dispatch::compute_gvgw_strings`; results are returned as **strings** and
-parsed on the Python side into `int`, `fractions.Fraction`, or `mpmath.mpf` depending on
-`find_gv`/`prec`.
+parsed on the Python side into `int` or `fractions.Fraction` depending on `find_gv`.
 
 `python/cygv/hkty.py` wraps it: `compute_gv` / `compute_gw` normalize inputs to numpy arrays, infer
 `is_threefold` from the shape of `q` and the nef partition, and run the Rust call in a
@@ -217,13 +218,14 @@ takes row-oriented lists (`to_matrix` in `src/python.rs` treats each inner list 
 ## Benchmarks
 
 Both bench targets are driven by the same scenario list in `benches/common/mod.rs`: a model
-crossed with some of the four `Variant`s (GV/GW × rational/float), at a couple of maximum degrees.
-A scenario id looks like `fourfold/deg15/gw-float`, and any argument after `--` that is not a flag
-filters on it. Adding a model or a degree means adding a row to `scenarios()`; nothing else has to
+crossed with one or both `Variant`s (GV or GW), at a couple of maximum degrees. A scenario id looks
+like `fourfold/deg15/gw-rational` (the suffix predates the removal of the floating-point variants
+and is kept so that saved criterion baselines still match), and any argument after `--` that is
+not a flag filters on it. Adding a model or a degree means adding a row to `scenarios()`; nothing else has to
 change.
 
 There are two kinds of model. `threefold` ($h^{1,1} = 2$ hypersurface) and `fourfold` ($h^{1,1} = 6$
-CICY) are small, hardcoded, and run all four variants. `h11_8`, `h11_9`, `h11_10` and `h11_11`
+CICY) are small, hardcoded, and run both variants. `h11_8`, `h11_9`, `h11_10` and `h11_11`
 (named after their $h^{1,1}$) are realistic threefold hypersurfaces loaded from
 `benches/data/*.yaml`, which are ordinary CLI inputs (so the benches need the `cli` feature, and
 each file also runs with `cygv --file`). Their generators are thousands of Mori cone lattice points,

@@ -122,8 +122,7 @@ where
     } else {
         10
     };
-    let mut tmp_gv = poly_props.zero_cutoff.clone();
-    let mut tmp_gv_rounded = poly_props.zero_cutoff.clone();
+    let mut tmp_gv = poly_props.zero.clone();
     let mut previous_qn: VecDeque<_> = (1..=n_previous_levels).map(|_| HashMap::new()).collect();
     let mut previous_qn_ind: VecDeque<_> = (1..=n_previous_levels).map(|_| Vec::new()).collect();
 
@@ -173,35 +172,15 @@ where
                     };
                     tmp_gv.assign(gv_ref);
                     tmp_gv /= kk.1;
-                    match invariant_kind {
-                        InvariantKind::GV => {
-                            tmp_gv_rounded.assign(&tmp_gv);
-                            tmp_gv_rounded.round_mut();
-                            tmp_gv -= &tmp_gv_rounded;
-                            tmp_gv.abs_mut();
-                            if tmp_gv > 1e-3 {
-                                return Err(SeriesInversionError::NonIntegerGVError);
-                            }
-                            tmp_gv.assign(&tmp_gv_rounded);
-                            tmp_gv.abs_mut();
-                            if tmp_gv < 0.5 {
-                                continue;
-                            }
-                            final_gv.insert((j, 0), tmp_gv_rounded.clone());
-                            qn_to_compute.push(j);
-                            gv_qn_to_compute.insert(j, tmp_gv_rounded.clone());
-                        }
-                        InvariantKind::GW => {
-                            tmp_gv_rounded.assign(&tmp_gv);
-                            tmp_gv_rounded.abs_mut();
-                            if tmp_gv_rounded <= poly_props.zero_cutoff {
-                                continue;
-                            }
-                            final_gv.insert((j, 0), tmp_gv.clone());
-                            qn_to_compute.push(j);
-                            gv_qn_to_compute.insert(j, tmp_gv.clone());
-                        }
+                    if tmp_gv == 0 {
+                        continue;
                     }
+                    if invariant_kind == InvariantKind::GV && !tmp_gv.is_integer() {
+                        return Err(SeriesInversionError::NonIntegerGVError);
+                    }
+                    final_gv.insert((j, 0), tmp_gv.clone());
+                    qn_to_compute.push(j);
+                    gv_qn_to_compute.insert(j, tmp_gv.clone());
                 }
             }
             CYKind::Nfold => {
@@ -211,41 +190,18 @@ where
                             continue;
                         };
                         tmp_gv.assign(gv_ref);
-                        match invariant_kind {
-                            InvariantKind::GV => {
-                                tmp_gv_rounded.assign(&tmp_gv);
-                                tmp_gv_rounded.round_mut();
-                                tmp_gv -= &tmp_gv_rounded;
-                                tmp_gv.abs_mut();
-                                if tmp_gv > 1e-3 {
-                                    return Err(SeriesInversionError::NonIntegerGVError);
-                                }
-                                tmp_gv.assign(&tmp_gv_rounded);
-                                tmp_gv.abs_mut();
-                                if tmp_gv < 0.5 {
-                                    continue;
-                                }
-                                final_gv.insert((j, k), tmp_gv_rounded.clone());
-                                let h22list = h22gv_qn_to_compute.entry(j).or_insert_with(|| {
-                                    qn_to_compute.push(j);
-                                    Vec::new()
-                                });
-                                h22list.push((k, tmp_gv_rounded.clone()));
-                            }
-                            InvariantKind::GW => {
-                                tmp_gv_rounded.assign(&tmp_gv);
-                                tmp_gv_rounded.abs_mut();
-                                if tmp_gv_rounded <= poly_props.zero_cutoff {
-                                    continue;
-                                }
-                                final_gv.insert((j, k), tmp_gv.clone());
-                                let h22list = h22gv_qn_to_compute.entry(j).or_insert_with(|| {
-                                    qn_to_compute.push(j);
-                                    Vec::new()
-                                });
-                                h22list.push((k, tmp_gv.clone()));
-                            }
+                        if tmp_gv == 0 {
+                            continue;
                         }
+                        if invariant_kind == InvariantKind::GV && !tmp_gv.is_integer() {
+                            return Err(SeriesInversionError::NonIntegerGVError);
+                        }
+                        final_gv.insert((j, k), tmp_gv.clone());
+                        let h22list = h22gv_qn_to_compute.entry(j).or_insert_with(|| {
+                            qn_to_compute.push(j);
+                            Vec::new()
+                        });
+                        h22list.push((k, tmp_gv.clone()));
                     }
                 }
             }

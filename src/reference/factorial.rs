@@ -2,7 +2,7 @@
 
 use core::cmp::Ordering;
 use core::ops::{AddAssign, DivAssign, MulAssign};
-use rug::{Assign, Float, Rational};
+use rug::{Assign, Rational};
 use std::collections::HashMap;
 
 /// Sets the value of a number to its reciprocal.
@@ -14,13 +14,6 @@ impl RecipMut for Rational {
     #[inline]
     fn recip_mut(&mut self) {
         Rational::recip_mut(self);
-    }
-}
-
-impl RecipMut for Float {
-    #[inline]
-    fn recip_mut(&mut self) {
-        Float::recip_mut(self);
     }
 }
 
@@ -119,7 +112,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rug::ops::CompleteRound;
 
     #[test]
     fn test_harmonic() {
@@ -127,23 +119,13 @@ mod tests {
         let mut tmp_rat = Rational::new();
         let mut true_rat = Rational::new();
 
-        let prec = 512;
-        let mut res_float = Float::new(prec);
-        let mut tmp_float = Float::new(prec);
-        let mut true_float = Float::new(prec);
-
         let n_m = [(0, 1), (1, 1), (10, 1), (10, 2)];
         let h_n_m = [(0, 1), (1, 1), (7_381, 2_520), (1_968_329, 1_270_080)];
 
         for (h, (n, m)) in h_n_m.iter().zip(n_m.iter()) {
             harmonic(*n, *m, &mut res_rat, &mut tmp_rat);
-            harmonic(*n, *m, &mut res_float, &mut tmp_float);
-
             true_rat.assign(*h);
-            true_float.assign(&true_rat);
-
             assert_eq!(res_rat, true_rat);
-            assert!((&res_float - &true_float).complete(512).abs() < 1e-100);
         }
     }
 
@@ -151,10 +133,6 @@ mod tests {
     fn test_factorial_prod() {
         let mut res_rat = Rational::new();
         let mut true_rat = Rational::new();
-
-        let prec = 512;
-        let mut res_float = Float::new(prec);
-        let mut true_float = Float::new(prec);
 
         let mut n_d = Vec::new();
         let mut f_n_d = Vec::new();
@@ -173,13 +151,8 @@ mod tests {
 
         for (f, (n, d)) in f_n_d.iter().zip(n_d.iter()) {
             factorial_prod(n, d, &mut res_rat);
-            factorial_prod(n, d, &mut res_float);
-
             true_rat.assign(*f);
-            true_float.assign(&true_rat);
-
             assert_eq!(res_rat, true_rat);
-            assert!((&res_float - &true_float).complete(512).abs() < 1e-100);
         }
     }
 }

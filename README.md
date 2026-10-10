@@ -38,15 +38,10 @@ compute_gw(generators, grading_vector, q, intnums, max_deg=3)
 How many curve classes are computed is controlled by `max_deg`, `min_points`, or `target_points`,
 of which at most one may be given. When none of them is given, the generators are taken to be the
 complete list of curve classes to use. Complete intersections are specified by passing the nef
-partition as `nefpart`. The computation is done with exact rational arithmetic by default; passing
-a number of bits as `prec` switches it to floating-point arithmetic, which is much faster for large
-computations. Rational arithmetic is nevertheless the recommended choice, as there is no way to
-know beforehand how much precision a given computation needs: too low a `prec` makes the GV
-computation fail, and makes the GW one silently return wrong invariants.
+partition as `nefpart`. The computation is done with exact rational arithmetic.
 
 The results are returned as a list of `(curve_class, invariant)` pairs, in no particular order. GV
-invariants are Python `int`s, and GW invariants are `fractions.Fraction`s, or `mpmath.mpf`s when
-`prec` is given. For CYs of dimension greater than three the invariants are labeled by a curve
+invariants are Python `int`s, and GW invariants are `fractions.Fraction`s. For CYs of dimension greater than three the invariants are labeled by a curve
 class and by the index of a reference surface, which is the first index of the intersection
 numbers, so each entry looks like `(((0, -2, 0, 1, 0, 2), 3), -24)` instead.
 

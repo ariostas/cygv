@@ -6,9 +6,7 @@
 #![allow(dead_code)]
 
 use cygv::dispatch::{
-    compute_gv_float_nfold, compute_gv_float_threefold, compute_gv_rat_nfold,
-    compute_gv_rat_threefold, compute_gw_float_nfold, compute_gw_float_threefold,
-    compute_gw_rat_nfold, compute_gw_rat_threefold,
+    compute_gv_rat_nfold, compute_gv_rat_threefold, compute_gw_rat_nfold, compute_gw_rat_threefold,
 };
 use cygv::io::Input;
 use cygv::CYKind;
@@ -255,29 +253,23 @@ pub fn fourfold() -> Model {
     }
 }
 
-/// The invariants to compute and the coefficient type to compute them with.
+/// The invariants to compute.
+///
+/// The names keep the `-rational` suffix from when floating-point variants
+/// existed, so that criterion baselines saved before then still match.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Variant {
     GvRat,
     GwRat,
-    GvFloat,
-    GwFloat,
 }
 
 impl Variant {
-    pub const ALL: [Variant; 4] = [
-        Variant::GvRat,
-        Variant::GwRat,
-        Variant::GvFloat,
-        Variant::GwFloat,
-    ];
+    pub const ALL: [Variant; 2] = [Variant::GvRat, Variant::GwRat];
 
     pub fn name(self) -> &'static str {
         match self {
             Variant::GvRat => "gv-rational",
             Variant::GwRat => "gw-rational",
-            Variant::GvFloat => "gv-float",
-            Variant::GwFloat => "gw-float",
         }
     }
 }
@@ -300,9 +292,6 @@ pub struct Scenario {
     pub model: &'static str,
     pub max_deg: u32,
     pub variant: Variant,
-    /// Precision of the floating-point variants, in bits. Ignored by the exact
-    /// ones.
-    pub precision: u32,
     /// Number of samples criterion should collect for this case.
     pub sample_size: usize,
     /// Rough time of a single run, in seconds. Only used to size criterion's
@@ -348,7 +337,6 @@ impl Scenario {
         let nefpart = m.nefpart.clone();
         let intnums = m.intnums.clone();
         let threads = n_threads();
-        let prec = self.precision;
 
         match (self.variant, m.cy_kind) {
             (Variant::GvRat, CYKind::Threefold) => compute_gv_rat_threefold(
@@ -359,14 +347,6 @@ impl Scenario {
                 gens, grading, deg, None, None, q, nefpart, intnums, threads,
             )
             .len(),
-            (Variant::GvFloat, CYKind::Threefold) => compute_gv_float_threefold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, prec,
-            )
-            .len(),
-            (Variant::GwFloat, CYKind::Threefold) => compute_gw_float_threefold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, prec,
-            )
-            .len(),
             (Variant::GvRat, CYKind::Nfold) => {
                 compute_gv_rat_nfold(gens, grading, deg, None, None, q, nefpart, intnums, threads)
                     .len()
@@ -375,14 +355,6 @@ impl Scenario {
                 compute_gw_rat_nfold(gens, grading, deg, None, None, q, nefpart, intnums, threads)
                     .len()
             }
-            (Variant::GvFloat, CYKind::Nfold) => compute_gv_float_nfold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, prec,
-            )
-            .len(),
-            (Variant::GwFloat, CYKind::Nfold) => compute_gw_float_nfold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads, prec,
-            )
-            .len(),
         }
     }
 }
@@ -399,37 +371,34 @@ pub fn scenarios() -> Vec<Scenario> {
 
     // Per-run times are for one variant, in the order of `Variant::ALL`, and
     // `None` skips that variant. The `threefold` and `fourfold` times were
-    // measured on a 6-core machine, the rest on a 16-core one. The `gw-float`
-    // n-fold case is the outlier: without an exact zero to compare against it
-    // keeps every near-zero invariant, so it computes two orders of magnitude
-    // more of them than its rational counterpart.
+    // measured on a 6-core machine, the rest on a 16-core one.
     //
     // The realistic models only run `gv-rational`, which is what they are used
-    // for in practice; the other variants would multiply their cost for little
-    // extra coverage, since the toy models already exercise them.
-    let all = |t: [f64; 4]| t.map(Some);
-    let gv_rat = |t: f64| [Some(t), None, None, None];
-    //   model,         deg, prec, samples, per-run secs,                   tier
+    // for in practice; `gw-rational` would double their cost for little extra
+    // coverage, since the toy models already exercise it.
+    let both = |t: [f64; 2]| t.map(Some);
+    let gv_rat = |t: f64| [Some(t), None];
+    //   model,          deg, samples, per-run secs,         tier
     #[rustfmt::skip]
     let cases = [
-        ("threefold",    10,  200,     100, all([0.01, 0.01, 0.01, 0.01]),  Quick),
-        ("threefold",    30,  500,      10, all([0.76, 0.66, 0.75, 0.59]),  Quick),
-        ("fourfold",     10,  200,      20, all([0.09, 0.11, 0.08, 0.33]),  Quick),
-        ("h11_9",        10,    0,      10, gv_rat(1.1),                    Quick),
-        ("h11_9_plike", 200,    0,      10, gv_rat(3.1),                    Quick),
-        ("h11_10",        8,    0,      10, gv_rat(2.2),                    Quick),
-        ("h11_11",       10,    0,      10, gv_rat(1.9),                    Quick),
-        ("threefold",    50,  500,      10, all([9.6, 7.8, 8.1, 6.2]),      Heavy),
-        ("fourfold",     15,  500,      10, all([1.13, 1.50, 1.16, 15.07]), Heavy),
-        ("h11_8",        14,    0,      10, gv_rat(11.0),                   Heavy),
-        ("h11_9",        14,    0,      10, gv_rat(23.0),                   Heavy),
-        ("h11_9_plike", 240,    0,      10, gv_rat(14.0),                   Heavy),
-        ("h11_10",       10,    0,      10, gv_rat(8.5),                    Heavy),
-        ("h11_11",       12,    0,      10, gv_rat(12.0),                   Heavy),
-        ("h11_8",        20,    0,       1, gv_rat(1600.0),                 Huge),
-        ("h11_9",        18,    0,       1, gv_rat(800.0),                  Huge),
-        ("h11_9_plike", 300,    0,       1, gv_rat(123.0),                  Huge),
-        ("h11_11",       16,    0,       1, gv_rat(240.0),                  Huge),
+        ("threefold",    10,     100, both([0.01, 0.01]),  Quick),
+        ("threefold",    30,      10, both([0.76, 0.66]),  Quick),
+        ("fourfold",     10,      20, both([0.09, 0.11]),  Quick),
+        ("h11_9",        10,      10, gv_rat(1.1),         Quick),
+        ("h11_9_plike", 200,      10, gv_rat(3.1),         Quick),
+        ("h11_10",        8,      10, gv_rat(2.2),         Quick),
+        ("h11_11",       10,      10, gv_rat(1.9),         Quick),
+        ("threefold",    50,      10, both([9.6, 7.8]),    Heavy),
+        ("fourfold",     15,      10, both([1.13, 1.50]),  Heavy),
+        ("h11_8",        14,      10, gv_rat(11.0),        Heavy),
+        ("h11_9",        14,      10, gv_rat(23.0),        Heavy),
+        ("h11_9_plike", 240,      10, gv_rat(14.0),        Heavy),
+        ("h11_10",       10,      10, gv_rat(8.5),         Heavy),
+        ("h11_11",       12,      10, gv_rat(12.0),        Heavy),
+        ("h11_8",        20,       1, gv_rat(1600.0),      Huge),
+        ("h11_9",        18,       1, gv_rat(800.0),       Huge),
+        ("h11_9_plike", 300,       1, gv_rat(123.0),       Huge),
+        ("h11_11",       16,       1, gv_rat(240.0),       Huge),
     ];
 
     let heavy_enabled = std::env::var_os("CYGV_BENCH_HEAVY").is_some();
@@ -437,28 +406,25 @@ pub fn scenarios() -> Vec<Scenario> {
 
     cases
         .into_iter()
-        .filter(|&(_, _, _, _, _, tier)| match tier {
+        .filter(|&(_, _, _, _, tier)| match tier {
             Quick => true,
             Heavy => heavy_enabled,
             Huge => huge_enabled,
         })
-        .flat_map(
-            |(model, max_deg, precision, sample_size, expected_secs, tier)| {
-                Variant::ALL.into_iter().zip(expected_secs).filter_map(
-                    move |(variant, expected_secs)| {
-                        Some(Scenario {
-                            model,
-                            max_deg,
-                            variant,
-                            precision,
-                            sample_size,
-                            expected_secs: expected_secs?,
-                            tier,
-                        })
-                    },
-                )
-            },
-        )
+        .flat_map(|(model, max_deg, sample_size, expected_secs, tier)| {
+            Variant::ALL.into_iter().zip(expected_secs).filter_map(
+                move |(variant, expected_secs)| {
+                    Some(Scenario {
+                        model,
+                        max_deg,
+                        variant,
+                        sample_size,
+                        expected_secs: expected_secs?,
+                        tier,
+                    })
+                },
+            )
+        })
         .collect()
 }
 

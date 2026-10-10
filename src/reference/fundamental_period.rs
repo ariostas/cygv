@@ -312,7 +312,7 @@ fn send_c<T, F>(
     F: Fn(usize, &mut CScratch<T>, &mut Vec<CCoeff<T>>) + Sync,
 {
     curves.par_iter().for_each_init(
-        || CScratch::new(&poly_props.zero_cutoff, h11),
+        || CScratch::new(&poly_props.zero, h11),
         |scratch, &t| {
             let mut out = Vec::new();
             compute(t, scratch, &mut out);
@@ -463,7 +463,7 @@ where
 
     c0.nonzero = c0.coeffs.keys().cloned().collect();
     c0.nonzero.sort_unstable();
-    c0.clean_up(poly_props);
+    c0.clean_up();
 
     // Now compute the inverse and the derivatives in parallel.
     let (mut c0_inv, _) = file_while(
@@ -506,16 +506,16 @@ where
         },
     );
 
-    c0_inv.clean_up(poly_props);
+    c0_inv.clean_up();
     for p in c1.iter_mut() {
         p.nonzero = p.coeffs.keys().cloned().collect();
         p.nonzero.sort_unstable();
-        p.clean_up(poly_props);
+        p.clean_up();
     }
     for p in c2.values_mut() {
         p.nonzero = p.coeffs.keys().cloned().collect();
         p.nonzero.sort_unstable();
-        p.clean_up(poly_props);
+        p.clean_up();
     }
 
     Ok(FundamentalPeriod { c0, c1, c2, c0_inv })
@@ -539,8 +539,7 @@ mod tests {
         let generators = DMatrix::from_column_slice(2, 2, &[0, -1, 1, 2]);
         let grading_vector = RowDVector::from_row_slice(&[3, -1]);
         let sg = Semigroup::with_min_elements(generators, grading_vector, 15).unwrap();
-        let zero_rat = Rational::new();
-        let poly_props = PolynomialProperties::new(&sg, &zero_rat);
+        let poly_props = PolynomialProperties::<Rational>::new(&sg);
 
         let q = DMatrix::from_column_slice(6, 2, &[1, 1, 1, 0, 1, 2, 0, 0, -1, 1, 1, -1]);
         let nefpart = Vec::new();

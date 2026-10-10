@@ -10,9 +10,7 @@ def test_threefold() -> None:
     intnums = {(0, 0, 0): 2, (0, 0, 1): 1, (0, 1, 1): -1, (1, 1, 1): 5}
     # For now, these are just smoke tests
     compute_gv(generators, grading_vector, q, intnums, min_points=100)
-    compute_gv(generators, grading_vector, q, intnums, min_points=100, prec=200)
     compute_gw(generators, grading_vector, q, intnums, min_points=100)
-    compute_gw(generators, grading_vector, q, intnums, min_points=100, prec=200)
     compute_gv(generators, grading_vector, q, intnums, target_points=[10, 10])
     compute_gv(
         generators, grading_vector, q, intnums, target_points=[[10, 10], [12, 10]]
@@ -73,9 +71,7 @@ def test_threefold() -> None:
     }
     # For now, these are just smoke tests
     compute_gv(generators, grading_vector, q, intnums, min_points=100)
-    compute_gv(generators, grading_vector, q, intnums, min_points=100, prec=200)
     compute_gw(generators, grading_vector, q, intnums, min_points=100)
-    compute_gw(generators, grading_vector, q, intnums, min_points=100, prec=200)
 
 
 def test_fourfold() -> None:
@@ -176,6 +172,4 @@ def test_fourfold() -> None:
     }
     # For now, these are just smoke tests
     compute_gv(generators, grading_vector, q, intnums, min_points=100)
-    compute_gv(generators, grading_vector, q, intnums, min_points=100, prec=200)
     compute_gw(generators, grading_vector, q, intnums, min_points=100)
-    compute_gw(generators, grading_vector, q, intnums, min_points=100, prec=200)

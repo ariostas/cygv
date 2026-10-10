@@ -1,7 +1,5 @@
 use cygv::dispatch::{
-    compute_gv_float_nfold, compute_gv_float_threefold, compute_gv_rat_nfold,
-    compute_gv_rat_threefold, compute_gw_float_nfold, compute_gw_float_threefold,
-    compute_gw_rat_nfold, compute_gw_rat_threefold,
+    compute_gv_rat_nfold, compute_gv_rat_threefold, compute_gw_rat_nfold, compute_gw_rat_threefold,
 };
 use nalgebra::{dmatrix, dvector, RowDVector};
 use std::collections::HashMap;
@@ -53,30 +51,6 @@ fn test_threefold() {
         nefpart.clone(),
         intnums.clone(),
         None,
-    );
-    compute_gv_float_threefold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        None,
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        None,
-        200,
-    );
-    compute_gw_float_threefold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        None,
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        None,
-        200,
     );
 }
 
@@ -209,29 +183,5 @@ fn test_fourfold() {
         nefpart.clone(),
         intnums.clone(),
         None,
-    );
-    compute_gv_float_nfold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        None,
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        None,
-        200,
-    );
-    compute_gw_float_nfold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        None,
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        None,
-        200,
     );
 }

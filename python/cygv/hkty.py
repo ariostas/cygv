@@ -9,7 +9,6 @@ from multiprocessing.connection import Connection, wait
 from pathlib import Path
 from typing import Any
 
-import mpmath as mp
 import numpy as np
 from numpy.typing import ArrayLike
 
@@ -29,7 +28,6 @@ def _compute_gvgw_subprocess(
     min_points: int | None = None,
     target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
-    prec: int | None = None,
 ) -> None:
     with stderr_path.open("wb") as f:
         os.dup2(f.fileno(), 2)
@@ -47,7 +45,6 @@ def _compute_gvgw_subprocess(
                 target_points,
                 nefpart,
                 None,
-                prec,
             )
         )
     # The catch has to be this broad: a panic on the Rust side surfaces as a
@@ -71,7 +68,6 @@ def _wrapped_compute_gvgw(
     min_points: int | None = None,
     target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
-    prec: int | None = None,
 ) -> Any:
     parent_conn, child_conn = Pipe(duplex=False)
     with tempfile.NamedTemporaryFile(delete=False) as f:
@@ -91,7 +87,6 @@ def _wrapped_compute_gvgw(
             min_points,
             target_points,
             nefpart,
-            prec,
         ),
     )
     process.start()
@@ -147,7 +142,6 @@ def compute_gv(
     min_points: int | None = None,
     target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
-    prec: int | None = None,
 ) -> list[Any]:
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
@@ -165,7 +159,6 @@ def compute_gv(
         min_points,
         target_points,
         nefpart,
-        prec,
     )
     if is_threefold:
         res = [(tuple(v), int(gv)) for ((v, _), gv) in res_tmp]
@@ -183,10 +176,7 @@ def compute_gw(
     min_points: int | None = None,
     target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
-    prec: int | None = None,
 ) -> list[Any]:
-    if prec is not None:
-        mp.mp.prec = prec
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
@@ -203,16 +193,9 @@ def compute_gw(
         min_points,
         target_points,
         nefpart,
-        prec,
     )
     if is_threefold:
-        res = [
-            (tuple(v), (Fraction(gw) if prec is None else mp.mpf(gw)))
-            for ((v, _), gw) in res_tmp
-        ]
+        res = [(tuple(v), Fraction(gw)) for ((v, _), gw) in res_tmp]
     else:
-        res = [
-            ((tuple(v), c), (Fraction(gw) if prec is None else mp.mpf(gw)))
-            for ((v, c), gw) in res_tmp
-        ]
+        res = [((tuple(v), c), Fraction(gw)) for ((v, c), gw) in res_tmp]
     return res
