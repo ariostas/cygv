@@ -1,9 +1,10 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phase 0 done, nothing implemented yet.** Where sections 1–5
-mention `rug` for the new code, read "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
-(`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (4125429); the rebase was
-clean. The PR branch itself (`cgv-cc-cpu`) is untouched.
+Status: **investigation done, phases 0 and 0d done, nothing implemented yet.** Where sections 1–5
+mention `rug` for the new code, read "big integers": decision 6.10 makes `rug` optional. Branch
+`gv-modular-rust` is PR #94 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main`
+(6fe293a, v0.3.0), plus our commits. The PR branch itself (`cgv-cc-cpu`) is untouched. The
+follow-up PRs #95, #97 and #100 are covered in section 1.1.
 
 Section 6 lists the decisions that need an answer before implementation starts.
 
@@ -32,6 +33,56 @@ The mathematics is still HKTY, but reorganised. In pipeline order:
 Extras in `cgv/` that the PR does not expose through cygv: a certification build (`CGV_MAJ`: the
 same pipeline over upward-rounded reals to prove the CRT lift exact), a distributed residue mode,
 a glibc low-memory switch, the GPU stage.
+
+### 1.1 The follow-up PRs: #95, #97, #100
+
+All three are stacked on #94 (each contains the previous ones; only the last commit or two are
+new). Read from their diffs against our copy of `cgv/`.
+
+- **#95, GPU variant.** Builds `cgv/gpu.cu` (CUDA or HIP) in `build.rs` when `nvcc`/`hipcc` is
+  found and adds `device=` to the Python API. Already a future option (6.8); it only confirms
+  that the device belongs in the options struct (4.1.6) and that a backend must be able to
+  decline (4.1.3): the C keeps lightcone runs on the CPU.
+- **#97, any phase of the ambient toric variety, including vex fans** (MacFadden–Sheridan,
+  arXiv:2512.14817). In a vex phase there are curves of negative anticanonical degree
+  $m = q_0 \cdot C < 0$, where the HKTY coefficient has a pole; it cancels against the class of
+  the stratum $V_S$ those curves force into the CY (McAllister's prescription via Wang,
+  arXiv:1910.14440). For fine fans on reflexive polytopes $S$ is a 3-cone of the fan and $V_S$ a
+  toric curve, so the extra input is one rational class $d_S$ per vex 3-cone. Two parts:
+  - *Core* (`gv.c`, ~90 lines): curves with $m < 0$ and exactly three negative intersections
+    $S$ that match a vex stratum get $S_2 = U_0\,(w \cdot d_S)$ and no `c0`/`c1`, with
+    $U_0 = (-1)^{e}\, \prod_{S}(k_i-1)! \,/\, \big(\prod_{\notin S} b_i!\,(\lvert m\rvert-1)!\big)$;
+    any other $m < 0$ curve contributes nothing. The $K_T$ list gains one cone per vex 3-cone,
+    the factorial tables cover $\lvert m\rvert$, the strata values are rationals reduced mod p.
+    Threefold hypersurfaces only; the C's certifier build rejects vex input.
+  - *Preprocessing* (`cgv/tools/cgv_phase.py`, ~300 lines of Python with exact rational linear
+    algebra and normaliz): from the fan's maximal cones, `q` and `kappa`, derive the rays
+    (integer Gale dual of `q`), the toric intersection ring (to check `kappa`), the wall curves
+    (default Mori rays), the vex cones (rays sharing no facet of the hull of the rays) and the
+    exact stratum classes.
+  - Validated by the author against an independent exact-rational implementation and across
+    flops, with 16 frozen references in `cgv/tests/refs_vex`.
+  - It also exposes a latent bug in the reference pipeline: `compute_c_1neg`/`_2neg` cast
+    $q_0 \cdot C$ to `u32`, so a negative anticanonical degree silently wraps (section 7).
+- **#100, minimal inputs, one candidate path, lightcone GVs.**
+  - The Mori cone is given by any description: spanning vectors (`mori_rays`, redundant
+    allowed) or inequalities (`mori_hyperplanes`). Lattice points and the Mori cone's own
+    Hilbert basis are no longer inputs; the `generators` key is gone.
+  - Candidates always come from the $K_T$ Hilbert bases. The saturation check and the full
+    enumeration it fell back to are deleted ("it decided only agreement with cygv, never cgv's
+    output", and cost up to 770 s / 79 GB on one region, now 91 s / 1 GB). The C therefore
+    always needs normaliz.
+  - *Lightcone*: given curves $p$, keep only their backward lightcones $\{C : p - C \in
+    \text{Mori cone}\}$, tested as $H C \le H p$ row by row with $H$ the Mori facets. Applied
+    at three points: when listing candidates, when choosing the curves to apply in the
+    extraction, and on the output (products of kept curves can land outside, with wrong
+    values). `max_deg` defaults to the largest degree of the $p$. This is exactly the
+    target-point trimming discussed under 6.3, and it replaces the old "subset of generators"
+    mode, which only worked for faces.
+  - New input file format ("cgv 2"), clearer CRT error, progress lines.
+
+What this changes in the plan: 6.1 (what cone data is), 6.2 (no separate Mori Hilbert basis),
+6.3 (target points decided; phases added), phases 6–6c and 7a–7c, and section 7.
 
 ## 2. Measurements
 
@@ -188,6 +239,7 @@ connects the pieces (`cgv/gpu.h`, `CGV_RESIDUES` / `tools/crt_combine.py`, the `
    before any new code so that the diff stays a pure move.
 0c. **Drop floating-point computation** (6.9), as its own commit: `prec`, the `Float` variants,
    the float bench variants, `mpmath`.
+0d. **Sync the oracle.** Done (6.6): `cgv/` is the #100 version, without the integration glue.
 1. **Primitives**: `field`, `key`, `table`, with unit tests (field ops against `rug`, pack/unpack
    round trips and overflow detection).
 2. **Period and instanton, enumeration path only**: candidates by full enumeration, `period`,
@@ -212,20 +264,45 @@ connects the pieces (`cgv/gpu.h`, `CGV_RESIDUES` / `tools/crt_combine.py`, the `
    `modular` is written against the pure-Rust crate from phase 3 on, so a provisional choice
    is needed there; it is confined to `crt` and `multicover`.
 6. **Cone fast path through optional input.** `candidates` takes cone data (defined in 6.1) and
-   enumerates each $K_T$ from its Hilbert basis, with the saturation check, the containment and
-   vanishing-form skips, and the enumeration fallback when no data is given. The data comes from
+   enumerates each $K_T$ from its Hilbert basis, with the containment and vanishing-form skips.
+   The Mori cone may be described by spanning vectors or by inequalities. The data comes from
    the caller at this point: the Rust API and YAML accept it, and the Python wrapper may produce
-   it with `normaliz` when that is installed. This fixes the interface that phase 7 plugs into.
-7. **Native Hilbert bases: time-boxed prototype, then integrate or drop.** Independent of phases
-   1–5 and can run alongside them. See section 5.1.
+   it with `normaliz`. This fixes the interface that phase 7 plugs into.
+6b. **Target points for `modular`** (6.3): the facet test at the three filter points, optional
+   `max_deg`, differential tests against the full computation and the C's lightcone mode.
+6c. **Vex phases, core** (6.3): the `strata` input, the $m < 0$ period branch, the extra $K_T$;
+   tests against the C oracle and `cgv/tests/refs_vex`. Also make `reference` reject negative
+   anticanonical degree.
+7. **Native cone computations.** Independent of phases 1–5 and can run alongside them. See
+   section 5.1.
+   - *7a, double description (committed, not a prototype)*: support hyperplanes from spanning
+     vectors, in any dimension, with exact integers. Needed regardless of how 7b turns out: it
+     gives the Mori cone's facets (target points, `mori_rays` input, the default grading) and
+     the hull facets that phase 7c needs. Our own implementation or `howzat`, decided then.
+   - *7b, Hilbert bases: time-boxed prototype, then integrate or drop.* The $K_T$ bases.
+7c. **Phases from a fan** (6.3): derive `strata`, the default Mori rays and grading, and
+   optionally check `kappa`, from the fan's maximal cones and `q`, without normaliz. Port of
+   `cgv_phase.py`: rays as the integer Gale dual of `q`; walls (3-faces shared by two maximal
+   cones) and their classes by Cox–Little–Schenck 6.4.4; vex cones as the fan's 2- and 3-faces
+   whose rays share no facet of the hull of the rays (facets from 7a); the toric intersection
+   ring for the `kappa` check. Exact rational linear algebra on small matrices with the
+   big-number crate of 6.10. Estimated 400–600 lines with tests. Tested piece by piece against
+   `cgv_phase.py` (normaliz needed on the development machine only) and end to end against
+   `cgv/tests/refs_vex`. A directly supplied `strata` input stays accepted. Rejects inputs
+   outside the paper's assumptions (a fine fan on the boundary points of a reflexive
+   4-polytope not interior to facets), e.g. vex 2-cones (MacFadden–Sheridan Prop. 5). Note
+   that the vex path is only fully normaliz-free if 7b succeeds: each stratum adds a $K_T$
+   whose Hilbert basis is still needed.
 8. **Certifier** (6.5): the majorant run, fed with the candidate GVs, behind its own switch;
    tested against `cgv_maj` on the benchmark geometries. Optional extras in the same phase:
    generator-reduction back-port to `Semigroup`.
 9. **Wrap up**: remove `cgv/`, update README / CLAUDE.md / docs, credit the PR author.
 
+Follow-ups after the main plan: GPU and the other C features (6.8).
+
 Phases 1–5 need no decision except 6.5–6.7 and deliver the ~70× column of section 2.
 
-### 5.1 Phase 7 in detail: Hilbert bases without normaliz
+### 5.1 Phase 7 in detail: cone computations without normaliz
 
 Goal: produce the cone data of 6.1 inside the crate, so the fast path does not depend on an
 external program. No suitable crate was found on crates.io (no Hilbert basis crate, no normaliz
@@ -233,10 +310,9 @@ or 4ti2 bindings; `howzat` does double description only and has not been evaluat
 
 The problem is much narrower than the general one normaliz solves:
 
-- The Hilbert basis of the Mori cone is computed first, by default (decision 6.2). When the
-  input is already saturated it equals the reduced generator set (`reduce_generators`, 14
-  elements for `h11_9`), which makes a cheap cross-check.
-- Each $K_T$ is that cone cut by a few halfspaces $Q_r \cdot C \ge 0$. Cutting a cone with a
+- The Mori cone's own Hilbert basis is not needed (6.1). Only its support hyperplanes are, from
+  whatever description the input gives.
+- Each $K_T$ (including one per vex 3-cone) is that cone cut by a few halfspaces $Q_r \cdot C \ge 0$. Cutting a cone with a
   known Hilbert basis by one halfspace is Pottier's algorithm (normaliz's "dual mode"): split
   the basis by the sign of $Q_r \cdot C$, keep adding irreducible sums of a positive and a
   negative element until nothing new appears, keep the non-negative ones.
@@ -249,9 +325,8 @@ The problem is much narrower than the general one normaliz solves:
 Pieces:
 
 1. *Support hyperplanes of the Mori cone*, needed for the membership test inside the
-   irreducibility check. One double description computation in dimension $h^{1,1}$, either our
-   own with exact integers or through `howzat`. Alternatively the caller supplies them (CYTools
-   has them), which would make this piece optional.
+   irreducibility check. This is phase 7a, which is committed independently of the prototype
+   (also needed for target points and phase 7c). The caller may still supply them.
 2. *Truncated halfspace cutting* as above, with the reduction test.
 3. *Driver* over all $T$ with $\lvert T\rvert \le 2$, reusing intermediate bases and skipping
    two-divisor cones with vanishing form before computing them.
@@ -262,8 +337,8 @@ Prototype protocol:
   Heavy and Huge degrees.
 - Correctness oracle: `normaliz` (installed locally) on the same cones, compared after
   truncating its output to `max_deg`; plus identical candidate sets and GVs end to end.
-- Unsaturated input (`h11_11.yaml`): the prototype must complete the Mori cone basis itself
-  and report the missing elements, per decision 6.2.
+- Unsaturated input (`h11_11.yaml`): the $K_T$ bases must come out saturated whatever lattice
+  points the input lists, per decision 6.2.
 
 Exit criteria:
 
@@ -283,18 +358,22 @@ $h^{1,1}$ = 10–11 is unknown until measured.
    and of every $K_T$ (91 cones for `h11_9`), plus the Mori cone's support hyperplanes. The PR
    gets them from the `normaliz` binary in Python.
 
-   "Cone data" is three lists of integer vectors in the curve basis, independent of the grading
-   vector and `max_deg` when they come from normaliz: (i) the Hilbert basis of the Mori cone,
-   used only for the saturation check; (ii) the Hilbert basis of each $K_T$, $\lvert T\rvert \le
-   2$ (13 + 78 = 91 cones for `h11_9`, of which 19 are enumerated after the skips); (iii) the
-   divisor set $T$ of each cone, which enables the vanishing-form skip. The data is trusted: a
-   wrong basis for some $K_T$ silently drops candidate curves.
+   "Cone data", following #100: (i) the Mori cone's support hyperplanes (facets), needed for
+   target points and the coordinate bound; (ii) the Hilbert basis of each $K_T$: every $T$ with
+   $\lvert T\rvert \le 2$ (13 + 78 = 91 cones for `h11_9`, of which 19 are enumerated after the
+   skips) plus one per vex 3-cone (6.3); (iii) the divisor set $T$ of each cone, which enables
+   the vanishing-form skip. Independent of the grading vector and `max_deg` when computed
+   exactly. The Mori cone's own Hilbert basis is *not* needed: the $K_T$ already contain every
+   candidate, and the basis was only ever used for the saturation check, which #100 deletes.
+   The data is trusted: a wrong basis for some $K_T$ silently drops candidate curves.
 
    **Current direction**: optional input first (phase 6), then a time-boxed prototype of a
-   native implementation (phase 7, section 5.1) that either replaces the need for normaliz or
+   native implementation (phase 7b, section 5.1) that either replaces the need for normaliz or
    is dropped. Linking libnormaliz (C++) is ruled out as contrary to the goal of the rewrite.
-   Still open: whether the Python wrapper should call `normaliz` when it is installed, and
-   whether the caller may supply the Mori cone's support hyperplanes.
+   The Mori cone itself can be described either way, as in #100: spanning vectors (the
+   existing `generators` field, now read as "any vectors spanning the cone", lattice points or
+   just rays) or inequalities (a new `mori_hyperplanes` field). Still open: whether the Python
+   wrapper should call `normaliz` when it is installed.
 2. **Saturation semantics. Direction: saturate by default.** The reference uses the semigroup
    the generators *generate* (non-negative integer combinations); the correct object is *all
    lattice points of the cone they span*, $\sigma \cap \mathbb{Z}^n$. The two differ whenever
@@ -304,21 +383,23 @@ $h^{1,1}$ = 10–11 is unknown until measured.
    generators miss `[2,0,0,2,1,0,0,-1,-1,0,0]`, degree 6; not an artefact of the file's
    trimming at degree 16), and the reference then silently computes over a semigroup with holes.
 
-   So the new method should **always compute the Hilbert basis of the Mori cone by default**
-   and work over the saturated semigroup, rather than treat saturation as something to check.
+   So the new method **works over the saturated semigroup by default**, rather than treating
+   saturation as something to check. Since #100 this needs no separate step: the candidates come
+   from the $K_T$ Hilbert bases, which are computed from the cone's description and so are
+   saturated by construction.
    It is skipped only when (i) the dimension is too large for the computation to be practical,
    or (ii) the user disables it; in both cases the input generators are used as given, as the
    reference does. Consequences:
    - This raises the stakes of phase 7: a native Hilbert basis computation is no longer only a
-     speed-up, it is what makes the default correct without an external program. The Mori cone
-     basis is needed even on the enumeration path (it replaces the input generators there).
-   - Phase 7 cannot assume the reduced generators are the Hilbert basis; it has to compute the
-     basis of the cone spanned by the input (support hyperplanes first, then the basis).
+     speed-up, it is what makes the default correct without an external program.
+   - Unlike the C after #100, we keep the enumeration of the *generated* semigroup, but only as
+     the path for the opt-out cases above (and as the phase 2 stepping stone). It needs lattice
+     points as input, so it is unavailable when the cone is given by rays or inequalities only.
    - Outputs can differ from the reference on unsaturated input, by design. Differential tests
      need saturated inputs, or the reference fed the completed generator set. Add `h11_11` as
      an explicit test of both.
-   - Report when the input was incomplete (which elements were missing), since it tells the
-     user their generator list was short.
+   - Reporting which Hilbert basis elements the input missed (the C's old note) would need the
+     Mori cone's basis again. Dropped, as in #100; it can come back as a diagnostic if wanted.
 
    Still open: what "too large" means (a dimension threshold, a time budget, or both; to be
    settled from the phase 7 measurements), whether skipping for size should warn or error, the
@@ -354,24 +435,41 @@ $h^{1,1}$ = 10–11 is unknown until measured.
    so there is no count to grow towards. A request with `min_points` and the new method is an
    error; the reference method keeps supporting it.
 
-   **`target_points`: open, to be decided later.** Until then it is treated like `min_points`
-   (an error with the new method). What is known so far:
+   **`target_points`: in the main plan (decided), for both methods.** #100 implements it
+   ("lightcone") and shows it is straightforward: the set $D(P) = \{e : P - e \in
+   \text{cone}\}$ of curves below a target is closed under taking summands, so truncating to it
+   is valid for the same reason degree truncation and face restriction are, and membership is
+   $H e \le H P$ with $H$ the Mori facets (several targets: the union).
+   - `modular`: filter at the C's three points (candidates, curves applied in the extraction,
+     output). Filtering the terms inside each exponential as well would save more but costs a
+     membership test in the scatter loop; unmeasured, left as a tuning option. The truncation
+     test still goes through one function, so that option stays cheap to add.
+   - `reference`: keeps `Semigroup::with_target_points`, which implements the same set for the
+     generated semigroup; under saturation the two agree.
+   - Interface: the existing `target_points` field and argument keep their name and meaning;
+     `max_deg` becomes optional when targets are given (default: the largest target degree).
+   - Needs the facets, so with `modular` it depends on cone data (phase 6) or native facets
+     (phase 7a). Not offloaded to a future GPU backend (the C keeps it on the CPU).
 
-   It can be done properly, not only by running to the largest target degree and
-   filtering. The set $D(P) = \{e : P - e \in \text{cone}\}$ of curves "below" a target $P$ is
-   closed under taking summands, so truncating every series to $D(P)$ instead of to
-   `deg <= max_deg` is valid for the same reason degree truncation and face restriction are
-   (this is what `Semigroup::with_target_points` relies on today). For the saturated cone the
-   membership test is a set of inequalities, $h \cdot (P - e) \ge 0$ for each support
-   hyperplane $h$, so it needs no enumeration; several targets use the union. It trims the
-   candidates (prune the enumeration of each $K_T$), the curves applied in the extraction, and
-   the terms kept in each exponential. Not in the C, so new work, and it depends on having the
-   support hyperplanes (phase 7 piece 1, or supplied by the caller). Unmeasured: how much it
-   saves, and what the per-term membership test costs in the scatter loop compared with a
-   degree comparison (the hyperplane values are additive like the keys, so they can be carried
-   incrementally). To keep the option open at no cost, the truncation test in `table` and
-   `extraction` goes through one function instead of inlined degree comparisons, so a second
-   rule can be added later without touching every loop.
+   **Phases of the ambient toric variety, including vex fans (#97): in the main plan, core and
+   fan preprocessing (decided).**
+   - *Core*: an optional `strata` input, a list of (three divisor indices, rational class
+     $d_S \in \mathbb{Q}^{h^{1,1}}$), one per vex 3-cone. `modular` adds the $m < 0$ branch to
+     the period step, the extra $K_T$ per stratum, and the larger factorial tables. Small and
+     local, the same shape as in the C. Threefold hypersurfaces only; other combinations with
+     `strata` are an error. The certifier (6.5) rejects `strata` until its bounds are worked
+     out, as the C's does.
+   - *Not in `reference`*: a request with `strata` under `auto` goes to `modular`, and
+     `reference` rejects it. Separately, `reference` must reject negative anticanonical degree
+     instead of wrapping it (section 7).
+   - *Derivation from a fan: in the main plan (phase 7c, decided).* Deriving `strata`, the
+     default Mori rays and grading, and the `kappa` check from the fan, i.e. the content of
+     `cgv_phase.py`, natively and without normaliz. Its only normaliz uses are two small
+     convex hulls, which the double description of phase 7a covers. Callers can still supply
+     `strata` directly.
+   - Validation: the C oracle and the 16 references in `cgv/tests/refs_vex` (6.6: sync `cgv/`).
+   - The formula is taken from the C and the cited papers; we have not derived it ourselves.
+
 4. **Key width.** The key is a lossless encoding, not a hash: coordinate $t$ occupies a signed
    bit field, $\text{key} = \sum_t v_t\, 2^{bt}$ in two's complement, which is what makes
    $\text{key}(a+b) = \text{key}(a)+\text{key}(b)$ and lets the curve be unpacked again (the
@@ -473,7 +571,11 @@ $h^{1,1}$ = 10–11 is unknown until measured.
 
    `cgv/` is built with its own Makefile (`make -C cgv cgv`) and driven through
    `cgv/tools/cgv_run.py`, which needs `numpy`, and `normaliz` for the cone path. It is removed
-   in phase 9. Still open: whether to keep some of `cgv/tests/refs` (38 frozen outputs, 6.2 MB)
+   in phase 9. Synced to the version in #100 (d794626, phase 0d), so the oracle covers
+   lightcones and vex phases and carries `tests/refs_vex`. Its input format is "cgv 2" and it
+   always needs normaliz (development machines only). After the sync, `tests/regress.py` (38
+   frozen cygv outputs) and `tests/vex_regress.py` (16 phase references, with lightcone
+   checks) both pass here. Still open: whether to keep some of `cgv/tests/refs` (38 frozen outputs, 6.2 MB)
    as test data after that, or rely on the reference implementation and `benches/data`.
 7. **Naming, default and layout (decided).**
    - *Names*: the existing pipeline is `reference`, the new one is `modular`. Not "legacy": the
@@ -498,7 +600,8 @@ $h^{1,1}$ = 10–11 is unknown until measured.
    GPU extraction stage, the distributed mode (one run split by primes across machines), the
    low-memory switch and the C's tuning knobs are not part of this work, but the Rust code is
    structured so that adding any of them later is an addition, not a refactor. The resulting
-   constraints are in section 4.1 and apply from phase 1.
+   constraints are in section 4.1 and apply from phase 1. PR #95 (the GPU variant through
+   `build.rs`, `device=` in Python) is the reference for the GPU interface when it comes.
 
 9. **Dropping floating-point computation (planned).** Remove `prec` and the `rug::Float`
    variants everywhere, including the reference pipeline, so every result is an exact integer
@@ -555,6 +658,11 @@ $h^{1,1}$ = 10–11 is unknown until measured.
    - Whether the reference benches keep a `rug` variant as the performance baseline.
 
 ## 7. Notes and risks
+
+- **Latent bug in the reference pipeline, worth fixing on `main` independently of this work.**
+  `compute_c_1neg` and `compute_c_2neg` (`src/fundamental_period.rs`) convert $q_0 \cdot C$ with
+  `as u32`. In a vex phase that value can be negative, so it wraps to a huge factorial argument
+  instead of failing. The same holds for any inconsistent input. It should be an error.
 
 - **Faces of the Mori cone must keep working.** Passing only the generators of a
   lower-dimensional face computes the invariants along that face, because a face $F$ satisfies
