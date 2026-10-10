@@ -121,6 +121,14 @@ procedure (named *reference* because a faster, differently structured pipeline i
 it; see `PLAN.md`). `src/dispatch.rs` holds the public entry points, and `src/io.rs`, the CLI and
 `src/python.rs` sit on top of those.
 
+`src/modular.rs` and `src/modular/` hold that faster pipeline, under construction and not yet
+reachable from `dispatch`. It computes modulo word-sized primes and lifts the results with the
+CRT, and shares no code with `reference`. So far it has its primitives: `field` (Montgomery
+arithmetic, `Lanes<NL>` residues, and the `Ring` trait the stages are written against, which
+takes the primes as a context), `key` (curve classes packed into fixed-size keys that add like
+the classes, with a layout sized per run from coordinate bounds) and `table` (open-addressing
+tables and sparse series over those keys, each entry holding a run-time number of values).
+
 The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
 (`src/reference.rs`), whose stages are submodules of `reference`:
 

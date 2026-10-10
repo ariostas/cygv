@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phase 0 (0–0d) done.** Progress is
+Status: **investigation done, phases 0 (0–0d) and 1 done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -276,10 +276,19 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
   - [x] Python: `prec` removed outright (no deprecation release, since nobody passes it),
     `mpmath` dropped.
 - [x] **0d. Sync the oracle** (6.6): `cgv/` is the #100 version, without the integration glue.
-- [ ] **1. Primitives.**
-  - [ ] `field`, with unit tests of its operations against the big-number crate.
-  - [ ] `key`, with pack/unpack round trips and overflow detection.
-  - [ ] `table`.
+- [x] **1. Primitives.**
+  - [x] `field`, with unit tests of its operations against the big-number crate. `Field`
+    (Montgomery, as in the C), `Lanes<NL>` and `LaneField<NL>`, the prime sequence (the C's,
+    so residues compare lane for lane), and the `Ring` trait of 4.1.5, which the stages take
+    as a context because a residue does not know its modulus. Table construction is not in
+    the trait yet; it comes with the period tables in phase 2.
+  - [x] `key`, with pack/unpack round trips and overflow detection. The `Key` and
+    `KeyLayout` traits, `PackedLayout` (`u128`, per-coordinate widths of at most 126 bits in
+    total, which leaves a sentinel key free), and `coordinate_bounds`, the C's bound in exact
+    integer arithmetic and per coordinate.
+  - [x] `table`: `SlotMap`, `SparsePoly`, `DegreeHeap`, `LevelTable`. Slots and terms carry
+    a run-time number of values, which settles the value layout question of 6.3. The
+    per-degree workspace built from level tables belongs to the extraction (phase 3).
 - [ ] **2. Period and instanton, enumeration path only.**
   - [ ] Candidates by full enumeration.
   - [ ] `period`.
@@ -599,7 +608,8 @@ Layers, from cheapest to most independent:
      ($M = 1$ with $K = \sum_t w_t\kappa_t$ for threefolds, $M$ = number of reference surfaces
      for n-folds), plus a multicover rule. **It has to be decided before `table` is written**,
      like the key width, because it changes the value layout of every $I$ table. Memory for $I$
-     scales with $M$.
+     scales with $M$. (Settled in phase 1: the slots and terms of the tables in `table` hold
+     a number of values fixed when the table is made.)
    - The n-fold formulas above are derived from the reference code (`compute_inst`,
      `invert_series`), not taken from the C, and are unverified until they pass differential
      tests against the reference on `examples/fourfold.yaml` and the `fourfold` bench model.
@@ -900,7 +910,8 @@ Layers, from cheapest to most independent:
   consistent geometry and gives grading-dependent results with the new method, so the
   existing toy fixtures cannot all be reused for differential tests.
 - The C uses `int` slot indices and `h11, ndiv <= 64` stack arrays; worth lifting rather than
-  porting.
+  porting. Phase 1 uses `u32` slot numbers, i.e. about four billion slots, which is more than
+  fits in memory.
 - Peak memory is per-thread working tables plus $I$; the C's README quotes 3–6 GB at degree
   26–28 for $h^{1,1}$ = 10–11. `benches/memory.rs` only counts GMP and Rust allocations, which
   is fine here since everything will be Rust-allocated.
