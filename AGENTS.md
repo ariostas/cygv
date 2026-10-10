@@ -116,14 +116,15 @@ PR titles must follow conventional commits (enforced by `.github/workflows/pr_ti
 ## Architecture
 
 The modules split into the pipeline and the front end shared by everything that calls it.
-`src/reference.rs` and `src/reference/` hold the pipeline, a faithful implementation of the HKTY
-procedure (named *reference* because a faster, differently structured pipeline is planned beside
-it; see `PLAN.md`). `src/dispatch.rs` holds the public entry points, and `src/io.rs`, the CLI and
-`src/python.rs` sit on top of those.
+There are two pipelines. `src/reference.rs` and `src/reference/` hold a faithful implementation
+of the HKTY procedure in exact rationals (named *reference* because the faster, differently
+structured `modular` pipeline sits beside it; see `PLAN.md`). `src/dispatch.rs` holds the public
+entry points, which pick a pipeline by the `Method` enum of `src/lib.rs`, and `src/io.rs`, the
+CLI and `src/python.rs` sit on top of those.
 
-`src/modular.rs` and `src/modular/` hold that faster pipeline, under construction and not yet
-reachable from `dispatch`. It computes modulo word-sized primes and lifts the results with the
-CRT, and shares no code with `reference`. Its primitives are `field` (Montgomery arithmetic,
+`src/modular.rs` and `src/modular/` hold the faster pipeline, which is still being extended and
+tuned. It computes modulo word-sized primes and lifts the results with the CRT, and shares no
+code with `reference`. Its primitives are `field` (Montgomery arithmetic,
 `Lanes<NL>` residues, and the `Ring` trait the stages are written against, which takes the
 primes as a context), `key` (curve classes packed into fixed-size keys that add like the
 classes, with a layout sized per run from coordinate bounds) and `table` (open-addressing
@@ -140,13 +141,16 @@ threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats pa
 next primes until `crt::Residues` gives a stable lift (the lift from all but the last
 `check_primes` primes must agree with those), with `Options` for the lane count and a minimum
 number of primes; big integers come from `num-bigint`, a provisional choice confined to `crt`.
-Everything is single-threaded so far. `Geometry` in `src/modular.rs` holds the integer data
+`compute_gw` derives the GW invariants from the lifted GV invariants
+(`multicover::gw_from_gv`, in `num-rational`), since they are not integers. It only supports
+truncation by `max_deg`, and everything is single-threaded so far. `Geometry` in `src/modular.rs` holds the integer data
 the stages read: the CY kind, the charges, one anticanonical row per part of the nef
 partition, and $M$ bilinear forms, one for a threefold ($\sum_t w_t \kappa_{tab}$) and one per
 reference surface for an n-fold, which give $I$ $M$ components. `src/modular/reference_tests.rs`
 compares $c_0$, $c_1$, $S_2$ and $I$ with the reference stages modulo the primes, curve by curve
 (a mismatch there pins a bug to a stage), and the GV invariants of `compute_gv` with those of
-`run_hkty`, which only agree on consistent geometries (not the toy threefold of `examples/`).
+`run_hkty` and the GW invariants of the two methods, which only agree on consistent geometries
+(not the toy threefold of `examples/` and the tests, where the methods give different results).
 
 The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
 (`src/reference.rs`), whose stages are submodules of `reference`:
@@ -172,14 +176,20 @@ indices differently (the first index is a reference surface in the n-fold case).
 
 ### Key cross-cutting patterns
 
-- **Generics select the coefficient type at compile time.** `run_hkty<T>` is generic over the
-  coefficient type, which is only ever `rug::Rational` today, and takes the `InvariantKind` and
-  `CYKind` enums at runtime. Every entry point — the four
+- **One dispatch, several entry points.** Every entry point — the four
   `compute_g{v,w}_rat_{threefold,nfold}` wrappers in `src/dispatch.rs`, and
-  `compute_gvgw_strings` in the same file, which is the single runtime dispatch used by both
-  `src/python.rs` and the CLI — is just a dispatch into that one generic. Adding an option here
-  means touching all of those dispatch sites. The computation is always exact: floating-point
-  arithmetic (the old `prec` option) was removed.
+  `compute_gvgw_strings` in the same file, which is the runtime dispatch used by both
+  `src/python.rs` and the CLI — goes through the private `dispatch::compute`, which picks the
+  pipeline from the `Method`: `Auto` (the default) runs `modular` when the request has
+  `max_deg` and no `min_points` or `target_points` (see `modular_unsupported`), and falls back
+  to `reference` otherwise or when the curve classes do not fit `modular`'s keys; `Modular`
+  makes an unsupported request a `ComputeError::Unsupported`; `Reference` always runs
+  `run_hkty`. The entry points return `Result<_, ComputeError>`, but only `modular`'s errors
+  get there: `run_hkty` still panics on invalid input. Both give only the nonzero invariants.
+  `run_hkty<T>` is generic over the coefficient type, which is only ever `rug::Rational` today,
+  and takes the `InvariantKind` and `CYKind` enums at runtime. Adding an option means touching
+  all of the dispatch sites. The computation is always exact: floating-point arithmetic (the old
+  `prec` option) was removed.
 - **`PolynomialCoeff<T>`** (`src/reference/polynomial/coefficient.rs`) is the compound trait the
   pipeline is written against, so that the exact number type can be swapped (`PLAN.md` plans a
   pure-Rust one next to `rug::Rational`). It is built almost entirely from `*Assign` traits:
@@ -214,11 +224,12 @@ indices differently (the first index is a reference surface in the n-fold case).
 
 `src/bin/cygv/main.rs` is a thin clap front end: it reads YAML from a file or stdin, parses it with
 `io::Input::load_all`, and writes one YAML document of results per input document to a file or
-stdout, flushing after each one. All of the parsing, validation, and formatting lives in
+stdout, flushing after each one. `--threads` and `--method` override the `n_threads` and
+`method` fields of every document. All of the parsing, validation, and formatting lives in
 `src/io.rs`, whose `Input` struct mirrors the arguments of `run_hkty` and whose field conventions
 match the Python API (each inner list is a *column*). `Input::from_yaml` rejects unknown fields and
-validates shapes eagerly — including a `process_int_nums` dry run — because `run_hkty` itself still
-unwraps its errors. `Input::compute` sorts the results by degree and then lexicographically by
+validates shapes eagerly — including a `process_int_nums` dry run, and `method: modular` without
+`max_deg` — because `run_hkty` itself still unwraps its errors. `Input::compute` sorts the results by degree and then lexicographically by
 curve class, since the order in which curve classes of equal degree come out of `run_hkty` is not
 deterministic. Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
 
@@ -237,8 +248,11 @@ parsed on the Python side into `int` or `fractions.Fraction` depending on `find_
 `python/cygv/hkty.py` wraps it: `compute_gv` / `compute_gw` normalize inputs to numpy arrays, infer
 `is_threefold` from the shape of `q` and the nef partition, and run the Rust call in a
 `multiprocessing.Process` so Ctrl-C interrupts the computation without killing the interpreter
-(the Rust side installs a ctrlc handler that calls `exit(1)`). The subprocess's stderr is redirected
-to a temp file and surfaced in the raised `RuntimeError` when the process dies.
+(the Rust side installs a ctrlc handler that calls `exit(1)`). They take `method` (a name, or
+`None` for the Rust default) and `n_threads`. Exceptions raised in the subprocess keep their type
+(an invalid `method` or a `ComputeError` is a `ValueError`), except panics, which become a
+`RuntimeError`. The subprocess's stderr is redirected to a temp file and surfaced in the raised
+`RuntimeError` when the process dies.
 
 Note the transpose convention: the Rust API takes column-major matrices, while the Python API
 takes row-oriented lists (`to_matrix` in `src/python.rs` treats each inner list as a column).
@@ -250,7 +264,8 @@ crossed with one or both `Variant`s (GV or GW), at a couple of maximum degrees. 
 like `fourfold/deg15/gw-rational` (the suffix predates the removal of the floating-point variants
 and is kept so that saved criterion baselines still match), and any argument after `--` that is
 not a flag filters on it. Adding a model or a degree means adding a row to `scenarios()`; nothing else has to
-change.
+change. Every scenario runs the reference pipeline (`Method::Reference`, explicitly, since the
+default is `Auto`); the modular pipeline has no benchmarks yet.
 
 There are two kinds of model. `threefold` ($h^{1,1} = 2$ hypersurface) and `fourfold` ($h^{1,1} = 6$
 CICY) are small, hardcoded, and run both variants. `h11_8`, `h11_9`, `h11_10` and `h11_11`

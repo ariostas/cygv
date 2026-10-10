@@ -58,6 +58,47 @@ impl CYKind {
     }
 }
 
+/// The likely causes of GV invariants that are not integers, for the error messages of both
+/// pipelines.
+pub(crate) const NON_INTEGER_CAUSES: &str = "this usually means that the input is \
+    inconsistent (e.g. charges and intersection numbers of different geometries, or a nef \
+    partition that is missing or wrong), or that the generators do not span the Mori cone or \
+    one of its faces";
+
+/// Which pipeline computes the invariants.
+///
+/// Both compute the same invariants exactly. The modular pipeline is much faster, but only
+/// supports truncation by a maximum degree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Method {
+    /// The modular pipeline when it supports the request, and the reference one otherwise.
+    #[default]
+    Auto,
+    /// The modular pipeline ([`mod@modular`]). A request it does not support is an error.
+    Modular,
+    /// The reference pipeline ([`mod@reference`]), a faithful implementation of the HKTY
+    /// procedure.
+    Reference,
+}
+
+impl Method {
+    /// The name of the method in the input formats.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Modular => "modular",
+            Self::Reference => "reference",
+        }
+    }
+
+    /// The method with the given name, ignoring case.
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Auto, Self::Modular, Self::Reference]
+            .into_iter()
+            .find(|m| m.as_str().eq_ignore_ascii_case(name))
+    }
+}
+
 // Re-export the main structs
 #[doc(inline)]
 pub use reference::polynomial::{

@@ -318,6 +318,7 @@ dependencies = [
  "gmp-mpfr-sys",
  "nalgebra",
  "num-bigint",
+ "num-rational",
  "pyo3",
  "rayon",
  "rug",

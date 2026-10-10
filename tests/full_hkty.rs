@@ -1,7 +1,10 @@
 use cygv::dispatch::{
     compute_gv_rat_nfold, compute_gv_rat_threefold, compute_gw_rat_nfold, compute_gw_rat_threefold,
+    ComputeError,
 };
-use nalgebra::{dmatrix, dvector, RowDVector};
+use cygv::Method;
+use nalgebra::{dmatrix, dvector, DMatrix, RowDVector};
+use rug::Rational;
 use std::collections::HashMap;
 
 #[test]
@@ -40,7 +43,9 @@ fn test_threefold() {
         nefpart.clone(),
         intnums.clone(),
         None,
-    );
+        Method::Reference,
+    )
+    .unwrap();
     compute_gw_rat_threefold(
         generators.clone(),
         grading_vector.clone(),
@@ -51,7 +56,9 @@ fn test_threefold() {
         nefpart.clone(),
         intnums.clone(),
         None,
-    );
+        Method::Reference,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -172,7 +179,9 @@ fn test_fourfold() {
         nefpart.clone(),
         intnums.clone(),
         None,
-    );
+        Method::Reference,
+    )
+    .unwrap();
     compute_gw_rat_nfold(
         generators.clone(),
         grading_vector.clone(),
@@ -183,5 +192,113 @@ fn test_fourfold() {
         nefpart.clone(),
         intnums.clone(),
         None,
+        Method::Reference,
+    )
+    .unwrap();
+
+    // Both methods give the same invariants of this complete intersection.
+    let gv = |method| {
+        let mut res = compute_gv_rat_nfold(
+            generators.clone(),
+            grading_vector.clone(),
+            Some(8),
+            None,
+            None,
+            q.clone(),
+            nefpart.clone(),
+            intnums.clone(),
+            None,
+            method,
+        )
+        .unwrap();
+        res.sort_unstable_by(|a, b| (a.0 .0.as_slice(), a.0 .1).cmp(&(b.0 .0.as_slice(), b.0 .1)));
+        res
+    };
+    let gw = |method| {
+        let mut res = compute_gw_rat_nfold(
+            generators.clone(),
+            grading_vector.clone(),
+            Some(8),
+            None,
+            None,
+            q.clone(),
+            nefpart.clone(),
+            intnums.clone(),
+            None,
+            method,
+        )
+        .unwrap();
+        res.sort_unstable_by(|a, b| (a.0 .0.as_slice(), a.0 .1).cmp(&(b.0 .0.as_slice(), b.0 .1)));
+        res
+    };
+    let expected = gv(Method::Reference);
+    assert!(!expected.is_empty());
+    assert_eq!(gv(Method::Modular), expected);
+    assert_eq!(gv(Method::Auto), expected);
+    let expected = gw(Method::Reference);
+    assert!(expected.len() > gv(Method::Reference).len());
+    assert_eq!(gw(Method::Modular), expected);
+}
+
+/// The quintic, through the entry points with each method.
+#[test]
+fn test_methods() {
+    let generators = dmatrix![1];
+    let grading_vector = RowDVector::from_row_slice(&[1]);
+    let q = DMatrix::from_element(5, 1, 1);
+    let intnums = HashMap::from([((0, 0, 0), 5)]);
+    let gv = |method, max_deg, min_points| {
+        compute_gv_rat_threefold(
+            generators.clone(),
+            grading_vector.clone(),
+            max_deg,
+            min_points,
+            None,
+            q.clone(),
+            Vec::new(),
+            intnums.clone(),
+            None,
+            method,
+        )
+        .map(|mut res| {
+            res.sort_unstable_by(|a, b| a.0.as_slice().cmp(b.0.as_slice()));
+            res
+        })
+    };
+    let gw = |method| {
+        let mut res = compute_gw_rat_threefold(
+            generators.clone(),
+            grading_vector.clone(),
+            Some(6),
+            None,
+            None,
+            q.clone(),
+            Vec::new(),
+            intnums.clone(),
+            None,
+            method,
+        )
+        .unwrap();
+        res.sort_unstable_by(|a, b| a.0.as_slice().cmp(b.0.as_slice()));
+        res
+    };
+
+    let expected = gv(Method::Reference, Some(6), None).unwrap();
+    assert_eq!(expected.len(), 6);
+    assert_eq!(expected[0], (dvector![1], 2875.into()));
+    assert_eq!(gv(Method::Modular, Some(6), None).unwrap(), expected);
+    assert_eq!(gv(Method::Auto, Some(6), None).unwrap(), expected);
+    let expected = gw(Method::Reference);
+    // GV_2 + GV_1 / 8
+    assert_eq!(expected[1].1, Rational::from((609250 * 8 + 2875, 8)));
+    assert_eq!(gw(Method::Modular), expected);
+
+    // The modular method only supports max_deg; auto falls back to the reference one.
+    assert_eq!(
+        gv(Method::Modular, None, Some(4)),
+        Err(ComputeError::Unsupported("min_points"))
     );
+    let expected = gv(Method::Reference, None, Some(4)).unwrap();
+    assert!(!expected.is_empty());
+    assert_eq!(gv(Method::Auto, None, Some(4)).unwrap(), expected);
 }

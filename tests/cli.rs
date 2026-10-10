@@ -127,3 +127,50 @@ fn test_missing_file() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("does_not_exist.yaml"), "{stderr}");
 }
+
+#[test]
+fn test_methods() {
+    // Both methods give the same invariants of the quintic, written the same way.
+    let quintic = "\
+generators: [[1]]
+grading_vector: [1]
+q: [[1, 1, 1, 1, 1]]
+intnums: [[0, 0, 0, 5]]
+max_deg: 6
+";
+    let input = format!("---\n{quintic}---\n{quintic}invariants: gw\n");
+    let outputs: Vec<String> = ["reference", "modular", "auto"]
+        .iter()
+        .map(|method| {
+            let output = run(&["--method", method], &input);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        })
+        .collect();
+    assert!(outputs[0].contains("{curve_class: [1], degree: 1, gv: 2875}"));
+    assert!(outputs[0].contains("{curve_class: [2], degree: 2, gw: '4876875/8'}"));
+    assert_eq!(outputs[1], outputs[0]);
+    assert_eq!(outputs[2], outputs[0]);
+
+    // The modular method needs max_deg, whether it is asked for in the input or with
+    // the flag, which overrides the input.
+    let input = quintic.replace("max_deg: 6", "min_points: 4");
+    for (args, data) in [
+        (&[][..], format!("{input}method: modular\n")),
+        (
+            &["--method", "modular"][..],
+            format!("{input}method: auto\n"),
+        ),
+    ] {
+        let output = run(args, &data);
+        assert!(!output.status.success());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("min_points"), "{stderr}");
+    }
+    let output = run(&["--method", "fast"], quintic);
+    assert!(!output.status.success());
+}

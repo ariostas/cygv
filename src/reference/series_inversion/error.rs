@@ -15,7 +15,11 @@ impl fmt::Display for SeriesInversionError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             SeriesInversionError::NonIntegerGVError => {
-                write!(f, "A non-integer GV invariant was found")
+                write!(
+                    f,
+                    "a GV invariant is not an integer; {}",
+                    crate::NON_INTEGER_CAUSES
+                )
             }
             SeriesInversionError::PolynomialError(e) => e.fmt(f),
         }

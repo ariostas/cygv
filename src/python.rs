@@ -1,5 +1,5 @@
 use crate::dispatch::compute_gvgw_strings;
-use crate::{CYKind, InvariantKind};
+use crate::{CYKind, InvariantKind, Method};
 use nalgebra::{DMatrix, DVector, RowDVector};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ fn to_matrix(m: Vec<Vec<i32>>, name: &str) -> PyResult<DMatrix<i32>> {
 /// Compute GV or GW invariants
 #[pyfunction]
 #[pyo3(name = "_compute_gvgw")]
-#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None))]
+#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, method=None))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
@@ -41,6 +41,7 @@ pub fn compute_gvgw(
     target_points: Option<Vec<Vec<i32>>>,
     nefpart: Option<Vec<Vec<i32>>>,
     n_threads: Option<u32>,
+    method: Option<&str>,
 ) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
     CTRLC_HANDLER.call_once(|| {
         ctrlc::set_handler(|| std::process::exit(1)).expect("failed to install ctrl-c handler");
@@ -62,6 +63,14 @@ pub fn compute_gvgw(
         InvariantKind::GW
     };
     let cy_kind = CYKind::from_is_threefold(is_threefold);
+    let method = match method {
+        None => Method::default(),
+        Some(name) => Method::from_name(name).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "unknown method \"{name}\", expected \"auto\", \"modular\" or \"reference\""
+            ))
+        })?,
+    };
 
     let res = compute_gvgw_strings(
         generators,
@@ -75,7 +84,9 @@ pub fn compute_gvgw(
         min_points,
         target_points,
         n_threads,
-    );
+        method,
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     Ok(res
         .into_iter()

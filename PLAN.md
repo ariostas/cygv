@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3 and 3b done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b and 4 done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -361,18 +361,38 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     changed (56 invariants instead of 79), and the CLI test pins the first one and the count.
     The stage-level test still also runs the data without the nef partition, which covers an
     n-fold with a single row.
-- [ ] **4. Front end.**
-  - [ ] The `Method { Auto, Modular, Reference }` argument through `dispatch`, `io::Input`,
+- [x] **4. Front end.**
+  - [x] The `Method { Auto, Modular, Reference }` argument through `dispatch`, `io::Input`,
     the CLI and Python. `auto` falls back to `reference` for requests `modular` does not
-    support; an explicit `modular` returns an error for them.
-  - [ ] GW.
-  - [ ] `n_threads` exposed in the Python API (it is accepted by `src/python.rs` but
-    `python/cygv/hkty.py` always passes `None`).
-  - [ ] `generators` optional in `io::Input` when `mori_hyperplanes` is given, with validation
-    reworked accordingly.
-  - [ ] Error messages for non-integer results that name the likely cause (an inconsistent
-    input, or a cone that is not a face) instead of only "CRT did not stabilize".
-  - [ ] `auto` made the default, once the differential tests of phases 3 and 3b pass.
+    support; an explicit `modular` returns an error for them. `Method` is in `src/lib.rs`;
+    every entry point takes it last and returns `Result<_, ComputeError>` (only `modular`'s
+    errors get there; `run_hkty` still panics). Unsupported: `min_points`, `target_points`,
+    and no truncation at all; `auto` also falls back when the curve classes do not fit the
+    keys (`KeyError::TooWide` / `BoundTooLarge`). `method` in the YAML (checked eagerly for
+    `modular`), `--method` / `-m` in the CLI, `method=` in Python (`None` means the Rust
+    default). Python exceptions from the subprocess now keep their type (`ValueError`).
+  - [x] GW. Derived from the lifted GV invariants (`multicover::gw_from_gv`, $\sum_{m \mid C}
+    \mathrm{GV}_{C/m}/m^e$ in `num-rational`, also provisional), since GW invariants are not
+    integers; the reference's GW output is exactly those, nonzero only. Differential tests
+    through `compute_gvgw_strings` (so the formatting of fractions is compared too) on the
+    quintic, P11222, the fourfold CICY and `h11_8`.
+  - [x] `n_threads` exposed in the Python API.
+  - [x] Error messages for non-integer results that name the likely cause (an inconsistent
+    input, or a cone that is not a face) instead of only "CRT did not stabilize". One text
+    (`NON_INTEGER_CAUSES` in `src/lib.rs`) for `modular::Error::NotStable` and the reference's
+    `NonIntegerGVError`.
+  - [x] `auto` made the default, once the differential tests of phases 3 and 3b pass.
+    Measured first, release CLI, `modular` on one thread against `reference` on eight, outputs
+    byte-identical in every case: `h11_8` deg 12 / 14: 0.45 / 1.6 s against 11 / 62 s;
+    `h11_9` deg 10 / 14: 0.17 / 2.1 s against 4.0 / 147 s; `h11_10` deg 8 / 10: 0.23 / 1.1 s
+    against 5.3 / 22 s; `h11_11` deg 10 / 12: 0.76 / 3.7 s against 6.1 / 32 s; fourfold
+    deg 15: 0.12 s against 0.74 s; GW on `h11_9` deg 12: 0.62 s against 24 s. Consequence for
+    the release notes: on inconsistent input with `max_deg` (such as the toy threefold the
+    README used) the default now gives different numbers, since neither pipeline's output
+    means anything there. The README examples now use P11222 instead. The benchmarks still
+    measure `reference`, explicitly.
+  - Moved to phase 6: `generators` optional in `io::Input` when `mori_hyperplanes` is given,
+    since that field arrives with the cone data.
 - [ ] **4b. Vex phases in the reference pipeline** (6.3, 6.11).
   - [ ] The `strata` input through the front end.
   - [ ] The three-negative bucket and the extra term in the reference instanton step.
@@ -383,6 +403,8 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
   interface that phase 7 plugs into.
   - [ ] Cone data (6.1) accepted by the Rust API and YAML. The Mori cone may be described by
     spanning vectors or by inequalities, plus equations for faces (section 7).
+  - [ ] `generators` optional in `io::Input` when `mori_hyperplanes` is given, with validation
+    reworked accordingly (moved from phase 4).
   - [ ] `candidates` enumerates each $K_T$ from its Hilbert basis, with the containment and
     vanishing-form skips. The candidate source is an interface, so phase 7b can plug in a
     native one (Hilbert bases or direct enumeration) without touching the rest.

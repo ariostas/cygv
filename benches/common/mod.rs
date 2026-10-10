@@ -9,7 +9,7 @@ use cygv::dispatch::{
     compute_gv_rat_nfold, compute_gv_rat_threefold, compute_gw_rat_nfold, compute_gw_rat_threefold,
 };
 use cygv::io::Input;
-use cygv::CYKind;
+use cygv::{CYKind, Method};
 use nalgebra::{dmatrix, dvector, DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
 
@@ -337,24 +337,30 @@ impl Scenario {
         let nefpart = m.nefpart.clone();
         let intnums = m.intnums.clone();
         let threads = n_threads();
+        // The benchmarks measure the reference pipeline for now.
+        let method = Method::Reference;
 
         match (self.variant, m.cy_kind) {
             (Variant::GvRat, CYKind::Threefold) => compute_gv_rat_threefold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads,
+                gens, grading, deg, None, None, q, nefpart, intnums, threads, method,
             )
+            .unwrap()
             .len(),
             (Variant::GwRat, CYKind::Threefold) => compute_gw_rat_threefold(
-                gens, grading, deg, None, None, q, nefpart, intnums, threads,
+                gens, grading, deg, None, None, q, nefpart, intnums, threads, method,
             )
+            .unwrap()
             .len(),
-            (Variant::GvRat, CYKind::Nfold) => {
-                compute_gv_rat_nfold(gens, grading, deg, None, None, q, nefpart, intnums, threads)
-                    .len()
-            }
-            (Variant::GwRat, CYKind::Nfold) => {
-                compute_gw_rat_nfold(gens, grading, deg, None, None, q, nefpart, intnums, threads)
-                    .len()
-            }
+            (Variant::GvRat, CYKind::Nfold) => compute_gv_rat_nfold(
+                gens, grading, deg, None, None, q, nefpart, intnums, threads, method,
+            )
+            .unwrap()
+            .len(),
+            (Variant::GwRat, CYKind::Nfold) => compute_gw_rat_nfold(
+                gens, grading, deg, None, None, q, nefpart, intnums, threads, method,
+            )
+            .unwrap()
+            .len(),
         }
     }
 }

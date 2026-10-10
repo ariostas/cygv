@@ -13,12 +13,18 @@
 //!
 //! A multiple of a curve with a nonzero GV invariant can have one of its own even when it has
 //! no coefficient in the instanton series, so those multiples are added on the way.
+//!
+//! The GW invariants are the $A_C$ (for an n-fold, the $A_{C,k}$). They are rational, so they
+//! are not computed modulo the primes but from the lifted GV invariants ([`gw_from_gv`]).
 
 use super::field::Ring;
 use super::key::KeyLayout;
 use super::table::{SlotMap, SparsePoly};
-use super::Error;
+use super::{CurveInvariants, Error};
 use crate::CYKind;
+use num_bigint::BigInt;
+use num_rational::BigRational;
+use std::collections::HashMap;
 
 /// The greatest common divisor of the absolute values of the coordinates.
 fn gcd(c: &[i32]) -> u32 {
@@ -111,12 +117,51 @@ pub fn multicover<R: Ring, L: KeyLayout>(
     Ok(map.take())
 }
 
+/// The GW invariants $A_C = \sum_{m \mid C} \mathrm{GV}_{C/m} / m^e$ of the curve classes of
+/// degree at most `max_deg`, from the GV invariants of those classes, with $e = 3$ for a
+/// threefold and $2$ for an n-fold. The result is in increasing order of degree and then
+/// curve class, and leaves out the classes where all of them vanish.
+pub fn gw_from_gv(
+    kind: CYKind,
+    gv: &[CurveInvariants],
+    max_deg: u32,
+) -> Vec<CurveInvariants<BigRational>> {
+    let exponent = if kind.is_threefold() { 3 } else { 2 };
+    let mut gw: HashMap<Vec<i32>, (u32, Vec<BigRational>)> = HashMap::new();
+    for inv in gv.iter().filter(|inv| inv.degree != 0) {
+        for m in 1..=max_deg / inv.degree {
+            let denom = BigInt::from(m).pow(exponent);
+            let curve = inv.curve.iter().map(|&x| x * m as i32).collect();
+            let (_, values) = gw.entry(curve).or_insert_with(|| {
+                (
+                    m * inv.degree,
+                    vec![BigRational::from_integer(0.into()); inv.values.len()],
+                )
+            });
+            for (x, v) in values.iter_mut().zip(&inv.values) {
+                *x += BigRational::new(v.clone(), denom.clone());
+            }
+        }
+    }
+    let zero = BigRational::from_integer(0.into());
+    let mut gw: Vec<CurveInvariants<BigRational>> = gw
+        .into_iter()
+        .filter(|(_, (_, values))| values.iter().any(|x| *x != zero))
+        .map(|(curve, (degree, values))| CurveInvariants {
+            curve,
+            degree,
+            values,
+        })
+        .collect();
+    gw.sort_unstable_by(|a, b| (a.degree, &a.curve).cmp(&(b.degree, &b.curve)));
+    gw
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::modular::field::{primes, LaneField, Lanes};
     use crate::modular::key::{PackedKey, PackedLayout};
-    use std::collections::HashMap;
 
     type E = Lanes<2>;
 
@@ -211,5 +256,49 @@ mod tests {
         assert!(multicover(&lf, &layout, kind, &coeffs, &inv, 4)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn test_gw_from_gv() {
+        let inv = |curve: Vec<i32>, degree, values: Vec<i64>| CurveInvariants {
+            curve,
+            degree,
+            values: values.into_iter().map(BigInt::from).collect(),
+        };
+        let gv = [
+            inv(vec![1, 0], 1, vec![8, 2]),
+            inv(vec![0, 1], 2, vec![0, 3]),
+            inv(vec![2, 0], 2, vec![-1, 0]),
+            inv(vec![1, 1], 3, vec![5, 0]),
+            // The degree that is too high is ignored.
+            inv(vec![3, 1], 5, vec![1, 1]),
+        ];
+        let rat = |v: &[(i64, i64)]| -> Vec<BigRational> {
+            v.iter()
+                .map(|&(n, d)| BigRational::new(n.into(), d.into()))
+                .collect()
+        };
+        let got = gw_from_gv(CYKind::Threefold, &gv, 4);
+        let expected = vec![
+            (vec![1, 0], 1, rat(&[(8, 1), (2, 1)])),
+            (vec![0, 1], 2, rat(&[(0, 1), (3, 1)])),
+            // GV(2, 0) + GV(1, 0) / 8
+            (vec![2, 0], 2, rat(&[(0, 1), (1, 4)])),
+            (vec![1, 1], 3, rat(&[(5, 1), (0, 1)])),
+            (vec![3, 0], 3, rat(&[(8, 27), (2, 27)])),
+            (vec![0, 2], 4, rat(&[(0, 1), (3, 8)])),
+            // GV(1, 0) / 64 + GV(2, 0) / 8
+            (vec![4, 0], 4, rat(&[(0, 1), (1, 32)])),
+        ];
+        let got: Vec<_> = got
+            .into_iter()
+            .map(|inv| (inv.curve, inv.degree, inv.values))
+            .collect();
+        assert_eq!(got, expected);
+
+        // Exponent 2 for an n-fold.
+        let got = gw_from_gv(CYKind::Nfold, &gv[..1], 2);
+        assert_eq!(got[1].curve, [2, 0]);
+        assert_eq!(got[1].values, rat(&[(2, 1), (1, 2)]));
     }
 }

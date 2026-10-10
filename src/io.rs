@@ -26,6 +26,9 @@
 //! # target_points may be given. When none of them is given, the generators are
 //! # taken to be the complete list of curve classes to use.
 //! min_points: 100
+//! # Which pipeline to use: auto, modular or reference. Defaults to auto, which
+//! # uses the modular one, which is much faster, whenever max_deg is given.
+//! method: auto
 //! ```
 //!
 //! The results are written back as one YAML document per input document.
@@ -45,9 +48,9 @@
 
 pub mod error;
 
-use crate::dispatch::compute_gvgw_strings;
+use crate::dispatch::{compute_gvgw_strings, modular_unsupported, ComputeError};
 use crate::reference::misc::process_int_nums;
-use crate::{CYKind, InvariantKind};
+use crate::{CYKind, InvariantKind, Method};
 use error::IoError;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
@@ -56,7 +59,7 @@ use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
 /// The fields that are accepted in an input document.
-const INPUT_FIELDS: [&str; 12] = [
+const INPUT_FIELDS: [&str; 13] = [
     "name",
     "generators",
     "grading_vector",
@@ -69,6 +72,7 @@ const INPUT_FIELDS: [&str; 12] = [
     "target_points",
     "is_threefold",
     "n_threads",
+    "method",
 ];
 
 /// The specification of a single computation of GV or GW invariants.
@@ -101,6 +105,8 @@ pub struct Input {
     pub target_points: Option<DMatrix<i32>>,
     /// The number of threads to use. It is deduced from the machine when [`None`].
     pub n_threads: Option<u32>,
+    /// Which pipeline to use.
+    pub method: Method,
 }
 
 /// A computed invariant, consisting of a curve class, a reference surface index that
@@ -185,6 +191,15 @@ impl Input {
         let n_threads = get_field(hash, "n_threads")
             .map(|y| as_u32(y, "n_threads"))
             .transpose()?;
+        let method = match get_field(hash, "method") {
+            None => Method::default(),
+            Some(y) => y.as_str().and_then(Method::from_name).ok_or_else(|| {
+                IoError::invalid_field(
+                    "method",
+                    "expected one of \"auto\", \"modular\" or \"reference\"",
+                )
+            })?,
+        };
 
         let cy_kind = match get_field(hash, "is_threefold") {
             None => infer_cy_kind(&q, &nefpart),
@@ -203,6 +218,14 @@ impl Input {
         .count();
         if n_truncations > 1 {
             return Err(IoError::ConflictingTruncations);
+        }
+        if method == Method::Modular {
+            if let Some(what) = modular_unsupported(max_deg, min_points, target_points.is_some()) {
+                return Err(IoError::invalid_field(
+                    "method",
+                    ComputeError::Unsupported(what).to_string(),
+                ));
+            }
         }
         // These are checked again, deeper in the computation, but the errors there are
         // not recoverable, so they are caught here to report them properly.
@@ -242,6 +265,7 @@ impl Input {
             min_points,
             target_points,
             n_threads,
+            method,
         })
     }
 
@@ -250,8 +274,8 @@ impl Input {
     /// The results are sorted by degree, and then by curve class and reference surface
     /// index. The last two are only used to break ties, since the order in which
     /// curve classes of equal degree are computed is not deterministic.
-    pub fn compute(&self) -> Vec<InvariantResult> {
-        let mut results = self.compute_unsorted();
+    pub fn compute(&self) -> Result<Vec<InvariantResult>, ComputeError> {
+        let mut results = self.compute_unsorted()?;
         results.sort_unstable_by(|a, b| {
             let (curve_a, curve_b) = (&a.0 .0, &b.0 .0);
             self.degree(curve_a)
@@ -259,7 +283,7 @@ impl Input {
                 .then_with(|| curve_a.as_slice().cmp(curve_b.as_slice()))
                 .then_with(|| a.0 .1.cmp(&b.0 .1))
         });
-        results
+        Ok(results)
     }
 
     /// The degree of a curve class under the grading vector.
@@ -273,7 +297,7 @@ impl Input {
 
     /// Run the computation specified by this input, leaving the results in the order
     /// in which they were computed.
-    fn compute_unsorted(&self) -> Vec<InvariantResult> {
+    fn compute_unsorted(&self) -> Result<Vec<InvariantResult>, ComputeError> {
         compute_gvgw_strings(
             self.generators.clone(),
             self.grading_vector.clone(),
@@ -286,6 +310,7 @@ impl Input {
             self.min_points,
             self.target_points.clone(),
             self.n_threads,
+            self.method,
         )
     }
 
@@ -618,6 +643,31 @@ min_points: 20
         assert_eq!(input.min_points, Some(20));
         assert_eq!(input.max_deg, None);
         assert_eq!(input.target_points, None);
+        assert_eq!(input.method, Method::default());
+    }
+
+    #[test]
+    fn test_parse_method() {
+        let base = THREEFOLD.replace("min_points: 20\n", "max_deg: 5\n");
+        for (name, method) in [
+            ("auto", Method::Auto),
+            ("Modular", Method::Modular),
+            ("reference", Method::Reference),
+        ] {
+            let input = load_one(&format!("{base}method: {name}\n")).unwrap();
+            assert_eq!(input.method, method);
+        }
+        assert!(matches!(
+            load_one(&format!("{base}method: fast\n")),
+            Err(IoError::InvalidField { field, .. }) if field == "method"
+        ));
+        // The modular method only supports max_deg, which is checked eagerly.
+        assert!(load_one(&format!("{THREEFOLD}method: auto\n")).is_ok());
+        assert!(matches!(
+            load_one(&format!("{THREEFOLD}method: modular\n")),
+            Err(IoError::InvalidField { field, reason })
+                if field == "method" && reason.contains("min_points")
+        ));
     }
 
     #[test]
@@ -783,7 +833,7 @@ min_points: 20
     #[test]
     fn test_results_are_sorted() {
         let input = load_one(THREEFOLD).unwrap();
-        let results = input.compute();
+        let results = input.compute().unwrap();
         assert!(results.len() > 1);
         let degrees: Vec<_> = results.iter().map(|((c, _), _)| input.degree(c)).collect();
         assert!(degrees.windows(2).all(|w| w[0] <= w[1]));
@@ -797,7 +847,7 @@ min_points: 20
     #[test]
     fn test_output_is_valid_yaml() {
         let input = load_one(THREEFOLD).unwrap();
-        let results = input.compute();
+        let results = input.compute().unwrap();
         assert!(!results.is_empty());
 
         let mut buf = Vec::new();

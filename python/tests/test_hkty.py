@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from fractions import Fraction
+
+import pytest
+
 from cygv import compute_gv, compute_gw
 
 
@@ -173,3 +177,29 @@ def test_fourfold() -> None:
     # For now, these are just smoke tests
     compute_gv(generators, grading_vector, q, intnums, min_points=100)
     compute_gw(generators, grading_vector, q, intnums, min_points=100)
+
+
+def test_methods() -> None:
+    # The quintic, which both methods support with max_deg.
+    generators = [[1]]
+    grading_vector = [1]
+    q = [[1, 1, 1, 1, 1]]
+    intnums = {(0, 0, 0): 5}
+    args = (generators, grading_vector, q, intnums)
+
+    expected = sorted(compute_gv(*args, max_deg=5, method="reference", n_threads=2))
+    assert expected[:2] == [((1,), 2875), ((2,), 609250)]
+    for method in (None, "auto", "modular", "Modular"):
+        assert sorted(compute_gv(*args, max_deg=5, method=method)) == expected
+    expected = sorted(compute_gw(*args, max_deg=5, method="reference"))
+    assert expected[1] == ((2,), Fraction(609250 * 8 + 2875, 8))
+    assert sorted(compute_gw(*args, max_deg=5, method="modular")) == expected
+
+    # The modular method only supports max_deg, and auto falls back to the reference.
+    expected = sorted(compute_gv(*args, min_points=3, method="reference"))
+    assert expected
+    assert sorted(compute_gv(*args, min_points=3, method="auto")) == expected
+    with pytest.raises(ValueError, match="min_points"):
+        compute_gv(*args, min_points=3, method="modular")
+    with pytest.raises(ValueError, match="unknown method"):
+        compute_gv(*args, max_deg=3, method="fast")

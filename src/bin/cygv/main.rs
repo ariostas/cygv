@@ -2,6 +2,7 @@
 
 use clap::Parser;
 use cygv::io::Input;
+use cygv::Method;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Write};
@@ -38,6 +39,10 @@ The optional fields are the following.
                  partition when it is not given.
   n_threads      The number of threads to use. It defaults to the number of
                  threads that are available.
+  method         Which pipeline to use: auto, modular or reference. It defaults
+                 to auto. The modular pipeline is much faster, but only supports
+                 max_deg; auto uses it when it can, and the reference pipeline
+                 otherwise.
 
 At most one of max_deg, min_points, and target_points may be given. When none of
 them is given, the generators are taken to be the complete list of curve classes
@@ -56,6 +61,14 @@ struct Args {
     /// Number of threads to use. It overrides the value given in the input
     #[arg(short = 'j', long, value_name = "N")]
     threads: Option<u32>,
+    /// Pipeline to use. It overrides the value given in the input
+    #[arg(short, long, value_parser = parse_method)]
+    method: Option<Method>,
+}
+
+/// Parse the name of a method.
+fn parse_method(name: &str) -> Result<Method, String> {
+    Method::from_name(name).ok_or_else(|| "expected auto, modular or reference".to_owned())
 }
 
 /// Whether a path refers to the standard input or output.
@@ -94,15 +107,18 @@ fn open_output(path: Option<&PathBuf>) -> Result<Box<dyn Write>, Box<dyn Error>>
 fn run(args: &Args) -> Result<(), Box<dyn Error>> {
     let data = read_input(args.file.as_ref())?;
     let mut inputs = Input::load_all(&data)?;
-    if let Some(n_threads) = args.threads {
-        for input in inputs.iter_mut() {
+    for input in inputs.iter_mut() {
+        if let Some(n_threads) = args.threads {
             input.n_threads = Some(n_threads);
+        }
+        if let Some(method) = args.method {
+            input.method = method;
         }
     }
 
     let mut writer = open_output(args.output.as_ref())?;
     for input in inputs.iter() {
-        let results = input.compute();
+        let results = input.compute()?;
         input.write_results(&mut writer, &results)?;
         // The results of each document are flushed as they are computed, so that they
         // can be inspected while the remaining ones are still being computed.

@@ -7,10 +7,10 @@
 //! thereby pinned to a stage. These comparisons hold for any input, consistent geometry or
 //! not.
 //!
-//! End to end: [`compute_gv`] and `run_hkty` must give the same GV invariants. This only
-//! holds for consistent geometries: on others the reference reads each invariant off the
-//! first nonzero coordinate of the curve, and the modular pipeline off the grading-weighted
-//! sum, which disagree.
+//! End to end: [`compute_gv`] and `run_hkty` must give the same GV invariants, and the two
+//! methods of [`compute_gvgw_strings`] the same GW invariants. This only holds for consistent
+//! geometries: on others the reference reads each invariant off the first nonzero coordinate
+//! of the curve, and the modular pipeline off the grading-weighted sum, which disagree.
 
 use super::candidates::candidates_by_enumeration;
 use super::field::{primes, LaneField, Lanes};
@@ -19,13 +19,14 @@ use super::key::{coordinate_bounds, KeyLayout, PackedKey, PackedLayout};
 use super::period::period;
 use super::table::SparsePoly;
 use super::{compute_gv, Geometry, Options};
+use crate::dispatch::compute_gvgw_strings;
 use crate::reference::fundamental_period::compute_omega;
 use crate::reference::instanton::compute_instanton_data;
 use crate::reference::misc::process_int_nums;
 use crate::reference::polynomial::properties::PolynomialProperties;
 use crate::reference::run_hkty;
 use crate::reference::semigroup::Semigroup;
-use crate::{CYKind, InvariantKind};
+use crate::{CYKind, InvariantKind, Method};
 use nalgebra::{DMatrix, DVector, RowDVector};
 use rug::{Integer, Rational};
 use std::collections::HashMap;
@@ -241,6 +242,37 @@ fn check_gv(case: &Case, options: &Options) {
     assert_eq!(got, expected, "{}", case.name);
 }
 
+/// Checks that both methods give the same GW invariants, formatted the same way.
+fn check_gw(case: &Case) {
+    let gw = |method| {
+        let res = compute_gvgw_strings(
+            case.generators.clone(),
+            RowDVector::from_row_slice(&case.grading_vector),
+            case.q.clone(),
+            case.nefpart.clone(),
+            case.intnums.clone(),
+            InvariantKind::GW,
+            case.cy_kind,
+            Some(case.max_deg),
+            None,
+            None,
+            None,
+            method,
+        )
+        .unwrap();
+        res.into_iter()
+            .map(|((c, k), gw)| ((c.as_slice().to_vec(), k), gw))
+            .collect::<HashMap<_, _>>()
+    };
+    let expected = gw(Method::Reference);
+    assert!(
+        expected.values().any(|gw| gw.contains('/')),
+        "{}: no fractions",
+        case.name
+    );
+    assert_eq!(gw(Method::Modular), expected, "{}", case.name);
+}
+
 fn quintic(max_deg: u32) -> Case {
     Case {
         name: "quintic",
@@ -304,6 +336,12 @@ fn test_several_passes() {
 #[test]
 fn test_p11222_gv() {
     check_gv(&p11222(12), &Options::default());
+}
+
+#[test]
+fn test_gw() {
+    check_gw(&quintic(10));
+    check_gw(&p11222(10));
 }
 
 #[test]
@@ -433,6 +471,16 @@ bench_gv_tests! {
 #[test]
 #[cfg(feature = "cli")]
 fn test_fourfold_gv() {
-    let case = load("fourfold", include_str!("../../examples/fourfold.yaml"), 10);
+    let mut case = load("fourfold", include_str!("../../examples/fourfold.yaml"), 10);
     check_gv(&case, &Options::default());
+    case.max_deg = 8;
+    check_gw(&case);
+}
+
+/// GW invariants of a realistic threefold.
+#[test]
+#[cfg(feature = "cli")]
+fn test_h11_8_gw() {
+    let yaml = include_str!("../../benches/data/h11_8.yaml");
+    check_gw(&load("h11_8", yaml, 5));
 }

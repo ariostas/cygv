@@ -28,6 +28,8 @@ def _compute_gvgw_subprocess(
     min_points: int | None = None,
     target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
+    n_threads: int | None = None,
+    method: str | None = None,
 ) -> None:
     with stderr_path.open("wb") as f:
         os.dup2(f.fileno(), 2)
@@ -44,9 +46,13 @@ def _compute_gvgw_subprocess(
                 min_points,
                 target_points,
                 nefpart,
-                None,
+                n_threads,
+                method,
             )
         )
+    # Errors that the Rust side reports, such as invalid input, keep their type.
+    except Exception as e:  # noqa: BLE001
+        conn.send(e)
     # The catch has to be this broad: a panic on the Rust side surfaces as a
     # PanicException, which derives from BaseException rather than Exception, and
     # it still needs to be reported back to the parent process.
@@ -68,6 +74,8 @@ def _wrapped_compute_gvgw(
     min_points: int | None = None,
     target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
+    n_threads: int | None = None,
+    method: str | None = None,
 ) -> Any:
     parent_conn, child_conn = Pipe(duplex=False)
     with tempfile.NamedTemporaryFile(delete=False) as f:
@@ -87,6 +95,8 @@ def _wrapped_compute_gvgw(
             min_points,
             target_points,
             nefpart,
+            n_threads,
+            method,
         ),
     )
     process.start()
@@ -142,6 +152,8 @@ def compute_gv(
     min_points: int | None = None,
     target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
+    n_threads: int | None = None,
+    method: str | None = None,
 ) -> list[Any]:
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
@@ -159,6 +171,8 @@ def compute_gv(
         min_points,
         target_points,
         nefpart,
+        n_threads,
+        method,
     )
     if is_threefold:
         res = [(tuple(v), int(gv)) for ((v, _), gv) in res_tmp]
@@ -176,6 +190,8 @@ def compute_gw(
     min_points: int | None = None,
     target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
+    n_threads: int | None = None,
+    method: str | None = None,
 ) -> list[Any]:
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
@@ -193,6 +209,8 @@ def compute_gw(
         min_points,
         target_points,
         nefpart,
+        n_threads,
+        method,
     )
     if is_threefold:
         res = [(tuple(v), Fraction(gw)) for ((v, _), gw) in res_tmp]

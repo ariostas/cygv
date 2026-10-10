@@ -38,9 +38,11 @@ python = ["dep:pyo3", "dep:ctrlc"]
 clap = { version = "4.5.16", features = ["derive"], optional = true }
 ctrlc = { version = "3.4.4", optional = true }
 nalgebra = "0.35.0"
-# The big integers of the modular pipeline, which only needs them at the very end, to lift
-# residues by the CRT. A provisional choice (PLAN.md, decision 6.10).
+# The big integers and rationals of the modular pipeline, which only needs them at the very
+# end, to lift residues by the CRT and to turn GV into GW invariants. A provisional choice
+# (PLAN.md, decision 6.10).
 num-bigint = { version = "0.4.6", default-features = false, features = ["std"] }
+num-rational = { version = "0.4.2", default-features = false, features = ["num-bigint-std", "std"] }
 rayon = "1.12.0"
 # Only exact rationals are needed, so `rug`'s float and complex features (and with
 # them the MPFR and MPC builds) are left out.

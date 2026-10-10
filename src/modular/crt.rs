@@ -256,7 +256,7 @@ mod tests {
                     x = x * (1u128 << 64) + rng.next_u64();
                 }
                 x %= &half;
-                if rng.next_u64() % 2 == 0 {
+                if rng.next_u64().is_multiple_of(2) {
                     x = -x;
                 }
                 values.push(x);
