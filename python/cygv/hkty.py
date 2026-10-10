@@ -138,6 +138,172 @@ def _regularize_target_points(
     return target_points
 
 
+def _cgv_gvs(
+    generators: ArrayLike,
+    grading_vector: ArrayLike,
+    q: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
+    max_deg: int | None,
+    min_points: int | None,
+    target_points: ArrayLike | None,
+    nefpart: Sized | None,
+    device: str,
+) -> dict[tuple[int, ...], int]:
+    """GV invariants with the bundled cgv program (cgv/ in the repository), through
+    the same code as its standalone Python interface (cgv/tools/cgv_run.py).
+
+    device: "cpu", "gpu" (GPU 0), "gpu:N", or "auto" (a suitable GPU if this cygv was
+    built with cgv's GPU variant, else the CPU); see cgv_run.pick_device."""
+    if nefpart is not None and len(nefpart) > 0:
+        msg = "backend='cgv' supports hypersurfaces only (no nefpart)"
+        raise NotImplementedError(msg)
+    if not _is_threefold(q, nefpart):
+        msg = "backend='cgv' supports threefolds only"
+        raise NotImplementedError(msg)
+    if min_points is not None or target_points is not None or max_deg is None:
+        msg = "backend='cgv' needs max_deg (min_points and target_points are not supported)"
+        raise NotImplementedError(msg)
+    from cygv import _cgv_run  # noqa: PLC0415
+    from cygv.cygv import _cgv_executable, _cgv_gpu_executable  # noqa: PLC0415
+
+    d = {
+        "generators": [[int(x) for x in g] for g in np.array(generators, dtype=int)],
+        "grading_vector": [int(x) for x in np.array(grading_vector, dtype=int)],
+        "q": [[int(x) for x in r] for r in np.array(q, dtype=int)],
+        "intnums": [
+            [int(i), int(j), int(k), int(v)] for (i, j, k), v in intnums.items()
+        ],
+    }
+    gpu = _cgv_gpu_executable()
+    gpu_bin, hip = gpu if gpu is not None else (None, False)
+    extra = _cgv_run.pick_device(device, gpu_bin, hip=hip)  # type: ignore[no-untyped-call]
+    if extra:
+        if gpu_bin is None:
+            msg = "this cygv was built without cgv's GPU variant (build from source with nvcc or hipcc)"
+            raise ValueError(msg)
+        _cgv_run.BIN = gpu_bin
+    else:
+        _cgv_run.BIN = _cgv_executable()
+    threads = os.cpu_count() or 1
+    try:
+        out = _cgv_run.run_cgv(d, int(max_deg), threads, extra=extra)  # type: ignore[no-untyped-call]
+    except FileNotFoundError:
+        # no normaliz for the cone data: cgv enumerates the cone itself (same result, slower)
+        out = _cgv_run.run_cgv(d, int(max_deg), threads, extra=extra, cones=False)  # type: ignore[no-untyped-call]
+    gvs: dict[tuple[int, ...], int] = out[0]
+    return gvs
+
+
+def _cgv_phase_gvs(
+    cones: ArrayLike,
+    q: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
+    max_deg: int,
+    generators: ArrayLike | None,
+    grading_vector: ArrayLike | None,
+    saturate: bool,
+    device: str,
+) -> tuple[dict[tuple[int, ...], int], list[int]]:
+    """GV invariants in the phase given by a fan, with the bundled cgv program, through the same
+    code as its standalone Python interface (cgv/tools/cgv_phase.py). Returns (GVs, grading)."""
+    from cygv import _cgv_phase, _cgv_run  # noqa: PLC0415
+    from cygv.cygv import _cgv_executable, _cgv_gpu_executable  # noqa: PLC0415
+
+    try:
+        d = _cgv_phase.prepare(  # type: ignore[no-untyped-call]
+            [[int(x) for x in c] for c in cones],
+            [[int(x) for x in r] for r in np.array(q, dtype=int)],
+            {(int(i), int(j), int(k)): int(v) for (i, j, k), v in intnums.items()},
+            None
+            if generators is None
+            else [[int(x) for x in g] for g in np.array(generators, dtype=int)],
+            None
+            if grading_vector is None
+            else [int(x) for x in np.array(grading_vector, dtype=int)],
+            saturate,
+        )
+    except FileNotFoundError as e:
+        msg = "compute_gv_phase needs normaliz (e.g. conda install -c conda-forge normaliz)"
+        raise RuntimeError(msg) from e
+    gpu = _cgv_gpu_executable()
+    gpu_bin, hip = gpu if gpu is not None else (None, False)
+    extra = _cgv_run.pick_device(device, gpu_bin, hip=hip)  # type: ignore[no-untyped-call]
+    if extra and gpu_bin is None:
+        msg = "this cygv was built without cgv's GPU variant (build from source with nvcc or hipcc)"
+        raise ValueError(msg)
+    binary = gpu_bin if extra else _cgv_executable()
+    gvs, _ = _cgv_phase.run(
+        d, int(max_deg), os.cpu_count() or 1, binary=binary, extra=extra
+    )  # type: ignore[no-untyped-call]
+    grading: list[int] = d["grading_vector"]
+    return gvs, grading
+
+
+def compute_gv_phase(
+    cones: ArrayLike,
+    q: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
+    max_deg: int,
+    generators: ArrayLike | None = None,
+    grading_vector: ArrayLike | None = None,
+    saturate: bool = True,
+    device: str = "auto",
+) -> list[Any]:
+    """GV invariants of a CY threefold hypersurface in a given phase of the ambient toric variety:
+    an FRST or a vex fan (a fine regular fan that does not refine the face fan). Uses cgv.
+
+    cones: maximal cones of the fan, as tuples of column indices of q. q, intnums: as for compute_gv.
+    generators: Mori cone generators, or a subset (lightcone GVs); default: the fan's wall curves.
+    saturate: True uses every lattice point of the cone they span (normaliz Hilbert basis); False uses
+    exactly their semigroup. grading_vector: default an interior point of the dual cone. The result is
+    in the same format as compute_gv's. Needs normaliz. See cgv/README.md, "Any phase"."""
+    gvs, _ = _cgv_phase_gvs(
+        cones, q, intnums, max_deg, generators, grading_vector, saturate, device
+    )
+    return list(gvs.items())
+
+
+def compute_gw_phase(
+    cones: ArrayLike,
+    q: ArrayLike,
+    intnums: dict[tuple[int, int, int], int],
+    max_deg: int,
+    generators: ArrayLike | None = None,
+    grading_vector: ArrayLike | None = None,
+    saturate: bool = True,
+    device: str = "auto",
+    prec: int | None = None,
+) -> list[Any]:
+    """Genus-0 GW invariants in a given phase (see compute_gv_phase), from its GV invariants."""
+    if prec is not None:
+        mp.mp.prec = prec
+    gvs, grading = _cgv_phase_gvs(
+        cones, q, intnums, max_deg, generators, grading_vector, saturate, device
+    )
+    gws = _gw_from_gv(gvs, grading, max_deg)
+    return [
+        (b, (x if prec is None else mp.mpf(x.numerator) / x.denominator))
+        for b, x in gws.items()
+    ]
+
+
+def _gw_from_gv(
+    gvs: dict[tuple[int, ...], int], grading_vector: ArrayLike, max_deg: int
+) -> dict[tuple[int, ...], Fraction]:
+    """Genus-0 GW invariants of a threefold from its GV invariants:
+    GW(b) = sum over k | b of GV(b/k) / k^3."""
+    w = np.array(grading_vector, dtype=int)
+    gw: dict[tuple[int, ...], Fraction] = {}
+    for c, v in gvs.items():
+        deg = int(np.array(c, dtype=int) @ w)
+        k = 1
+        while deg * k <= max_deg:
+            b = tuple(k * x for x in c)
+            gw[b] = gw.get(b, Fraction(0)) + Fraction(v, k**3)
+            k += 1
+    return {b: x for b, x in gw.items() if x != 0}
+
+
 def compute_gv(
     generators: ArrayLike,
     grading_vector: ArrayLike,
@@ -148,7 +314,26 @@ def compute_gv(
     target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
     prec: int | None = None,
+    backend: str = "cygv",
+    device: str = "auto",
 ) -> list[Any]:
+    if backend == "cgv":
+        return list(
+            _cgv_gvs(
+                generators,
+                grading_vector,
+                q,
+                intnums,
+                max_deg,
+                min_points,
+                target_points,
+                nefpart,
+                device,
+            ).items()
+        )
+    if backend != "cygv":
+        msg = f"unknown backend {backend!r} (use 'cygv' or 'cgv')"
+        raise ValueError(msg)
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
@@ -184,9 +369,32 @@ def compute_gw(
     target_points: ArrayLike | None = None,
     nefpart: Sized | None = None,
     prec: int | None = None,
+    backend: str = "cygv",
+    device: str = "auto",
 ) -> list[Any]:
     if prec is not None:
         mp.mp.prec = prec
+    if backend == "cgv":
+        gvs = _cgv_gvs(
+            generators,
+            grading_vector,
+            q,
+            intnums,
+            max_deg,
+            min_points,
+            target_points,
+            nefpart,
+            device,
+        )
+        assert max_deg is not None  # checked by _cgv_gvs
+        gws = _gw_from_gv(gvs, grading_vector, max_deg)
+        return [
+            (b, (x if prec is None else mp.mpf(x.numerator) / x.denominator))
+            for b, x in gws.items()
+        ]
+    if backend != "cygv":
+        msg = f"unknown backend {backend!r} (use 'cygv' or 'cgv')"
+        raise ValueError(msg)
     generators = np.array(generators, dtype=int)
     grading_vector = np.array(grading_vector, dtype=int)
     q = np.array(q, dtype=int)
