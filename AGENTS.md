@@ -128,6 +128,16 @@ arithmetic, `Lanes<NL>` residues, and the `Ring` trait the stages are written ag
 takes the primes as a context), `key` (curve classes packed into fixed-size keys that add like
 the classes, with a layout sized per run from coordinate bounds) and `table` (open-addressing
 tables and sparse series over those keys, each entry holding a run-time number of values).
+Then come the first stages: `candidates` (for now the whole semigroup up to `max_deg`,
+enumerated in order of degree, filtered to the classes with at most two negative
+intersections), `period` (tables of factorials and harmonic numbers, then $c_0$, $c_1$ and
+the second derivatives already contracted with the bilinear forms, $S_2$) and `instanton`
+(sparse products and reciprocal, $\alpha$, and the instanton series $I$). `Geometry` in
+`src/modular.rs` holds the integer data they read: the charges, one anticanonical row per part
+of the nef partition, and $M$ bilinear forms, one for a threefold ($\sum_t w_t \kappa_{tab}$)
+and one per reference surface for an n-fold, which give $I$ $M$ components.
+`src/modular/reference_tests.rs` compares $c_0$, $c_1$, $S_2$ and $I$ with the reference stages
+modulo the primes, curve by curve; a mismatch there pins a bug to a stage.
 
 The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
 (`src/reference.rs`), whose stages are submodules of `reference`:

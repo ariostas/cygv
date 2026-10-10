@@ -55,6 +55,31 @@ pub trait Ring: Sync {
     fn is_zero(&self, a: Self::Elem) -> bool {
         a == Self::Elem::default()
     }
+
+    /// The inverses of $1, \dots, n - 1$, after a zero in place of the inverse of $0$, or
+    /// `None` if one of them has no inverse.
+    ///
+    /// The period tables are built from these. The default takes a single inverse, of
+    /// $(n - 1)!$, and recovers the others by multiplication, which is exact in a field; an
+    /// implementation that rounds overrides it to invert each integer by itself.
+    fn inverses(&self, n: usize) -> Option<Vec<Self::Elem>> {
+        let ints: Vec<_> = (0..n).map(|i| self.int(i as i64)).collect();
+        // prefix[i] = i!
+        let mut prefix = vec![self.one(); n.max(1)];
+        for i in 1..n {
+            prefix[i] = self.mul(prefix[i - 1], ints[i]);
+        }
+        let mut inv = vec![Self::Elem::default(); n];
+        if n > 1 {
+            // Runs from 1/(i!) down to 1/(1!), taking 1/i = (i - 1)! / i! along the way.
+            let mut inv_fact = self.inv(prefix[n - 1])?;
+            for i in (1..n).rev() {
+                inv[i] = self.mul(inv_fact, prefix[i - 1]);
+                inv_fact = self.mul(inv_fact, ints[i]);
+            }
+        }
+        Some(inv)
+    }
 }
 
 /// Arithmetic modulo an odd prime $p < 2^{62}$, in Montgomery form.
@@ -489,6 +514,26 @@ mod tests {
         let seven = lf.int(7);
         assert_eq!(lf.inv(seven), None);
         assert!(!lf.is_zero(seven));
+    }
+
+    #[test]
+    fn test_inverses() {
+        let lf = LaneField::new([primes().next().unwrap(), 65_537]);
+        for n in [0, 1, 2, 3, 100] {
+            let inv = lf.inverses(n).unwrap();
+            assert_eq!(inv.len(), n);
+            for (i, &x) in inv.iter().enumerate() {
+                let expected = if i == 0 {
+                    Lanes::default()
+                } else {
+                    lf.inv(lf.int(i as i64)).unwrap()
+                };
+                assert_eq!(x, expected, "1/{i}");
+            }
+        }
+        // 7 has no inverse modulo 7.
+        assert_eq!(LaneField::new([7, 11]).inverses(8), None);
+        assert!(LaneField::new([7, 11]).inverses(7).is_some());
     }
 
     #[test]

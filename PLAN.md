@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d) and 1 done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1 and 2 done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -289,11 +289,29 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
   - [x] `table`: `SlotMap`, `SparsePoly`, `DegreeHeap`, `LevelTable`. Slots and terms carry
     a run-time number of values, which settles the value layout question of 6.3. The
     per-degree workspace built from level tables belongs to the extraction (phase 3).
-- [ ] **2. Period and instanton, enumeration path only.**
-  - [ ] Candidates by full enumeration.
-  - [ ] `period`.
-  - [ ] `instanton`.
-  - [ ] $I$, `c0` and `c1` tested against the reference stages mod p.
+- [x] **2. Period and instanton, enumeration path only.**
+  - [x] Candidates by full enumeration: `generated_semigroup` (the C's old `reduce_generators`
+    and `enumerate_semigroup` fused into one pass in order of degree, dropping redundant
+    generators on the way) and `candidates_by_enumeration` (at most two negatives).
+    Single-threaded on `h11_9` in release: 1.4 s at degree 14 and 15.7 s at degree 18 for
+    1.6 M and 10 M points, against 2.9 s and 21.0 s for the C's old enumeration (section 2).
+  - [x] `period`: `Tables` (built from `Ring::inverses`, the table construction hook of
+    4.1.5, whose default takes one inverse) and $c_0$, $c_{1,a}$, $S_2^{(k)}$ per candidate.
+    Written for several anticanonical rows and $M$ bilinear forms from the start (`Geometry`
+    in `modular.rs`), since that was cheaper than retrofitting it in 3b. $m < 0$ is an error
+    with fewer than two negatives and contributes nothing otherwise, until 6c. 0.1 s at
+    degree 14.
+  - [x] `instanton`: `mul_into` / `mul_scalar`, `recip`, $\alpha$ as one series with
+    $h^{1,1}$ values per term (that is the union of the supports the extraction takes), $V$
+    and $I$ with $M$ values per term. 25 ms at degree 14. Not done yet (phase 5): the
+    product $\sum_a \alpha_a V_a$ is symmetric under swapping its two factors, so half of
+    its pairs would do.
+  - [x] $I$, `c0` and `c1` tested against the reference stages mod p, and $S_2$ against the
+    reference's `c2` contracted with the forms (`modular/reference_tests.rs`), on two lanes,
+    at every element of the semigroup: the quintic, P(1,1,2,2,2)[8], the toy threefold
+    (one and two negatives), `h11_9` at degree 5, and the fourfold of `examples/` both as
+    the hypersurface it describes and as the CICY of the bench model (14 forms, two
+    anticanonical rows). Checked to fail when a sign or the 1/2 in $V$ is broken.
 - [ ] **3. Extraction, multicover, CRT**, single-threaded and simple (`apply_curve` only), for
   threefold hypersurfaces.
   - [ ] Provisional choice of the pure-Rust big-number crate, confined to `crt` and
@@ -305,12 +323,14 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     P(1,1,2,2,2)[8] and `benches/data`, not the toy threefold of `examples/`.
 - [ ] **3b. Complete intersections and n-folds** (6.3). Done before tuning so that phase 5
   optimises the final data layout.
-  - [ ] Multi-row `q0`.
-  - [ ] The $M$-component $I$.
+  - [x] Multi-row `q0`. Done in phase 2: `period` is the only stage that reads it.
+  - [ ] The $M$-component $I$. `instanton` produces it since phase 2 (tested against the
+    reference); the extraction still has to consume it.
   - [ ] The exponent-2 multicover.
   - [ ] Check which geometry `examples/fourfold.yaml` and the `fourfold` bench model each are
     (5.2).
-  - [ ] Differential tests against the reference on the fourfold models.
+  - [ ] Differential tests against the reference on the fourfold models. The stage-level
+    ones (period and instanton) exist since phase 2.
 - [ ] **4. Front end.**
   - [ ] The `Method { Auto, Modular, Reference }` argument through `dispatch`, `io::Input`,
     the CLI and Python. `auto` falls back to `reference` for requests `modular` does not

@@ -283,6 +283,35 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
         &self.vals[i * self.width..(i + 1) * self.width]
     }
 
+    /// Appends a term.
+    ///
+    /// The terms must be pushed in increasing order of degree, then key, and not all of
+    /// `values` may be zero; this is only checked in debug builds.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `values` does not have `width` entries.
+    pub fn push(&mut self, key: K, deg: u32, values: &[V]) {
+        assert_eq!(
+            values.len(),
+            self.width,
+            "a term needs one value per component"
+        );
+        debug_assert!(
+            !all_zero(values),
+            "the terms of a sparse series are nonzero"
+        );
+        debug_assert!(
+            self.keys
+                .last()
+                .is_none_or(|&k| (*self.degs.last().unwrap(), k) < (deg, key)),
+            "the terms of a sparse series are pushed in order"
+        );
+        self.keys.push(key);
+        self.degs.push(deg);
+        self.vals.extend_from_slice(values);
+    }
+
     /// The number of terms of degree at most `deg`, i.e. the end of their range.
     #[inline]
     pub fn len_upto(&self, deg: u32) -> usize {
@@ -314,6 +343,12 @@ impl DegreeHeap {
     #[inline]
     pub fn push(&mut self, deg: u32, slot: u32) {
         self.heap.push(Reverse((deg, slot)));
+    }
+
+    /// The lowest degree of a slot in the heap.
+    #[inline]
+    pub fn min_deg(&self) -> Option<u32> {
+        self.heap.peek().map(|Reverse((deg, _))| *deg)
     }
 
     /// Removes and returns a slot of the lowest degree.
@@ -557,6 +592,12 @@ mod tests {
             let n = model.iter().filter(|e| e.0 <= deg).count();
             assert_eq!(poly.len_upto(deg), n);
         }
+        // Pushing the same terms gives the same series.
+        let mut pushed = SparsePoly::new(2);
+        for (d, k, v) in &model {
+            pushed.push(*k, *d, v);
+        }
+        assert_eq!(pushed, poly);
         // The map is usable again after taking.
         assert_eq!(map.insert(PackedKey(5), 0), (0, true));
         assert!(SparsePoly::<PackedKey, u64>::new(1).is_empty());
@@ -574,12 +615,24 @@ mod tests {
         }
         assert_eq!(heap.len(), 1000);
         let mut last = None;
-        while let Some(slot) = heap.pop() {
+        while let Some(deg) = heap.min_deg() {
+            let slot = heap.pop().unwrap();
             let cur = (degs[slot as usize], slot);
+            assert_eq!(cur.0, deg);
             assert!(last < Some(cur));
             last = Some(cur);
         }
         assert!(heap.is_empty());
+        assert_eq!(heap.pop(), None);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "pushed in order")]
+    fn test_push_out_of_order() {
+        let mut poly = SparsePoly::new(1);
+        poly.push(PackedKey(1), 1, &[1u64]);
+        poly.push(PackedKey(0), 1, &[1u64]);
     }
 
     #[test]
