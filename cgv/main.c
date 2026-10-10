@@ -16,8 +16,9 @@
 
 static int input_maxdeg(const char *path) {
     FILE *f = fopen(path, "r");
-    int h, n, d;
+    int h, n, d, ver;
     if (!f) return -1;
+    if (fscanf(f, " cgv %d", &ver) != 1) { fclose(f); return -1; }   /* "cgv 2" header */
     if (fscanf(f, "%d %d %d", &h, &n, &d) != 3) d = -1;
     fclose(f);
     return d;

@@ -1,18 +1,25 @@
 """Freeze cygv 0.2.3 outputs as regression references (tests/refs/*.json.gz).
 
-Each ref: {"name", "max_deg", "input": <cygv-style input dict>, "gvs": [[curve, "gv"], ...]}
-Existing cygv outputs for the hard case (data/2d7b127a/cygv_deg*.json) are reused.
+Each ref: {"name", "max_deg", "input": <cgv input dict>, "gvs": [[curve, "gv"], ...]}. The source inputs are
+cygv's ("generators": points whose nonnegative integer sums cover the Mori cone's lattice points); the refs store
+them as "mori_rays". Existing cygv outputs for the hard case (data/2d7b127a/cygv_deg*.json) are reused.
 """
-import gzip, json, os, sys
+import gzip, json, os
 import numpy as np
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
-from cgv_run import run_cygv
 
 OUT = os.path.join(os.path.dirname(__file__), "refs")
 G = os.environ.get("GVS_DATA", os.path.expanduser("~/gvs"))  # where the reference inputs live (only for regenerating refs)
 
 
+def run_cygv(d, max_deg):
+    import cygv
+    res = cygv.compute_gv(generators=d["generators"], grading_vector=d["grading_vector"], q=d["q"],
+                          intnums={(i, j, k): x for i, j, k, x in d["intnums"]}, max_deg=max_deg)
+    return {tuple(int(x) for x in c): int(v) for c, v in res}, None
+
+
 def save(name, d, D, gvs):
+    d = {("mori_rays" if k == "generators" else k): v for k, v in d.items()}
     ref = dict(name=name, max_deg=D, input=d, gvs=[[list(k), str(v)] for k, v in sorted(gvs.items())])
     with gzip.open(f"{OUT}/{name}.json.gz", "wt") as f:
         json.dump(ref, f)

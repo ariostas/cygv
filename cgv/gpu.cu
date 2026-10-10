@@ -1204,6 +1204,11 @@ extern "C" int gpu_extract(const GpuIn *in, GpuOut *out) {
     int small_levels = getenv("CGV_SMALL_LEVELS") ? atoi(getenv("CGV_SMALL_LEVELS")) : 1;
     u32 sl_nmax = getenv("CGV_SL_N") ? atoi(getenv("CGV_SL_N")) : 4096;
     u64 sl_wmax = getenv("CGV_SL_W") ? atoll(getenv("CGV_SL_W")) : 8192;
+    /* progress lines (verbose runs): at most one per CGV_PROGRESS_S seconds (default 30), checked once per batch */
+    double hb_every = getenv("CGV_PROGRESS_S") ? atof(getenv("CGV_PROGRESS_S")) : 30, hb_t0 = wall(), hb_last = hb_t0;
+#define GPU_HB(DD, NC, B) do { double t_ = wall(); if (in->verbose && t_ - hb_last >= hb_every) { hb_last = t_; \
+        fprintf(stderr, "    ... gpu extraction %.0fs: layer d=%d of %d (%u curves), batch %d of this layer; %lld curves through this layer\n", \
+                t_ - hb_t0, (DD), D, (unsigned)(NC), (B), (long long)napplied); } } while (0)
     for (int dd = 1; dd <= D; ) {
         /* jump to the next degree that has points (gradings can have sparse degrees) */
         {
@@ -1366,6 +1371,7 @@ extern "C" int gpu_extract(const GpuIn *in, GpuOut *out) {
                 tt[T_EMIT] += wall() - tb;
                 { int ov = d2h1(d.overflow); if (ov) { fprintf(stderr, "cgv gpu: overflow flag %d after emit (bundled layer %d)\n", ov, dd); return 1; } }
                 nbatches++; layB++; layEnt += nent;
+                GPU_HB(dd, nc, layB);
                 est_b = std::max((double)nent / ((double)nb * (nuT ? nuT : 1)), 0.7 * est_b);
                 b0 += nb; force = 0; bmaxb = nbund;
             }
@@ -1595,6 +1601,7 @@ extern "C" int gpu_extract(const GpuIn *in, GpuOut *out) {
               est_nu = std::max((double)nent / (sumnu + nb), 0.7 * est_nu); } /* slowly decaying max */
             c0 += nb;
             layEnt += nent; layB++;
+            GPU_HB(dd, nc, layB);
             force_mask = 0; bmax = nc;
         }
         /* layer end: wait for the last emit, back to buffer 0, check the emit failure flag */

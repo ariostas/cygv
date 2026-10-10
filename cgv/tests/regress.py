@@ -13,7 +13,6 @@ ap.add_argument("--max-deg-cap", type=int, default=10**9, help="skip refs with m
 ap.add_argument("--filter", default="")
 ap.add_argument("--bin", default=None)
 ap.add_argument("--extra", default="", help="extra cgv arguments, e.g. '-g 1'")
-ap.add_argument("--no-cones", action="store_true", help="force the full-enumeration fallback")
 a = ap.parse_args()
 if a.bin:
     cgv_run.BIN = a.bin
@@ -26,7 +25,7 @@ for path in sorted(glob.glob(os.path.join(os.path.dirname(__file__), "refs", "*.
         continue
     want = {tuple(k): int(v) for k, v in ref["gvs"]}
     try:
-        got, dt, err = cgv_run.run_cgv(ref["input"], ref["max_deg"], a.threads, extra=a.extra.split(), cones=not a.no_cones)
+        got, dt, err = cgv_run.run_cgv(ref["input"], ref["max_deg"], a.threads, extra=a.extra.split())
     except RuntimeError as e:
         fails += 1
         print(f"ERROR {ref['name']:31s} D={ref['max_deg']:<5d} {str(e).strip().splitlines()[-1]}", flush=True)

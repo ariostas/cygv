@@ -1,12 +1,32 @@
 # Changes since the 2026-09-23 snapshot
 
+## Inputs (2026-10): only what the computation needs
+- **The Mori cone is given by any description**: `mori_rays` (any vectors spanning it) or `mori_hyperplanes`
+  (any inequalities cutting it out), redundant either way. No lattice points of the Mori cone and no Mori cone
+  Hilbert basis are needed. `tools/cgv_run.py` computes the Hilbert bases of the cones
+  K_T = Mori cone ∩ {Q_r·C >= 0 for r not in T} with normaliz (cached in `~/.cache/cgv`), and cgv lists the
+  candidate curves from them. The input dict key `generators` is now `mori_rays`, and `cgv_phase.compute_gv`'s
+  `generators=` argument is now `mori_rays=`. `cygv_compat.compute_gv` keeps cygv's signature.
+- **One candidate path**: the check that the given points cover every Mori cone lattice point up to the max degree
+  (and the slow full enumeration it fell back to) is gone. It decided only agreement with cygv, never cgv's
+  output, and cost up to 770 s / 79 GB on one region (now 91 s / 1 GB, identical output). `CGV_STRICT_SEMIGROUP`
+  and the `cgv: note` about missing Hilbert basis elements are gone with it.
+- **Input file format `cgv 2`** (written by `cgv_run.write_input`): grading, Q, intersection numbers, the K_T
+  Hilbert bases, then optional `lightcone` and `vex` sections. The original format is no longer read.
+- **Lightcone GVs**: `lightcone=[p, ...]` computes only the backward lightcones of the curves p (the curves C with
+  p - C in the Mori cone: exactly the curves whose GVs enter those of p), so the GVs are exact; `max_deg` then
+  defaults to the largest degree of the p. It replaces `generators=pts, saturate=False` (curves that are
+  nonnegative integer sums of pts), which dropped curves feeding in from outside and stopped with "CRT did not
+  stabilize" unless the cone of pts was a face of the Mori cone. That error now explains its usual cause.
+- **Removed**: `cgv_run.run_cygv` and the `--compare` option (`tests/make_refs.py` calls cygv itself).
+
 ## Behaviour
-- **Incomplete generator sets** (reported by the group): when the generators miss a Hilbert basis
-  element of their cone, cgv now prints `cgv: note: ...` and stays on the fast path instead of
-  falling back to slow full enumeration (178 s / 20 GB before). `compute_gvs` raises it as a Python
-  warning. Semantics: cgv computes over all lattice points of the cone (the saturated semigroup);
-  cygv uses the generated semigroup. Identical GVs in every case compared. `CGV_STRICT_SEMIGROUP=1`
-  restores the old behaviour.
+- **Vex phases** (new, additive): cgv accepts an optional strata section (one exact curve class per vex 3-cone)
+  and computes curves of negative anticanonical degree with the pole-free coefficient; before, it stopped with
+  "negative anticanonical degree". A vex 2-cone in the input stops with a pointer to MacFadden–Sheridan Prop. 5.
+  Inputs without the section behave exactly as before (identical output on all regression inputs, CPU and GPU).
+  `tools/cgv_phase.py` builds the input from a fan, `q` and `kappa`; `tests/vex_regress.py` tests it.
+- **Incomplete generator sets**: superseded by the input changes above (2026-10).
 - **GPU hand-off threshold** 300k -> 200k instanton points (measured on NVIDIA and AMD): mid-size jobs
   now use the GPU (e.g. a D22 job 3.8 s on CPU -> 1.2 s on an RTX 5090).
 

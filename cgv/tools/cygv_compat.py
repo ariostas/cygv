@@ -19,7 +19,7 @@ def compute_gv(generators, grading_vector, q, intnums, max_deg=None, min_points=
     if max_deg is None:
         raise NotImplementedError("cgv: max_deg is required")
     # prec is accepted and ignored: cgv is exact (modular arithmetic + CRT)
-    d = dict(generators=[[int(x) for x in g] for g in generators],
+    d = dict(mori_rays=[[int(x) for x in g] for g in generators],   # cgv uses every lattice point of their cone
              grading_vector=[int(x) for x in grading_vector],
              q=[[int(x) for x in r] for r in q],
              intnums=[[int(i), int(j), int(k), int(v)] for (i, j, k), v in intnums.items()])
