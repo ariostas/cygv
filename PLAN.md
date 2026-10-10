@@ -10,7 +10,7 @@ Section 6 lists the decisions that need an answer before implementation starts.
 
 ## 1. What PR #94 does
 
-It adds `cgv/`, a standalone C program (`gv.c`, 2226 lines, plus a 88-line driver), and wires it
+It adds `cgv/`, a standalone C program (`gv.c`, 2226 lines in #94, 2279 after the #100 sync, plus a 88-line driver), and wires it
 in as `compute_gv(..., backend="cgv")`: `build.rs` compiles it with `cc`, the binary is embedded
 in the crate with `include_bytes!`, written to a cache directory on first use, and run as a
 subprocess through a text file. A Python helper (`_cgv_run.py`) shells out to the `normaliz`
@@ -105,6 +105,9 @@ What this says about where the speed comes from:
 - The cone trick (step 3) is worth another ~15–20× on top, and is the only part that needs
   Hilbert bases. `normaliz` took ~1.7 s per geometry for the 91 cones of `h11_9` (cached after).
 - With cone data, extraction (step 6) dominates deep runs (7.6 of 7.9 s for `h11_8` at 20).
+- Since the oracle sync (0d) the C has no path without cone data any more (#100 deleted it), so
+  the middle column can no longer be reproduced with it. The performance target for tuning is
+  the with-cone-data column (phase 5).
 
 ## 3. How much of the existing machinery can be shared
 
@@ -212,11 +215,20 @@ connects the pieces (`cgv/gpu.h`, `CGV_RESIDUES` / `tools/crt_combine.py`, the `
    lift and the stability check take residue sets from any source. That is the distributed
    mode's whole requirement (plus a serialisation of the residue set), and it is also what
    `check_primes` and "at least n primes" from the certifier need.
-5. **Stages are generic over the coefficient, not hard-wired to residues.** The certifier
-   (6.5) is the same pipeline over upward-rounded non-negative reals; the C gets it by swapping
-   one type at compile time. So the stages are written against a small trait (zero, from
-   integer, add, sub, mul, fused multiply-add, exact inverse, is-zero) with the residue lanes
-   as the main implementer. Only the lane implementer needs to satisfy constraint 2.
+5. **Stages are generic over the coefficient, with hooks for the certifier.** The certifier
+   (6.5) is the pipeline over upward-rounded non-negative reals, but in the C it is more than a
+   type swap (`CGV_MAJ` in `gv.c`): alpha gets one coordinate per charge row (`ndiv + 1`
+   instead of $h^{1,1}$) to keep bounds tight, the factorial and inverse tables are built
+   differently, subtraction and negation become addition and identity, and during extraction
+   each point's source value is replaced by the bound implied by the candidate GVs. So:
+   - the coefficient trait has zero, from-integer, add, sub, *neg*, mul, fused multiply-add,
+     exact inverse, is-zero, and table construction belongs to the coefficient type;
+   - the period stage produces alpha in a coordinate system chosen by the caller (the
+     $h^{1,1}$ basis, or the charge rows), not hard-wired to $h^{1,1}$;
+   - the extraction interface (constraint 1) accepts an optional per-point source override.
+   Only the lane implementer needs to satisfy constraint 2. The alternative, a separate code
+   path for the certifier, would drop this constraint; the hooks are cheap if designed in from
+   phases 2–3 and expensive to retrofit.
 6. **Options travel in a struct.** `check_primes`, the lane override, the thread count, the
    saturation opt-out and anything added later (device, first prime index, minimum primes,
    tuning thresholds for the level-synchronous mode and table load factors) are fields of one
@@ -247,29 +259,39 @@ connects the pieces (`cgv/gpu.h`, `CGV_RESIDUES` / `tools/crt_combine.py`, the `
 2. **Period and instanton, enumeration path only**: candidates by full enumeration, `period`,
    `instanton`. Test $I$, `c0`, `c1` against the reference stages mod p.
 3. **Extraction, multicover, CRT**, single-threaded and simple (`apply_curve` only), for
-   threefold hypersurfaces. End-to-end differential tests against `run_hkty` on `examples/` and
-   `benches/data`.
+   threefold hypersurfaces. End-to-end differential tests against `run_hkty` on consistent
+   geometries only (5.2): P(1,1,2,2,2)[8] and `benches/data`, not the toy threefold of
+   `examples/`. Includes the test knob that forces several CRT passes (5.2).
 3b. **Complete intersections and n-folds** (decision 6.3): multi-row `q0`, the $M$-component
    $I$, the exponent-2 multicover. Differential tests against the reference on the fourfold
    models. Done before tuning so that phase 5 optimises the final data layout.
 4. **Front end**: the `Method { Auto, Modular, Reference }` argument through `dispatch`,
-   `io::Input`, the CLI and Python, plus GW. `auto` falls back to `reference` for requests
+   `io::Input`, the CLI and Python, plus GW. Also: `n_threads` exposed in the Python API (it is
+   accepted by `src/python.rs` but `python/cygv/hkty.py` always passes `None`); `generators`
+   becomes optional in `io::Input` when `mori_hyperplanes` is given, with validation reworked
+   accordingly; error messages for non-integer results that name the likely cause (an
+   inconsistent input, or a cone that is not a face) instead of only "CRT did not stabilize". `auto` falls back to `reference` for requests
    `modular` does not support; an explicit `modular` returns an error for them. `auto` only
    becomes the default once the differential tests of phases 3 and 3b pass.
 4b. **Vex phases in the reference pipeline** (6.3, 6.11): the `strata` input through the front
-   end, the extra term in the reference instanton step, defined behaviour for $m < 0$. Tested
-   against `cgv/tests/refs_vex` and the C oracle.
+   end, the three-negative bucket, the extra term in the reference instanton step, $m < 0$
+   kept out of the 1/2-negative routines, the error for $m < 0$ with fewer than two negatives.
+   Tested against `cgv/tests/refs_vex` and the C oracle.
 5. **Parallelism and tuning**: rayon over candidates / product chunks / curves per layer, sharded
    $I$ with per-shard locks, the level-synchronous mode for few large curves, lane probe. Add
-   bench scenarios; target parity with the C on the table in section 2.
+   bench scenarios; target parity with the C *with cone data* (section 2). Runs after phase 6.
+   Measure compile time and binary size here too: the code is generic over the key type, the
+   lane count and the coefficient type, and the combinations multiply.
 5b. **Make `rug` optional** (6.10): choose the pure-Rust crate from benchmarks, implement
    `PolynomialCoeff` for it, backend-neutral result types, the `rug` feature, then simplify
    the CI workflows and CLAUDE.md accordingly. After phase 4, so that `auto` already routes
    most requests to `modular` when the reference pipeline's default build gets slower.
    `modular` is written against the pure-Rust crate from phase 3 on, so a provisional choice
    is needed there; it is confined to `crt` and `multicover`.
-6. **Cone fast path through optional input.** `candidates` takes cone data (defined in 6.1) and
-   enumerates each $K_T$ from its Hilbert basis, with the containment and vanishing-form skips.
+6. **Cone fast path through optional input.** Runs before phase 5. `candidates` takes cone data
+   (defined in 6.1) and enumerates each $K_T$ from its Hilbert basis, with the containment and
+   vanishing-form skips. The candidate source is an interface, so phase 7b can plug in a
+   native one (Hilbert bases or direct enumeration) without touching the rest.
    The Mori cone may be described by spanning vectors or by inequalities. The data comes from
    the caller at this point: the Rust API and YAML accept it, and the Python wrapper may produce
    it with `normaliz`. This fixes the interface that phase 7 plugs into.
@@ -283,7 +305,9 @@ connects the pieces (`cgv/gpu.h`, `CGV_RESIDUES` / `tools/crt_combine.py`, the `
      vectors, in any dimension, with exact integers. Needed regardless of how 7b turns out: it
      gives the Mori cone's facets (target points, `mori_rays` input, the default grading) and
      the hull facets that phase 7c needs. Our own implementation or `howzat`, decided then.
-   - *7b, Hilbert bases: time-boxed prototype, then integrate or drop.* The $K_T$ bases.
+   - *7b, candidate lattice points without normaliz: time-boxed comparison, then integrate or
+     drop.* Direct enumeration of polytope lattice points against a correctly specified
+     Pottier algorithm (5.1).
 7c. **Phases from a fan** (6.3): derive `strata`, the default Mori rays and grading, and
    optionally check `kappa`, from the fan's maximal cones and `q`, without normaliz. Port of
    `cgv_phase.py`: rays as the integer Gale dual of `q`; walls (3-faces shared by two maximal
@@ -296,10 +320,12 @@ connects the pieces (`cgv/gpu.h`, `CGV_RESIDUES` / `tools/crt_combine.py`, the `
    outside the paper's assumptions (a fine fan on the boundary points of a reflexive
    4-polytope not interior to facets), e.g. vex 2-cones (MacFadden–Sheridan Prop. 5). Note
    that the vex path is only fully normaliz-free if 7b succeeds: each stratum adds a $K_T$
-   whose Hilbert basis is still needed.
-7d. **Saturation for the reference pipeline** (6.11): the Mori cone's Hilbert basis from rays or
-   inequalities with the 7b machinery, used as the reference's generators; `mori_hyperplanes`
-   accepted by both methods. Only if 7b is integrated.
+   whose lattice points are still needed.
+7d. **Saturation for the reference pipeline** (6.11): the lattice points of the Mori cone up to
+   `max_deg`, which is exactly the saturated semigroup the reference enumerates, from the 7b
+   machinery (directly if 7b uses polytope enumeration, from the Mori cone's Hilbert basis if
+   it uses Pottier). `mori_hyperplanes` accepted by both methods. Only if 7b is integrated;
+   afterwards `auto` has one saturation semantics (6.2).
 8. **Certifier** (6.5): the majorant run, fed with the candidate GVs, behind its own switch;
    tested against `cgv_maj` on the benchmark geometries. Optional extras in the same phase:
    generator-reduction back-port to `Semigroup`.
@@ -308,7 +334,10 @@ connects the pieces (`cgv/gpu.h`, `CGV_RESIDUES` / `tools/crt_combine.py`, the `
 
 Follow-ups after the main plan: GPU and the other C features (6.8).
 
-Phases 1–5 need no decision except 6.5–6.7 and deliver the ~70× column of section 2.
+**Execution order.** The numbers are kept for cross-references, but phase 6 runs *before*
+phase 5: 0–4b, then 6–6c, then 5–5b, then 7 onwards (7a can start any time). Tuning without
+cone data would optimise the wrong profile: there the enumeration is ~90 % of the run, with cone
+data the extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
 
 ### 5.1 Phase 7 in detail: cone computations without normaliz
 
@@ -316,50 +345,58 @@ Goal: produce the cone data of 6.1 inside the crate, so the fast path does not d
 external program. No suitable crate was found on crates.io (no Hilbert basis crate, no normaliz
 or 4ti2 bindings; `howzat` does double description only and has not been evaluated).
 
-The problem is much narrower than the general one normaliz solves:
+What is actually needed is narrower than a Hilbert basis. `modular` needs the *lattice points*
+of each $K_T$ up to `max_deg`, and the reference (7d) needs those of the Mori cone up to
+`max_deg`. Each is the set of integer points of a bounded polytope
+$P_T = K_T \cap \{w \cdot x \le \texttt{max\_deg}\}$, whose inequalities are all known once
+7a has produced the Mori cone's facets: those facets, the rows $Q_r$ for $r \notin T$, and the
+degree bound. Hilbert bases are one route to those points (the C's: enumerate non-negative
+integer sums of the basis), not the only one. Two candidates, compared in a time-boxed
+prototype:
 
-- `modular` does not need the Mori cone's own Hilbert basis (6.1), only its support hyperplanes,
-  from whatever description the input gives. The reference pipeline does need it for
-  saturation (6.11, phase 7d), and the same algorithm produces it.
-- Each $K_T$ (including one per vex 3-cone) is that cone cut by a few halfspaces $Q_r \cdot C \ge 0$. Cutting a cone with a
-  known Hilbert basis by one halfspace is Pottier's algorithm (normaliz's "dual mode"): split
-  the basis by the sign of $Q_r \cdot C$, keep adding irreducible sums of a positive and a
-  negative element until nothing new appears, keep the non-negative ones.
-- Only elements of degree ≤ `max_deg` are needed, and sums only increase degree, so the
-  completion can be truncated. The result then depends on the grading vector and `max_deg`,
-  unlike normaliz's output.
-- The cones are nested ($K_\emptyset \subset K_{\{r\}} \subset K_{\{r,s\}}$), so intermediate
-  bases can be shared.
+**A. Direct enumeration of the polytope's lattice points** (suggested in review).
+- Recursive coordinate-by-coordinate enumeration: at each level, bounds on the next coordinate
+  given the ones already fixed. Exact bounds come from linear programming over the rationals, or
+  cheaper floating-point LP with exact checks at the leaves; Fourier–Motzkin projection is the
+  LP-free alternative but can blow up in dimension ~10.
+- Risk: it is not automatically output-sensitive. Weak bounds make it explore empty branches,
+  and an LP per node is costly at $10^5$–$10^6$ points. A change of lattice basis aligned with
+  the cone (e.g. from a simplicial subcone) can tighten the bounds.
+- Gives the reference's saturated semigroup (7d) with no Hilbert basis at all.
 
-Pieces:
+**B. Pottier's algorithm, correctly specified.** Cutting a cone with a known Hilbert basis by
+one halfspace: split the basis by the sign of the new inequality, keep adding irreducible sums
+of a positive and a negative element until nothing new appears, keep the non-negative ones.
+- Start from a basis of the lattice ($\pm e_i$, or a lattice basis of the linear span for a
+  face), then cut by the Mori facets *without* truncation: during this stage the cones are not
+  inside the Mori cone, the grading is not positive on them, and truncating by degree would be
+  unsound. The result is the Mori cone's Hilbert basis (which 7d can use).
+- Then cut by the rows $Q_r$, $r \notin T$, *with* truncation at `max_deg`: from here every cone
+  lies inside the Mori cone, the grading is positive, and sums only increase degree. The nested
+  cones ($K_\emptyset \subset K_{\{r\}} \subset K_{\{r,s\}}$) share intermediate bases, and
+  two-divisor cones with vanishing form are skipped before computing them.
+- Risk: the untruncated first stage, i.e. the size of the Mori cone's Hilbert basis and of the
+  intermediate bases, at $h^{1,1}$ = 10–11.
 
-1. *Support hyperplanes of the Mori cone*, needed for the membership test inside the
-   irreducibility check. This is phase 7a, which is committed independently of the prototype
-   (also needed for target points and phase 7c). The caller may still supply them.
-2. *Truncated halfspace cutting* as above, with the reduction test.
-3. *Driver* over all $T$ with $\lvert T\rvert \le 2$, reusing intermediate bases and skipping
-   two-divisor cones with vanishing form before computing them.
+Both need the facets (7a), handle faces through the equations of their span, and must produce
+saturated results whatever lattice points the input lists (decision 6.2).
 
 Prototype protocol:
 
 - Run on the four `benches/data` geometries (and `h11_9` under its sparse grading) at their
-  Heavy and Huge degrees.
-- Correctness oracle: `normaliz` (installed locally) on the same cones, compared after
-  truncating its output to `max_deg`; plus identical candidate sets and GVs end to end.
-- Unsaturated input (`h11_11.yaml`): the $K_T$ bases must come out saturated whatever lattice
-  points the input lists, per decision 6.2.
+  Heavy and Huge degrees, plus a face input and the vex references.
+- Correctness oracle: identical candidate sets to the C with normaliz-produced cone data, and
+  identical GVs end to end; for B also normaliz's Hilbert bases truncated to `max_deg`.
+- Unsaturated input (`h11_11.yaml`): the candidates must come out saturated.
 
 Exit criteria:
 
-- *Integrate* if every benchmark geometry takes at most a few seconds (normaliz: ~1.7 s for the
-  91 cones of `h11_9`) and matches the oracle. It becomes `src/modular/hilbert.rs`, feeding the
-  phase 6 interface; the optional-input path stays for callers that already have the data.
-- *Drop* if intermediate bases blow up or the time is not competitive with the enumeration
-  fallback. The optional-input path of phase 6 remains the only fast path, and the findings are
-  recorded here.
-
-Main risk: Pottier's algorithm can produce large intermediate bases, and its behaviour at
-$h^{1,1}$ = 10–11 is unknown until measured.
+- *Integrate* whichever approach takes at most a few seconds on every benchmark geometry
+  (normaliz: ~1.7 s for the 91 cones of `h11_9`) and matches the oracle. It becomes
+  `src/cone/` (shared, 6.11), feeding the phase 6 interface; the optional-input path stays for
+  callers that already have cone data.
+- *Drop* if neither does. The optional-input path of phase 6 remains the only fast path, and
+  the findings are recorded here.
 
 ### 5.2 Testing strategy
 
@@ -372,15 +409,35 @@ Layers, from cheapest to most independent:
    $S_2$ and $I$ against the reference's period and instanton data reduced modulo a prime. This
    pins a mismatch to a stage.
 3. *Differential tests in CI* (`tests/`): `modular` and `reference` on the same inputs must give
-   identical GVs and GWs. Inputs: `examples/`, the toy fourfold, the realistic models at low
-   degree, a face of the Mori cone, target points, complete intersections, n-folds, vex phases
-   (with 6.11 the reference covers all of these). Kept fast enough for every CI run.
+   identical GVs and GWs. Inputs must be *consistent geometries*: the toy threefold in
+   `examples/threefold.yaml` (the same data as `python/tests/test_hkty.py`) is not one, and
+   there the two methods legitimately disagree, because the reference reads each GV from the
+   first nonzero coordinate (`src/series_inversion.rs:161`) while `modular` uses the
+   grading-weighted sum. Replace it with P(1,1,2,2,2)[8] for $h^{1,1} = 2$, and add a cheap
+   consistency check to the reference ($\mathrm{inst}_t[C]/C_t$ equal across $t$) so that
+   inconsistent input is an error in both methods. Inputs then: P(1,1,2,2,2)[8], the realistic
+   models at low degree including `h11_9_plike` (hundreds of degree levels, which stresses the
+   level tables most), a face of the Mori cone, target points, complete intersections, n-folds,
+   vex phases. Kept fast enough for every CI run.
+   Paths that need forcing, because they never trigger at CI-sized degrees:
+   - *Several CRT passes*: a test knob that forces a small lane count and a minimum number of
+     primes, so the multi-pass merge (curves that appear only in later passes) and the
+     big-integer lift for three or more primes run.
+   - *"CRT did not stabilize"*: a non-face subcone input must fail with the explanatory error.
+   - *Candidate skips*: the containment and vanishing-form skips (`gv.c`, `build_candidates`)
+     silently drop curves if wrong; compare candidate sets with and without them.
+   - *Keys*: the coordinate-bound abort, and the fallback from packed keys to array keys.
 4. *Frozen fixtures*: expected values that come from neither implementation. A selection of
    `cgv/tests/refs` (outputs of cygv 0.2.3) and all or most of `refs_vex` (checked against an
    independent exact-rational implementation and across flops), converted to small compressed
    files under `tests/data/` with a size budget of about 1 MB, and read by an integration test.
    Converted in phase 9 at the latest, before `cgv/` is removed. They also catch a bug shared by
-   both implementations, which layer 3 cannot.
+   both implementations, which layer 3 cannot. Excluded from the published crate (`exclude` in
+   `Cargo.toml`). Gap: there is no independent reference for complete intersections or n-folds;
+   look for published tables to use as fixtures. Also open: `examples/fourfold.yaml` describes
+   itself as a hypersurface while the `fourfold` bench model has a nef partition; check which
+   geometry each one is before relying on them. And before shipping `refs_vex` as fixtures,
+   confirm with the PR author that their provenance allows it.
 5. *Stress test*, in the spirit of `cgv/tests/stress.py`: repeated runs at several thread
    counts, outputs compared with each other, to catch races in phase 5's parallel code. Marked
    `#[ignore]` and run before releases and on parallelism changes, not on every CI run.
@@ -402,7 +459,9 @@ Layers, from cheapest to most independent:
    exactly. `modular` does *not* need the Mori cone's own Hilbert basis: the $K_T$ already contain
    every candidate, and the basis was only ever used for the saturation check, which #100
    deletes. (The reference pipeline needs it to saturate, 6.11.)
-   The data is trusted: a wrong basis for some $K_T$ silently drops candidate curves.
+   The data is trusted: a wrong basis for some $K_T$ silently drops candidate curves. If phase
+   7b settles on enumerating lattice points directly (5.1), the native path needs only the
+   facets; the Hilbert bases remain the form in which callers can supply cone data.
 
    **Current direction**: optional input first (phase 6), then a time-boxed prototype of a
    native implementation (phase 7b, section 5.1) that either replaces the need for normaliz or
@@ -427,11 +486,16 @@ Layers, from cheapest to most independent:
    It is skipped only when (i) the dimension is too large for the computation to be practical,
    or (ii) the user disables it; in both cases the input generators are used as given, as the
    reference does. Consequences:
-   - This raises the stakes of phase 7: a native Hilbert basis computation is no longer only a
-     speed-up, it is what makes the default correct without an external program.
+   - This raises the stakes of phase 7: computing the candidates natively (7b) is no longer
+     only a speed-up, it is what makes the default correct without an external program.
    - Unlike the C after #100, we keep the enumeration of the *generated* semigroup, but only as
-     the path for the opt-out cases above (and as the phase 2 stepping stone). It needs lattice
-     points as input, so it is unavailable when the cone is given by rays or inequalities only.
+     the path for the opt-out cases above (and as the phase 2 stepping stone). Given only rays it
+     still runs, but generates the semigroup of the rays, which is usually far from saturated;
+     that combination gets a warning. With inequalities only it is unavailable.
+   - `auto` must not mix semantics silently. `modular` saturates; the reference saturates only
+     once phase 7d exists. Until then, a request that falls back to the reference reports (in
+     the stats struct, and as a warning in the CLI and Python) that it used the generated
+     semigroup. After 7d both methods saturate the same way.
    - Outputs can differ from the reference on unsaturated input, by design. Differential tests
      need saturated inputs, or the reference fed the completed generator set. Add `h11_11` as
      an explicit test of both.
@@ -501,14 +565,23 @@ Layers, from cheapest to most independent:
      $U_0\, d_{S,t}$ at every curve $C$ on a vex stratum, $\mathrm{inst}_t \mathrel{+}= c_0^{-1}
      P_t$. Contracting with the grading vector gives back the C's $S_2$ term $U_0\,(w\cdot
      d_S)$, and since the invariants do not depend on the grading, the per-$t$ split is forced.
-     This is my derivation from the C, to be validated against `refs_vex`. Curves with $m < 0$
-     that do not match a stratum contribute nothing, which also replaces the `as u32` wrap
-     (section 7) with defined behaviour.
+     This is my derivation from the C; the review checked it against `gv.c` and the reference's
+     $\beta = c_0^{-1} c_2$, and it is still to be validated against `refs_vex`. What else the
+     reference needs, matching the C:
+     - a bucket for curves with three negative intersections next to `group_by_neg_int`'s
+       0/1/2 (`src/fundamental_period.rs:18`), which today drops them;
+     - *every* curve with $m < 0$ kept out of `compute_c_1neg` / `compute_c_2neg` (some have
+       two negatives and land in `neg2` today, where `as u32` wraps), contributing only through
+       the stratum term when $S$ matches and nothing otherwise;
+     - $m < 0$ with fewer than two negative intersections is an error (`gv.c` does the same).
    - *Derivation from a fan: in the main plan (phase 7c, decided).* Deriving `strata`, the
      default Mori rays and grading, and the `kappa` check from the fan, i.e. the content of
      `cgv_phase.py`, natively and without normaliz. Its only normaliz uses are two small
      convex hulls, which the double description of phase 7a covers. Callers can still supply
      `strata` directly.
+   - In `modular`, a stratum whose rational class has a denominator divisible by one of the
+     primes makes that prime unusable: skip to the next prime instead of aborting as the C
+     does. (With ~62-bit primes this essentially never happens, but it must not be fatal.)
    - Validation: the C oracle and the 16 references in `cgv/tests/refs_vex` (6.6: sync `cgv/`).
    - The formula is taken from the C and the cited papers; we have not derived it ourselves.
 
@@ -580,6 +653,10 @@ Layers, from cheapest to most independent:
    - It proves the lift was not truncated. It does not check the input or the code, and it
      assumes the true invariants are integers.
    - Cost per the C's README: about one extra CPU run, with more memory.
+
+   Structurally it needs the hooks in 4.1.5 (alpha along charge rows, a per-point source
+   override in the extraction, negation in the coefficient trait); those are designed in from
+   phases 2–3 so phase 8 does not force a refactor. It rejects `strata`, as the C's does.
 
    To investigate when we get there: which number type provides the rigorous upward rounding.
    The C uses `long double` with the hardware rounding mode. `rug::Float` has directed rounding
@@ -662,7 +739,9 @@ Layers, from cheapest to most independent:
      rationals grow large. `modular` makes that unnecessary where it applies, but requests
      that stay on `reference` (`min_points`, `target_points`, anything `modular` rejects) have
      no float option any more.
-   - To check before it ships: whether CYTools or other callers pass `prec`.
+   - To check *before phase 0c starts*: whether CYTools or other callers pass `prec`. And a
+     deprecation path for Python: for one release `compute_gv` / `compute_gw` keep accepting
+     `prec`, emit a `DeprecationWarning` and return the exact values, then the keyword goes.
    - Done as its own commit right after phase 0b (phase 0c), before the `Method` argument is
      added, so the dispatch is rewritten once.
 
@@ -708,11 +787,11 @@ Layers, from cheapest to most independent:
    - *Vex phases*: `strata` in the reference period/instanton step (6.3), phase 4b. Done before
      the modular version, so phase 6c is checked against two independent implementations.
    - *Target points*: already in the reference (`Semigroup::with_target_points`).
-   - *Saturation and the Mori cone by any description* (6.2, 6.1): the reference enumerates
-     its semigroup from generators, so for it saturation means generating from the Mori cone's
-     Hilbert basis, computed from rays or inequalities. That brings back the one computation
-     `modular` no longer needs; it uses the same machinery (phase 7b on the Mori cone itself),
-     phase 7d. If 7b is dropped, the reference saturates only when that basis is supplied.
+   - *Saturation and the Mori cone by any description* (6.2, 6.1): the reference needs the
+     lattice points of the Mori cone up to `max_deg`, i.e. the saturated semigroup, from rays
+     or inequalities. The 7b machinery provides them, directly (polytope enumeration) or from
+     the Mori cone's Hilbert basis (Pottier); phase 7d. If 7b is dropped, the reference
+     saturates only when that basis is supplied.
    - *Fan to strata* (7c) and the cone computations (7a, 7b) are shared modules used by both.
    - *Not mirrored*: check primes and the certifier (the reference is exact), the lane probe,
      the future GPU and distributed modes. `min_points` and floats go the other way: dropped
@@ -721,6 +800,11 @@ Layers, from cheapest to most independent:
    `reference` is the fallback only for `min_points` and inputs `modular` cannot represent.
 
 ## 7. Notes and risks
+
+- Porting detail: the C computes dot products and $K_{ab}$ in `int` (`gv.c`, `dot`). Use `i64`
+  (or check bounds) in Rust.
+- The plan was reviewed by a separate agent on 2026-10-10; its findings are folded into 4.1.5,
+  5.1, 5.2, 6.2, 6.3, 6.5, 6.9, the phase list and this section.
 
 - **Latent bug in the reference pipeline, worth fixing on `main` independently of this work.**
   `compute_c_1neg` and `compute_c_2neg` (`src/fundamental_period.rs`) convert $q_0 \cdot C$ with
