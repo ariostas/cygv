@@ -10,7 +10,7 @@ use core::ops::{DivAssign, MulAssign};
 use error::PolynomialError;
 use nalgebra::DVector;
 use properties::PolynomialProperties;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 /// A polynomial structure.
 ///
@@ -40,14 +40,14 @@ where
     /// Create a new polynomial.
     pub fn new() -> Self {
         Self {
-            coeffs: HashMap::new(),
+            coeffs: HashMap::default(),
             nonzero: Vec::new(),
         }
     }
 
     /// Create a new polynomial with one as its constant term.
     pub fn one(zero: &T) -> Self {
-        let mut coeffs = HashMap::new();
+        let mut coeffs = HashMap::default();
         let mut one = zero.clone();
         one.assign(1i32);
         coeffs.insert(0, one);
@@ -399,7 +399,7 @@ macro_rules! polynomial {
     ( $t:expr, $( ($k:expr, $v:expr) ),* ) => {
         {
             let mut nonzero = Vec::new();
-            let mut coeffs = HashMap::new();
+            let mut coeffs = HashMap::default();
             $(
                 let mut c = $t.clone();
                 c.assign($v);
