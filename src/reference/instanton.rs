@@ -135,10 +135,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reference::Rational;
     use crate::reference::{fundamental_period::compute_omega, misc::process_int_nums};
     use crate::Semigroup;
     use nalgebra::{DMatrix, RowDVector};
-    use rug::Rational;
 
     #[test]
     fn test_instanton() {

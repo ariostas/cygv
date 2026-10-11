@@ -2,24 +2,22 @@
 
 use crate::reference::factorial::RecipMut;
 use core::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
-use rug::{Assign, Rational};
 use std::fmt::Display;
+
+/// Sets the value of a number in place, reusing its storage where it can.
+pub trait Assign<Src = Self> {
+    fn assign(&mut self, src: Src);
+}
 
 /// Tells whether a number is an integer.
 pub trait IsInteger {
     fn is_integer(&self) -> bool;
 }
 
-impl IsInteger for Rational {
-    #[inline]
-    fn is_integer(&self) -> bool {
-        Rational::is_integer(self)
-    }
-}
-
 /// A compound trait of all the traits a reasonable polynomial coefficient should have.
 ///
-/// Coefficients are exact, and [`Default`] must give zero.
+/// Coefficients are exact, and [`Default`] must give zero. The pipeline uses
+/// [`Rational`](crate::reference::Rational).
 pub trait PolynomialCoeff<T>:
     for<'a> Assign<&'a T>
     + for<'a> AddAssign<&'a T>
@@ -61,5 +59,3 @@ pub trait PolynomialCoeff<T>:
     + IsInteger
 {
 }
-
-impl PolynomialCoeff<Rational> for Rational {}

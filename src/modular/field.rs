@@ -376,7 +376,9 @@ impl<const NL: usize> Ring for LaneField<NL> {
 mod tests {
     use super::*;
     use crate::modular::TestRng;
-    use rug::{integer::IsPrime, Integer};
+    use malachite::base::num::arithmetic::traits::{Mod, ModInverse, ModPow};
+    use malachite::base::num::factorization::traits::IsPrime;
+    use malachite::{Integer, Natural};
 
     /// Primes of every size the arithmetic has to handle, from tiny to the largest allowed.
     fn sample_primes() -> Vec<u64> {
@@ -390,8 +392,8 @@ mod tests {
         for p in sample_primes() {
             let f = Field::new(p);
             assert_eq!(f.pinv.wrapping_mul(p), u64::MAX, "pinv for {p}");
-            let r2 = (Integer::from(1) << 128) % p;
-            assert_eq!(Integer::from(f.r2), r2, "r2 for {p}");
+            let r2 = (Natural::from(1u32) << 128u32) % Natural::from(p);
+            assert_eq!(Natural::from(f.r2), r2, "r2 for {p}");
         }
     }
 
@@ -401,7 +403,7 @@ mod tests {
         for p in sample_primes() {
             let f = Field::new(p);
             let big_p = Integer::from(p);
-            let modp = |x: Integer| x.modulo(&big_p).to_u64().unwrap();
+            let modp = |x: Integer| u64::try_from(&x.mod_op(&big_p)).unwrap();
             for _ in 0..2000 {
                 // Signed inputs, including ones beyond p, reduced on the way in.
                 let x = rng.next_u64() as i64;
@@ -415,13 +417,11 @@ mod tests {
                 assert_eq!(f.decode(f.neg(a)), modp(-bx.clone()));
                 assert_eq!(f.decode(f.mul(a, b)), modp(bx.clone() * &by));
                 let e = rng.next_u64() % 1000;
-                assert_eq!(
-                    f.decode(f.pow(a, e)),
-                    modp(bx.clone().pow_mod(&Integer::from(e), &big_p).unwrap())
-                );
-                match bx.clone().invert(&big_p) {
-                    Ok(i) => assert_eq!(f.decode(f.inv(a).unwrap()), modp(i)),
-                    Err(_) => assert_eq!(f.inv(a), None),
+                let x = modp(bx.clone());
+                assert_eq!(f.decode(f.pow(a, e)), x.mod_pow(e, p));
+                match x {
+                    0 => assert_eq!(f.inv(a), None),
+                    _ => assert_eq!(f.decode(f.inv(a).unwrap()), x.mod_inverse(p).unwrap()),
                 }
                 let u = rng.next_u64();
                 assert_eq!(f.decode(f.encode(u)), u % p);
@@ -443,8 +443,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "is not an odd prime")]
     fn test_field_rejects_large_prime() {
-        let p = Integer::from(1u64 << 62).next_prime();
-        Field::new(p.to_u64().unwrap());
+        let p = ((1u64 << 62) + 1..).find(|n| n.is_prime()).unwrap();
+        Field::new(p);
     }
 
     #[test]
@@ -455,8 +455,7 @@ mod tests {
 
     #[test]
     fn test_is_prime() {
-        let agrees =
-            |n: u64| is_prime(n) == (Integer::from(n).is_probably_prime(40) != IsPrime::No);
+        let agrees = |n: u64| is_prime(n) == n.is_prime();
         for n in 0..5000 {
             assert!(agrees(n), "{n}");
         }
@@ -476,11 +475,8 @@ mod tests {
 
     #[test]
     fn test_primes() {
-        let mut expected = Integer::from(1u64 << 62);
-        for p in primes().take(20) {
-            expected.prev_prime_mut();
-            assert_eq!(Integer::from(p), expected);
-        }
+        let expected = (0..1u64 << 62).rev().filter(|n| n.is_prime());
+        assert!(primes().take(20).eq(expected.take(20)));
     }
 
     #[test]

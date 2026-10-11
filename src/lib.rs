@@ -176,6 +176,10 @@ pub use python::cygv;
 #[doc(inline)]
 pub use cone::{CandidateCone, ConeData};
 
+// Re-export the big-number crate of the results, so that callers can name its types and
+// traits without depending on a matching version themselves.
+pub use malachite;
+
 // Re-export main functions
 #[doc(inline)]
 pub use dispatch::*;

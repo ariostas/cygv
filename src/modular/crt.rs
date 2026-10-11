@@ -18,7 +18,7 @@
 use super::field::{LaneField, Lanes};
 use super::key::Key;
 use super::table::{SlotMap, SparsePoly};
-use num_bigint::BigInt;
+use malachite::Integer;
 
 /// $a b \bmod p$
 #[inline]
@@ -95,12 +95,12 @@ impl<'a> Lift<'a> {
     }
 
     /// The lift with these digits.
-    fn integer(&self, digits: &[u64]) -> BigInt {
-        let mut x = BigInt::from(0);
-        let mut m = BigInt::from(1);
+    fn integer(&self, digits: &[u64]) -> Integer {
+        let mut x = Integer::from(0);
+        let mut m = Integer::from(1);
         for i in (0..digits.len()).rev() {
-            x = x * self.primes[i] + digits[i];
-            m *= self.primes[i];
+            x = x * Integer::from(self.primes[i]) + Integer::from(digits[i]);
+            m *= Integer::from(self.primes[i]);
         }
         if self.is_negative(digits) {
             x - m
@@ -205,7 +205,7 @@ impl<K: Key> Residues<K> {
 
     /// The lifts from all primes, as (curve, degree, `width` integers) in increasing order
     /// of degree and then key, leaving out the curves where all of them are zero.
-    pub fn lift(&self) -> Vec<(K, u32, Vec<BigInt>)> {
+    pub fn lift(&self) -> Vec<(K, u32, Vec<Integer>)> {
         let lift = Lift::new(&self.primes);
         let mut digits = vec![0; self.primes.len()];
         let mut order: Vec<u32> = (0..self.curves.len() as u32).collect();
@@ -214,14 +214,13 @@ impl<K: Key> Residues<K> {
             .into_iter()
             .filter_map(|s| {
                 let at = s as usize * self.width;
-                let values: Vec<BigInt> = (at..at + self.width)
+                let values: Vec<Integer> = (at..at + self.width)
                     .map(|i| {
                         lift.digits(|j| self.columns[j][i], &mut digits);
                         lift.integer(&digits)
                     })
                     .collect();
-                let zero = BigInt::from(0);
-                (values.iter().any(|v| *v != zero))
+                (values.iter().any(|v| *v != 0))
                     .then(|| (self.curves.key(s), self.curves.deg(s), values))
             })
             .collect()
@@ -234,6 +233,8 @@ mod tests {
     use crate::modular::field::primes;
     use crate::modular::key::PackedKey;
     use crate::modular::TestRng;
+    use malachite::base::num::arithmetic::traits::Mod;
+    use malachite::base::num::basic::traits::{NegativeOne, One, Zero};
 
     #[test]
     fn test_lift() {
@@ -241,19 +242,19 @@ mod tests {
         let lift = Lift::new(&ps);
         let mut rng = TestRng::new(31);
         for n in 1..=5 {
-            let m: BigInt = ps[..n].iter().map(|&p| BigInt::from(p)).product();
-            let half: BigInt = (&m - 1u32) / 2u32;
+            let m: Integer = ps[..n].iter().map(|&p| Integer::from(p)).product();
+            let half: Integer = (m - Integer::ONE) / Integer::from(2);
             let mut values = vec![
-                BigInt::from(0),
+                Integer::ZERO,
                 half.clone(),
                 -half.clone(),
-                BigInt::from(-1),
+                Integer::NEGATIVE_ONE,
             ];
             for _ in 0..20 {
                 // Random values of up to the full size, of either sign.
-                let mut x = BigInt::from(0);
+                let mut x = Integer::ZERO;
                 for _ in 0..n {
-                    x = x * (1u128 << 64) + rng.next_u64();
+                    x = (x << 64u32) + Integer::from(rng.next_u64());
                 }
                 x %= &half;
                 if rng.next_u64().is_multiple_of(2) {
@@ -263,10 +264,7 @@ mod tests {
             }
             let mut digits = vec![0; n];
             for x in values {
-                let res = |j: usize| {
-                    let p = BigInt::from(ps[j]);
-                    u64::try_from(((&x % &p) + &p) % &p).unwrap()
-                };
+                let res = |j: usize| u64::try_from(&(&x).mod_op(Integer::from(ps[j]))).unwrap();
                 lift.digits(res, &mut digits);
                 assert_eq!(lift.integer(&digits), x);
                 for (j, &q) in ps.iter().enumerate() {
@@ -295,7 +293,7 @@ mod tests {
     fn test_residues() {
         let ps: Vec<u64> = primes().take(6).collect();
         let lanes: Vec<LaneField<2>> = ps.chunks(2).map(|c| LaneField::new([c[0], c[1]])).collect();
-        let int = |v: &[i128]| v.iter().map(|&x| BigInt::from(x)).collect::<Vec<_>>();
+        let int = |v: &[i128]| v.iter().map(|&x| Integer::from(x)).collect::<Vec<_>>();
 
         // Small values: one pass is enough, with a lift from one prime checked by the other.
         let small = [(1, [5, -3]), (2, [0, 7]), (3, [-1, 0])];

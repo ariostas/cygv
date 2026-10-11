@@ -446,15 +446,9 @@ pub fn period<R: Ring, L: KeyLayout>(
 mod tests {
     use super::*;
     use crate::modular::field::{primes, LaneField};
+    use crate::modular::residue;
     use crate::CYKind;
-    use rug::{Integer, Rational};
-
-    /// The residue of a rational modulo `p`.
-    fn residue(x: &Rational, p: u64) -> u64 {
-        let p = Integer::from(p);
-        let (num, den) = x.clone().into_numer_denom();
-        (num * den.invert(&p).unwrap()).modulo(&p).to_u64().unwrap()
-    }
+    use malachite::{Integer, Rational};
 
     #[test]
     fn test_tables() {
@@ -463,12 +457,12 @@ mod tests {
         let tables = Tables::new(&lf, 40).unwrap();
         assert_eq!(tables.len(), 40);
         let mut fact = Integer::from(1);
-        let (mut h1, mut h2) = (Rational::new(), Rational::new());
+        let (mut h1, mut h2) = (Rational::default(), Rational::default());
         for n in 0..40u32 {
             if n > 0 {
-                fact *= n;
-                h1 += Rational::from((1, n));
-                h2 += Rational::from((1, n * n));
+                fact *= Integer::from(n);
+                h1 += Rational::from_unsigneds(1, n);
+                h2 += Rational::from_unsigneds(1, n * n);
             }
             for (l, f) in lf.fields().iter().enumerate() {
                 let p = f.p();
@@ -476,12 +470,12 @@ mod tests {
                 assert_eq!(at(&tables.fact), residue(&Rational::from(fact.clone()), p));
                 assert_eq!(
                     at(&tables.inv_fact),
-                    residue(&Rational::from((1, fact.clone())), p)
+                    residue(&Rational::from_integers(Integer::from(1), fact.clone()), p)
                 );
                 let inv = if n == 0 {
                     0
                 } else {
-                    residue(&Rational::from((1, n)), p)
+                    residue(&Rational::from_unsigneds(1, n), p)
                 };
                 assert_eq!(at(&tables.inv), inv);
                 assert_eq!(at(&tables.h1), residue(&h1, p));

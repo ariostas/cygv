@@ -4,8 +4,9 @@ version = "0.3.0"
 description = "Compute GV and GW invariants of CY manifolds."
 authors = ["Andres Rios Tascon"]
 edition = "2021"
-# Keep in sync with the newest API used (currently u32::is_multiple_of).
-rust-version = "1.87"
+# Keep in sync with the newest API used, or the oldest toolchain malachite supports
+# (currently 1.90), whichever is newer.
+rust-version = "1.90"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/ariostas/cygv"
 readme = "README.md"
@@ -37,16 +38,12 @@ python = ["dep:pyo3", "dep:ctrlc"]
 [dependencies]
 clap = { version = "4.5.16", features = ["derive"], optional = true }
 ctrlc = { version = "3.4.4", optional = true }
+# The big integers and rationals: the reference pipeline's coefficients, and the CRT lift
+# and GW invariants of the modular one. Pure Rust, so no C library has to be built.
+# Only integers and rationals are needed, so the floats are left out.
+malachite = { version = "0.13", default-features = false, features = ["rationals", "std"] }
 nalgebra = "0.35.0"
-# The big integers and rationals of the modular pipeline, which only needs them at the very
-# end, to lift residues by the CRT and to turn GV into GW invariants. A provisional choice
-# (PLAN.md, decision 6.10).
-num-bigint = { version = "0.4.6", default-features = false, features = ["std"] }
-num-rational = { version = "0.4.2", default-features = false, features = ["num-bigint-std", "std"] }
 rayon = "1.12.0"
-# Only exact rationals are needed, so `rug`'s float and complex features (and with
-# them the MPFR and MPC builds) are left out.
-rug = { version = "1.25.0", default-features = false, features = ["rational", "std"] }
 rustc-hash = "2"
 yaml-rust2 = { version = "0.13", optional = true }
 
@@ -57,14 +54,6 @@ optional = true
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
-# Only used by the memory benchmark, to route GMP allocations through a counting
-# allocator. Must stay compatible with the version `rug` links against. The
-# feature list must match what `rug` requests exactly (it depends on this crate
-# with `default-features = false` and, without its float feature, no features):
-# cargo fingerprints feature *names*, so a different list would create a second
-# build unit and rebuild GMP from source a second time, plus MPFR if it is asked
-# for.
-gmp-mpfr-sys = { version = "1.7", default-features = false }
 
 # Both benchmarks load their larger models from `benches/data` through the `io`
 # module, which is part of the `cli` feature.

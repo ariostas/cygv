@@ -18,17 +18,17 @@ use super::instanton::instanton;
 use super::key::{coordinate_bounds, KeyLayout, PackedKey, PackedLayout};
 use super::period::period;
 use super::table::SparsePoly;
-use super::{compute_gv, CandidateSource, Geometry, Options};
+use super::{compute_gv, residue, CandidateSource, Geometry, Options};
 use crate::dispatch::compute_gvgw_strings;
 use crate::reference::fundamental_period::compute_omega;
 use crate::reference::instanton::compute_instanton_data;
 use crate::reference::misc::process_int_nums;
 use crate::reference::polynomial::properties::PolynomialProperties;
-use crate::reference::run_hkty;
 use crate::reference::semigroup::Semigroup;
+use crate::reference::{run_hkty, Rational as Coeff};
 use crate::{CYKind, ConeData, InvariantKind, Method, Stratum};
+use malachite::Rational;
 use nalgebra::{DMatrix, DVector, RowDVector};
-use rug::{Integer, Rational};
 use std::collections::HashMap;
 
 const NL: usize = 2;
@@ -43,13 +43,6 @@ struct Case {
     cy_kind: CYKind,
     max_deg: u32,
     strata: Vec<Stratum>,
-}
-
-/// The residue of a rational modulo `p`.
-fn residue(x: &Rational, p: u64) -> u64 {
-    let p = Integer::from(p);
-    let (num, den) = x.clone().into_numer_denom();
-    (num * den.invert(&p).unwrap()).modulo(&p).to_u64().unwrap()
 }
 
 /// Checks that `ours` holds, at every element of the semigroup, the residues of the values
@@ -107,7 +100,7 @@ fn check(case: &Case) {
         case.max_deg,
     )
     .unwrap();
-    let pp = PolynomialProperties::<Rational>::new(&sg);
+    let pp = PolynomialProperties::<Coeff>::new(&sg);
     let (intnum_dict, idx_pairs, n_indices) =
         process_int_nums(case.intnums.clone(), case.cy_kind).unwrap();
     let fp = compute_omega(
@@ -173,13 +166,16 @@ fn check(case: &Case) {
         "{name}: candidates"
     );
 
-    let zero = Rational::new();
-    let at = |p: &crate::Polynomial<Rational>, e: usize| p.coeffs.get(&e).unwrap_or(&zero).clone();
+    let at = |p: &crate::Polynomial<Coeff>, e: usize| {
+        p.coeffs
+            .get(&e)
+            .map_or_else(Rational::default, |x| x.0.clone())
+    };
     compare(name, "c0", &lf, &keys, &pd.c0, |e, _| at(&ref_c0, e));
     compare(name, "c1", &lf, &keys, &pd.c1, |e, a| at(&ref_c1[a], e));
     compare(name, "S2", &lf, &keys, &pd.s2, |e, k| {
         let form = geometry.form(k);
-        let mut s = Rational::new();
+        let mut s = Rational::default();
         for a in 0..h11 {
             for b in a..h11 {
                 let kab = form[a * h11 + b];
@@ -187,21 +183,21 @@ fn check(case: &Case) {
                     continue;
                 }
                 let c2 = at(&ref_c2[&(a, b)], e);
-                s += c2 * kab / if a == b { 2 } else { 1 };
+                s += c2 * Rational::from(kab) / Rational::from(if a == b { 2 } else { 1 });
             }
         }
         // The stratum terms, which the reference keeps apart, contracted with the grading.
         for (t, p) in ref_vex.iter().enumerate() {
-            s += at(p, e) * case.grading_vector[t];
+            s += at(p, e) * Rational::from(case.grading_vector[t]);
         }
         s
     });
     compare(name, "I", &lf, &keys, &inst.inst, |e, k| {
         match case.cy_kind {
             CYKind::Threefold => {
-                let mut s = Rational::new();
+                let mut s = Rational::default();
                 for (t, p) in ref_inst.iter().enumerate() {
-                    s += at(p, e) * case.grading_vector[t];
+                    s += at(p, e) * Rational::from(case.grading_vector[t]);
                 }
                 s
             }
@@ -212,7 +208,7 @@ fn check(case: &Case) {
 
 /// Checks that the modular pipeline gives the GV invariants of the reference pipeline.
 fn check_gv(case: &Case, options: &Options) {
-    let reference = run_hkty::<Rational>(
+    let reference = run_hkty::<Coeff>(
         case.generators.clone(),
         RowDVector::from_row_slice(&case.grading_vector),
         InvariantKind::GV,
@@ -255,7 +251,7 @@ fn check_gv(case: &Case, options: &Options) {
     let mut got = HashMap::new();
     for inv in result {
         for (k, v) in inv.values.iter().enumerate() {
-            if *v != 0.into() {
+            if *v != 0 {
                 got.insert((inv.curve.clone(), k), v.to_string());
             }
         }

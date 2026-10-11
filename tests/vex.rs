@@ -6,10 +6,10 @@
 //! of the results, not the stored tables.
 
 use cygv::dispatch::{compute_gv_rat_threefold, ComputeError};
+use cygv::malachite::Integer;
 use cygv::modular;
 use cygv::{Method, Stratum};
 use nalgebra::{DMatrix, DVector, RowDVector};
-use rug::Integer;
 use std::collections::HashMap;
 
 /// The data of a threefold hypersurface, with the vectors as rows.

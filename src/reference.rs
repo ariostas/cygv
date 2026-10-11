@@ -5,6 +5,7 @@ pub mod fundamental_period;
 pub mod instanton;
 pub mod misc;
 pub mod polynomial;
+pub mod rational;
 pub mod semigroup;
 pub mod series_inversion;
 
@@ -14,6 +15,9 @@ use polynomial::{coefficient::PolynomialCoeff, properties::PolynomialProperties}
 use semigroup::Semigroup;
 use std::collections::HashMap;
 use std::thread;
+
+#[doc(inline)]
+pub use rational::Rational;
 
 // TODO: Need to handle errors properly
 #[allow(clippy::too_many_arguments)]

@@ -409,9 +409,10 @@ macro_rules! polynomial {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reference::polynomial::coefficient::Assign;
     use crate::reference::semigroup;
+    use crate::reference::Rational;
     use nalgebra::{DMatrix, RowDVector};
-    use rug::{Assign, Rational};
     use semigroup::Semigroup;
 
     // Construct simple data for testing

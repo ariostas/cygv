@@ -1,20 +1,13 @@
 //! Factorials and related numbers.
 
+use crate::reference::polynomial::coefficient::Assign;
 use core::cmp::Ordering;
 use core::ops::{AddAssign, DivAssign, MulAssign};
-use rug::{Assign, Rational};
 use std::collections::HashMap;
 
 /// Sets the value of a number to its reciprocal.
 pub trait RecipMut {
     fn recip_mut(&mut self);
-}
-
-impl RecipMut for Rational {
-    #[inline]
-    fn recip_mut(&mut self) {
-        Rational::recip_mut(self);
-    }
 }
 
 /// Computes the generalized harmonic number $H_{n,m}$.
@@ -23,7 +16,7 @@ impl RecipMut for Rational {
 ///
 /// We compute $H_{10,2}=\frac{1968329}{1270080}$.
 /// ```
-/// use rug::Rational;
+/// use cygv::reference::Rational;
 /// use cygv::reference::factorial;
 ///
 /// let mut h_10_2 = Rational::new();
@@ -52,7 +45,7 @@ where
 /// We perform the following computation.
 /// $$\frac{0!2!4!6!8!10!}{1!3!5!7!9!}=3840$$
 /// ```
-/// use rug::Rational;
+/// use cygv::reference::Rational;
 /// use cygv::reference::factorial;
 ///
 /// let mut res = Rational::new();
@@ -112,6 +105,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reference::Rational;
 
     #[test]
     fn test_harmonic() {

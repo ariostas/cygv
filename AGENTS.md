@@ -42,54 +42,18 @@ uv run pytest python/tests/test_hkty.py::test_threefold
 prek -a --quiet
 ```
 
-`rug` depends on GMP, which is compiled from source, so the first build is slow and needs a C
-toolchain plus `m4` and `make` (`configure: error: No usable m4 in $PATH` means `m4` is missing).
-CI sets `CC=clang` on all platforms; locally the default compiler is usually fine, and forcing
-`CC=clang` fails outright if clang is not installed. Windows builds go through MSYS2/MINGW64.
+Every dependency is pure Rust, so a stock Rust toolchain builds everything, on Windows the
+default MSVC one. The big integers and rationals come from `malachite` (LGPL-3.0-only, which
+GPL-3.0-or-later code may link: the combination is distributed under GPL-3.0). It replaced
+`rug`, whose GMP had to be compiled from source with a C toolchain, `m4` and `make` (and on
+Windows through MSYS2/MINGW64), and whose build and its caching dominated CI; see `PLAN.md`
+phase 5b for the comparison that chose it.
 
-That source build dominates CI, so both CI workflows cache it. (The timings below date from when
-MPFR was built too, before `rug`'s float feature was dropped, so GMP alone takes less. Back then
-it took ~13 min on Windows, where it used to be more than half the job.) `gmp-mpfr-sys` keeps the built libraries in the directory named by
-`GMP_MPFR_SYS_CACHE`, under a subdirectory keyed by version, target triple, `CC` and `CFLAGS`, and
-copies them back instead of rebuilding — about 3.5 MB, and a ~240 s build becomes ~8 s. The
-workflows point that variable at `$RUNNER_TEMP/gmp-mpfr-sys` and restore it with `actions/cache`.
-Two consequences worth remembering: `CC` must be set identically for every cargo invocation in a
-job (a step that drops it looks under a different `CC-*` subdirectory and rebuilds from source),
-and the cache does not depend on the cargo profile, so the whole Python matrix and the Rust
-workflow share one key per OS — which is also why the key hashes `Cargo.lock` rather than anything
-build-specific.
-
-Both workflows separately cache `~/.cargo/registry` and `target/` with a hand-rolled
-`actions/cache` step rather than `Swatinem/rust-cache`, because that action runs `cargo` from node
-instead of through the msys2 shell and would therefore key the Windows cache on the runner's
-preinstalled MSVC toolchain rather than the MINGW64 one doing the build. Two things that action
-handled for us have to be done explicitly. The toolchain version goes in the key (and in the
-restore-key prefix): a compiler upgrade invalidates every artifact in `target/`, and because
-`actions/cache` skips saving whenever the primary key hits exactly, a stale entry would otherwise
-never be replaced. And the two workflows use different key prefixes — `cargo-dev-` and
-`cargo-release-` — because the Rust workflow builds the dev profile and the Python workflow builds
-release; sharing a key would leave whichever job saved second restoring a `target/` with the wrong
-profile in it. Nothing prunes these entries, so they are considerably larger than the GMP one.
-
-The Windows Python job additionally installs with `--no-build-isolation`. maturin — the only entry
-in `build-system.requires` — has no MINGW64 wheel on PyPI, so pip's isolated build environment
-compiled it from source on every run, five minutes of work to duplicate the
-`mingw-w64-x86_64-python-maturin` that pacman had already installed. `deploy.yml` skips isolation
-on Windows for the same reason. The catch is that pip no longer enforces `build-system.requires`
-there, so the version pacman ships has to keep satisfying `>=1.5,<2.0` on its own.
-
-Both Windows jobs also set `PYO3_USE_RAW_DYLIB=0`. pyo3 0.29 started linking the Python DLL with
-rustc's `raw-dylib`, which writes the DLL name straight into the import table rather than taking it
-from an import library, and it takes that name from the interpreter configuration. For abi3 builds
-against pyo3 0.29 or newer, maturin stops letting pyo3 probe the interpreter and writes a
-`PYO3_CONFIG_FILE` of its own, which carries neither a `lib_name` nor any hint that the interpreter
-is a MinGW one — so pyo3 falls back to the MSVC name `python3.dll`, while MSYS2 ships
-`libpython3.dll`. Nothing fails while building, because raw-dylib needs no import library; the
-extension simply fails to load, with `ImportError: DLL load failed while importing cygv: The
-specified module could not be found`. Opting out restores what pyo3 0.28 did: link `-lpython3`, let
-the MinGW linker resolve it to `/mingw64/lib/libpython3.dll.a`, and import `libpython3.dll`. The
-variable is only read by pyo3's build script on Windows, so setting it job-wide is harmless
-elsewhere. It can go once maturin records the MinGW library name in the config file it generates.
+Both CI workflows cache `~/.cargo/registry` and the dependencies in `target/` with
+`Swatinem/rust-cache`, which keys on the job id, the toolchain and the lockfile. Both workflows
+name their job `build-and-test`, so each passes its own `key` (`dev` for the Rust workflow, which
+builds the dev profile, `release` for the Python one); sharing an entry would leave whichever job
+saved second restoring a `target/` built with the wrong profile.
 
 `[tool.uv] cache-keys` in `pyproject.toml` lists `src/**/*.rs`; without it uv would not rebuild the
 editable extension when only Rust sources change, and `uv run pytest` would test a stale build.
@@ -155,9 +119,9 @@ next primes until `crt::Residues` gives a stable lift (the lift from all but the
 `check_primes` primes must agree with those), with `Options` for the lane count (2 to 4 primes
 per pass; by default `choose_lanes` predicts it from a probe run at 3/4 of the degree, as the
 C's driver does), a minimum number of primes, the thread count and the extraction's tuning;
-big integers come from `num-bigint`, a provisional choice confined to `crt`.
+big integers (`malachite::Integer`) are only built by `crt`, for the final values.
 `compute_gw` derives the GW invariants from the lifted GV invariants
-(`multicover::gw_from_gv`, in `num-rational`), since they are not integers. Both truncate by
+(`multicover::gw_from_gv`, in `malachite::Rational`), since they are not integers. Both truncate by
 `max_deg` and optionally by target points: `lightcone` holds the union of their backward
 lightcones (the $C$ with $P - C$ in the Mori cone), tested by the Mori cone's hyperplanes with
 cone data and by membership in the generated semigroup otherwise (which is then enumerated up
@@ -218,16 +182,19 @@ indices differently (the first index is a reference surface in the n-fold case).
   `modular` takes its candidates from the cone data when there is any (the reference ignores
   it), and with cone data the generators may have no columns, in which case a request that
   needs the reference is a `ComputeError::MissingGenerators`.
-  `run_hkty<T>` is generic over the coefficient type, which is only ever `rug::Rational` today,
-  and takes the `InvariantKind` and `CYKind` enums at runtime. Adding an option means touching
+  `run_hkty<T>` is generic over the coefficient type, which is only ever `reference::Rational`
+  (`src/reference/rational.rs`) today, and takes the `InvariantKind` and `CYKind` enums at runtime. Adding an option means touching
   all of the dispatch sites. The computation is always exact: floating-point arithmetic (the old
   `prec` option) was removed.
 - **`PolynomialCoeff<T>`** (`src/reference/polynomial/coefficient.rs`) is the compound trait the
-  pipeline is written against, so that the exact number type can be swapped (`PLAN.md` plans a
-  pure-Rust one next to `rug::Rational`). It is built almost entirely from `*Assign` traits:
-  coefficient arithmetic is done in place to avoid allocating bignums. When adding a numeric
-  operation, add it as an in-place trait (see `RecipMut`, `IsInteger`) rather than a by-value
-  one. `Default` must give zero.
+  pipeline is written against, so that the exact number type can be swapped. It is built almost
+  entirely from `*Assign` traits (`Assign` itself is ours): coefficient arithmetic is done in
+  place to avoid allocating bignums. When adding a numeric operation, add it as an in-place trait
+  (see `RecipMut`, `IsInteger`) rather than a by-value one. `Default` must give zero.
+  `reference::Rational` implements it as a newtype over `malachite::Rational`, since the orphan
+  rule forbids implementing `AddAssign<i32>` and the like on the foreign type directly. The typed
+  entry points return `malachite::Integer` and `malachite::Rational`, and the crate re-exports
+  `malachite` so callers can name them.
 - **`Polynomial<T>`** (`src/reference/polynomial.rs`) is sparse over the fixed monomial set of the
   semigroup: `coeffs: HashMap<monomial index, T>` plus a sorted `nonzero: Vec<usize>` index list.
   Both must be kept consistent — code that inserts into `coeffs` directly (e.g. when assembling
@@ -348,19 +315,12 @@ since the truncation is by the other grading.
 - `benches/memory.rs` measures allocations. `cargo bench --bench memory` prints peak live bytes,
   total bytes allocated, allocation count, peak RSS and wall clock per scenario.
 
-Memory needs care because the bulk of it lives in GMP numbers, which C code allocates and Rust's
-global allocator therefore never sees. `benches/memory.rs` installs its own allocation functions
-through `gmp_mpfr_sys::gmp::set_memory_functions` plus a `GlobalAlloc` wrapper, so
-both sides feed the same counters. GMP passes the block size back on free and realloc, so no
-bookkeeping headers are needed. The hooks must be installed before any GMP object exists, which is
-why it happens first thing in `main`. Each scenario then runs in a child process (`--run <id>`,
-spawned by the parent), so peaks do not leak between scenarios and `VmHWM` reflects one scenario
-only. The `gmp-mpfr-sys` dev-dependency must stay compatible with the version `rug` links against,
-and must request exactly the features `rug` does: `default-features = false` and none at all,
-since `rug` is used with only its `rational` and `std` features. Cargo fingerprints feature
-*names*, not what they expand to, so a different list here splits it into a second build unit and
-compiles GMP from source a second time, doubling every cold CI build. Turning `rug`'s `float`
-feature back on would bring MPFR back, and this list would then have to name `mpfr` too.
+All of the memory goes through Rust's global allocator, the big numbers included, so
+`benches/memory.rs` counts it with a `GlobalAlloc` wrapper. Its counters are shared atomics, so
+its wall clock is inflated on allocation-heavy runs (twice criterion's on `threefold` at degree 50);
+take timings from criterion. Each scenario runs in a child process
+(`--run <id>`, spawned by the parent), so peaks do not leak between scenarios and `VmHWM` reflects
+one scenario only.
 
 Scenarios come in three `Tier`s. The high-degree ones are gated behind `CYGV_BENCH_HEAVY` because
 criterion has to run each of them ten or more times; the memory target runs everything once, so

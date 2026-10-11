@@ -29,9 +29,6 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, windows-2022]
-    defaults:
-      run:
-        shell: ${{ matrix.os == 'windows-2022' && 'msys2 {0}' || 'bash' }}
     env:
       # These are the artifacts users actually install, so the wheels must be
       # built from the committed lockfile rather than a fresh resolution.
@@ -40,62 +37,25 @@ jobs:
       # to be repeated inside CIBW_ENVIRONMENT below to reach the container
       # builds, and `build_sdist` ignores it, so the sdist job is unaffected.
       MATURIN_PEP517_ARGS: --locked
-      # pyo3 0.29 links the Python DLL with rustc's `raw-dylib`, which names the
-      # DLL in the import table instead of taking the name from an import
-      # library. It picks that name from the interpreter configuration, and for
-      # abi3 builds with pyo3 0.29 or newer maturin no longer lets pyo3 probe
-      # the interpreter: it writes a PYO3_CONFIG_FILE of its own, which carries
-      # no `lib_name` and no indication that the interpreter is a MinGW one. So
-      # pyo3 falls back to the MSVC name, `python3.dll`, while MSYS2 ships
-      # `libpython3.dll`. Nothing fails at build time — raw-dylib needs no
-      # import library — and the extension only fails to load, with
-      # "DLL load failed [...] The specified module could not be found".
-      # Opting out restores the pre-0.29 behaviour: pyo3 links `-lpython3`,
-      # the MinGW linker resolves that to `libpython3.dll.a`, and the extension
-      # imports `libpython3.dll`. Only Windows builds read this variable.
-      PYO3_USE_RAW_DYLIB: 0
     steps:
-      - name: Set up MSYS2
-        if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          path-type: inherit
-          update: true
-          install: >-
-            mingw-w64-x86_64-python-pip
-            mingw-w64-x86_64-python-build
-            mingw-w64-x86_64-python-maturin
-            mingw-w64-x86_64-rust
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-clang
-            mingw-w64-x86_64-cmake
-            diffutils
-            m4
-            make
-            git
-            curl
       - name: Check out repo
         uses: actions/checkout@v7
       - name: Build wheels
-        if: runner.os != 'Windows'
         run: |
           pipx run cibuildwheel
         env:
           CIBW_ENVIRONMENT: 'PATH="$HOME/.cargo/bin:$PATH" CARGO_TERM_COLOR="always" MATURIN_PEP517_ARGS="--locked"'
+          # The Windows runners already have cargo on the PATH, whose entries
+          # are separated by semicolons there.
+          CIBW_ENVIRONMENT_WINDOWS: 'CARGO_TERM_COLOR="always" MATURIN_PEP517_ARGS="--locked"'
           CIBW_BEFORE_BUILD: rustup show
           CIBW_BEFORE_BUILD_LINUX: >
             curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain=stable --profile=minimal -y &&
             rustup show
           CIBW_TEST_COMMAND: "pytest -vv {project}"
           CIBW_TEST_REQUIRES: pytest
-          CIBW_SKIP: "*_i686 cp39-macosx_x86_64 cp310-macosx_x86_64 cp311-macosx_x86_64"
+          CIBW_SKIP: "*_i686 *-win32 cp39-macosx_x86_64 cp310-macosx_x86_64 cp311-macosx_x86_64"
           CIBW_BUILD_VERBOSITY: 1
-      # CIBW has some issues building wheels with MSYS2
-      - name: Build wheels (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          CC=clang python -m build --wheel --no-isolation --outdir wheelhouse
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:

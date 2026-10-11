@@ -22,8 +22,7 @@ use super::key::KeyLayout;
 use super::table::{SlotMap, SparsePoly};
 use super::{CurveInvariants, Error};
 use crate::CYKind;
-use num_bigint::BigInt;
-use num_rational::BigRational;
+use malachite::{Integer, Rational};
 use std::collections::HashMap;
 
 /// The greatest common divisor of the absolute values of the coordinates.
@@ -125,28 +124,24 @@ pub fn gw_from_gv(
     kind: CYKind,
     gv: &[CurveInvariants],
     max_deg: u32,
-) -> Vec<CurveInvariants<BigRational>> {
+) -> Vec<CurveInvariants<Rational>> {
     let exponent = if kind.is_threefold() { 3 } else { 2 };
-    let mut gw: HashMap<Vec<i32>, (u32, Vec<BigRational>)> = HashMap::new();
+    let mut gw: HashMap<Vec<i32>, (u32, Vec<Rational>)> = HashMap::new();
     for inv in gv.iter().filter(|inv| inv.degree != 0) {
         for m in 1..=max_deg / inv.degree {
-            let denom = BigInt::from(m).pow(exponent);
+            let denom = Integer::from(u64::from(m).pow(exponent));
             let curve = inv.curve.iter().map(|&x| x * m as i32).collect();
-            let (_, values) = gw.entry(curve).or_insert_with(|| {
-                (
-                    m * inv.degree,
-                    vec![BigRational::from_integer(0.into()); inv.values.len()],
-                )
-            });
+            let (_, values) = gw
+                .entry(curve)
+                .or_insert_with(|| (m * inv.degree, vec![Rational::default(); inv.values.len()]));
             for (x, v) in values.iter_mut().zip(&inv.values) {
-                *x += BigRational::new(v.clone(), denom.clone());
+                *x += Rational::from_integers_ref(v, &denom);
             }
         }
     }
-    let zero = BigRational::from_integer(0.into());
-    let mut gw: Vec<CurveInvariants<BigRational>> = gw
+    let mut gw: Vec<CurveInvariants<Rational>> = gw
         .into_iter()
-        .filter(|(_, (_, values))| values.iter().any(|x| *x != zero))
+        .filter(|(_, (_, values))| values.iter().any(|x| *x != 0))
         .map(|(curve, (degree, values))| CurveInvariants {
             curve,
             degree,
@@ -263,7 +258,7 @@ mod tests {
         let inv = |curve: Vec<i32>, degree, values: Vec<i64>| CurveInvariants {
             curve,
             degree,
-            values: values.into_iter().map(BigInt::from).collect(),
+            values: values.into_iter().map(Integer::from).collect(),
         };
         let gv = [
             inv(vec![1, 0], 1, vec![8, 2]),
@@ -273,9 +268,9 @@ mod tests {
             // The degree that is too high is ignored.
             inv(vec![3, 1], 5, vec![1, 1]),
         ];
-        let rat = |v: &[(i64, i64)]| -> Vec<BigRational> {
+        let rat = |v: &[(i64, i64)]| -> Vec<Rational> {
             v.iter()
-                .map(|&(n, d)| BigRational::new(n.into(), d.into()))
+                .map(|&(n, d)| Rational::from_signeds(n, d))
                 .collect()
         };
         let got = gw_from_gv(CYKind::Threefold, &gv, 4);

@@ -41,9 +41,9 @@ use crt::Residues;
 use field::{LaneField, Lanes};
 use key::{KeyError, KeyLayout, PackedLayout};
 use lightcone::Lightcone;
+use malachite::base::num::logic::traits::SignificantBits;
+use malachite::{Integer, Rational};
 use nalgebra::{DMatrix, DVector};
-use num_bigint::BigInt;
-use num_rational::BigRational;
 use std::collections::{HashMap, HashSet};
 use table::SparsePoly;
 
@@ -446,7 +446,7 @@ impl Default for Options {
 
 /// The invariants of one curve class, integers for GV and rationals for GW.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CurveInvariants<T = BigInt> {
+pub struct CurveInvariants<T = Integer> {
     pub curve: Vec<i32>,
     pub degree: u32,
     /// One value per component of the instanton series: a single one for a threefold, and
@@ -492,7 +492,7 @@ pub fn compute_gw(
     targets: &[&[i32]],
     geometry: &Geometry,
     options: &Options,
-) -> Result<Vec<CurveInvariants<BigRational>>, Error> {
+) -> Result<Vec<CurveInvariants<Rational>>, Error> {
     run(
         source,
         grading_vector,
@@ -621,8 +621,9 @@ fn choose_lanes<L: KeyLayout>(run: &Run<'_, L>, options: &Options) -> Result<usi
     let mut bits: Vec<Option<f64>> = vec![None; probe_deg as usize + 1];
     for (_, deg, values) in residues.lift() {
         for v in values {
-            if v.bits() > 0 {
-                let b = (v.bits() - 1) as f64;
+            let n = v.significant_bits();
+            if n > 0 {
+                let b = (n - 1) as f64;
                 let max = &mut bits[deg as usize];
                 *max = Some(max.map_or(b, |m: f64| m.max(b)));
             }
@@ -759,6 +760,18 @@ impl TestRng {
         let span = (hi - lo) as u64 + 1;
         lo + (self.next_u64() % span) as i64
     }
+}
+
+/// The residue modulo a prime `p` of a rational whose denominator `p` does not divide.
+#[cfg(test)]
+pub(crate) fn residue(x: &Rational, p: u64) -> u64 {
+    use malachite::base::num::arithmetic::traits::{ModInverse, ModMul};
+    use malachite::Natural;
+    let reduce = |n: &Natural| u64::try_from(&(n % Natural::from(p))).unwrap();
+    let num = reduce(x.numerator_ref());
+    let num = if *x < 0u32 { (p - num) % p } else { num };
+    let den = reduce(x.denominator_ref());
+    num.mod_mul(den.mod_inverse(p).unwrap(), p)
 }
 
 #[cfg(test)]

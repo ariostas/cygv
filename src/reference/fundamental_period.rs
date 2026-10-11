@@ -650,8 +650,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reference::Rational;
     use nalgebra::RowDVector;
-    use rug::Rational;
     use std::collections::HashSet;
 
     #[test]

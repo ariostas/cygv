@@ -2,9 +2,9 @@ use cygv::dispatch::{
     compute_gv_rat_nfold, compute_gv_rat_threefold, compute_gw_rat_nfold, compute_gw_rat_threefold,
     ComputeError,
 };
+use cygv::malachite::Rational;
 use cygv::Method;
 use nalgebra::{dmatrix, dvector, DMatrix, RowDVector};
-use rug::Rational;
 use std::collections::HashMap;
 
 #[test]
@@ -306,7 +306,7 @@ fn test_methods() {
     assert_eq!(gv(Method::Auto, Some(6), None).unwrap(), expected);
     let expected = gw(Method::Reference);
     // GV_2 + GV_1 / 8
-    assert_eq!(expected[1].1, Rational::from((609250 * 8 + 2875, 8)));
+    assert_eq!(expected[1].1, Rational::from_signeds(609250 * 8 + 2875, 8));
     assert_eq!(gw(Method::Modular), expected);
 
     // The modular method only supports max_deg; auto falls back to the reference one.

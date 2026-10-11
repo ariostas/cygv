@@ -1,10 +1,10 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c and 5 done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5 and 5b done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
-"big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
-(`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
-commits. The PR branch itself (`cgv-cc-cpu`) is untouched. The follow-up PRs #95, #97 and #100
+"big integers": phase 5b replaced `rug` with `malachite` everywhere (6.10). Branch
+`gv-modular-rust` is PR #94 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main`
+(6fe293a, v0.3.0), plus our commits. The PR branch itself (`cgv-cc-cpu`) is untouched. The follow-up PRs #95, #97 and #100
 are covered in section 1.1.
 
 Section 6 lists the decisions that need an answer before implementation starts.
@@ -315,9 +315,9 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
   threefold hypersurfaces.
   - [x] Provisional choice of the pure-Rust big-number crate, confined to `crt` and
     `multicover` (6.10, phase 5b): `num-bigint` (MIT/Apache, already in `Cargo.lock` through
-    `nalgebra`). Only `crt` needs it: the multicover runs on residues, and the stability check
-    works on Garner's mixed-radix digits in word-sized arithmetic, so big integers are only
-    built for the final values.
+    `nalgebra`; `malachite` since phase 5b). Only `crt` needs it: the multicover runs on
+    residues, and the stability check works on Garner's mixed-radix digits in word-sized
+    arithmetic, so big integers are only built for the final values.
   - [x] `extraction`: `extract` takes the layout, $\alpha$, $I$, the inverses and `max_deg`
     and returns the coefficients $n_C$ (what is left of $I$ at each curve once the lower
     curves are subtracted), with as many values per curve as $I$. Plain function for now;
@@ -372,8 +372,8 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     `modular`), `--method` / `-m` in the CLI, `method=` in Python (`None` means the Rust
     default). Python exceptions from the subprocess now keep their type (`ValueError`).
   - [x] GW. Derived from the lifted GV invariants (`multicover::gw_from_gv`, $\sum_{m \mid C}
-    \mathrm{GV}_{C/m}/m^e$ in `num-rational`, also provisional), since GW invariants are not
-    integers; the reference's GW output is exactly those, nonzero only. Differential tests
+    \mathrm{GV}_{C/m}/m^e$ in `num-rational`, also provisional; `malachite` since 5b), since GW
+    invariants are not integers; the reference's GW output is exactly those, nonzero only. Differential tests
     through `compute_gvgw_strings` (so the formatting of fractions is compared too) on the
     quintic, P11222, the fourfold CICY and `h11_8`.
   - [x] `n_threads` exposed in the Python API.
@@ -604,15 +604,59 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     struct of 4.1.7, so the timings above come from temporary instrumentation; and the key
     sizes of 6.4 (whether `u64` keys, which three of the four models fit, pay off in a stage
     bound by memory latency), which belongs with the tuning on newer hardware.
-- [ ] **5b. Make `rug` optional** (6.10). After phase 4, so that `auto` already routes most
-  requests to `modular` when the reference pipeline's default build gets slower.
-  - [ ] The pure-Rust crate chosen from benchmarks (if it is `malachite`, confirm that
-    LGPL-3.0-only fits GPL-3.0-or-later).
-  - [ ] `PolynomialCoeff` implemented for it.
-  - [ ] Backend-neutral result types.
-  - [ ] The `rug` feature.
-  - [ ] CI workflows and CLAUDE.md simplified (including whether Windows still needs the
-    MSYS2/MINGW64 route).
+- [x] **5b. Replace `rug` with a pure-Rust crate** (6.10). Planned as making `rug` optional;
+  the benchmarks made it a replacement.
+  - [x] The crate, chosen from benchmarks: the reference pipeline on `rug`, `num-rational`,
+    `malachite` and `dashu` through one generic wrapper, every output identical (temporary
+    harness, not committed). Single-threaded:
+
+    | Scenario | `rug` | `num-rational` | `malachite` | `dashu` |
+    |---|---|---|---|---|
+    | `threefold`, deg 30 | 0.85 s | 16.6 s | 0.94 s | 1.20 s |
+    | `h11_9`, deg 10 | 8.3 s | 15.6 s | 5.9 s | 7.9 s |
+    | `h11_9_plike`, deg 200 | 12.8 s | 65.2 s | 9.3 s | 14.8 s |
+    | `h11_10`, deg 8 | 6.8 s | 8.2 s | 5.4 s | 6.4 s |
+    | `h11_11`, deg 10 | 7.5 s | 8.5 s | 6.6 s | 7.2 s |
+
+    On eight threads `h11_11` at 12 took 31.7 / 29.8 / 31.7 s (`rug` / `malachite` /
+    `dashu`), `h11_9` at 12 23.0 / 16.8 / 18.4 s with peak RSS 955 / 871 / 856 MB.
+    `num-rational` is out (its `gcd` is binary, and every operation normalises), and
+    `malachite` beats `dashu` almost everywhere. `malachite` stores one-limb numbers inline, so
+    small values do not allocate, which is where it gains on `rug`; it loses when the numbers
+    get huge (the toy `threefold`). The license fits (6.10).
+  - [x] `PolynomialCoeff` implemented for it: `reference::Rational`, a newtype over
+    `malachite::Rational`, with `Assign` now our own trait.
+  - [x] Backend-neutral result types: with one crate left, the typed entry points return
+    `malachite::Integer` / `malachite::Rational`, and `modular` uses the same types (`crt`,
+    `gw_from_gv`), so `num-bigint` and `num-rational` are gone too. `malachite` is re-exported.
+  - [x] ~~The `rug` feature~~: dropped (decided with you), since `malachite` is as fast.
+  - [x] CI workflows and CLAUDE.md simplified: no GMP cache or `CC`, Windows on the stock
+    MSVC toolchain (Rust and Python CI with `setup-python`, the wheels with cibuildwheel like
+    the other platforms, 32-bit Windows skipped), so no MSYS2, `--no-build-isolation` or
+    `PYO3_USE_RAW_DYLIB`; `Swatinem/rust-cache` with a `dev` / `release` key instead of the
+    hand-rolled caches. Not run yet: CI only triggers on `main` and PRs to it.
+
+    Before and after, release, eight threads, `cargo bench --bench memory` (peak RSS, time):
+
+    | Scenario | `rug` | `malachite` |
+    |---|---|---|
+    | `fourfold`, deg 15, GW | 44 MB, 1.30 s | 44 MB, 0.64 s |
+    | `h11_9`, deg 10 | 130 MB, 5.3 s | 133 MB, 2.7 s |
+    | `h11_9_plike`, deg 240 | 45 MB, 34.4 s | 46 MB, 28.1 s |
+    | `h11_8`, deg 14 | 514 MB, 60.6 s | 469 MB, 33.3 s |
+    | `h11_9`, deg 14 | 665 MB, 120.8 s | 629 MB, 75.3 s |
+    | `h11_10`, deg 10 | 549 MB, 19.6 s | 488 MB, 15.2 s |
+    | `h11_11`, deg 12 | 927 MB, 28.3 s | 844 MB, 26.9 s |
+
+    The toy `threefold` is the exception: criterion gives 0.48 / 0.55 s at degree 30 and 5.66
+    / 6.74 s at degree 50 (GV; GW 4.71 / 5.63 s), i.e. 15–20 % slower. (The memory bench
+    makes that look like 2x: at degree 50 `malachite` makes 151 million allocations to
+    `rug`'s 10 million, and every one goes through the bench's shared atomic counters.) The
+    modular pipeline is unaffected, as expected (`h11_9` at 14: 1.61 / 1.46 s). Builds from
+    clean, locally: dev 96 s with GMP built from source (what an uncached CI job paid) against
+    49 s; release 159 s against 163 s, since `malachite` is large and the release profile is
+    one LTO unit; the CLI binary grows from 3.0 to 4.5 MB.
+
 - [ ] **7a. Double description (committed, not a prototype).** Can start any time. Support
   hyperplanes from spanning vectors, in any dimension, with exact integers. Needed regardless
   of how 7b turns out: it gives the Mori cone's facets (target points, `mori_rays` input, the
@@ -998,9 +1042,9 @@ Layers, from cheapest to most independent:
 
    To investigate when we get there: which number type provides the rigorous upward rounding.
    The C uses `long double` with the hardware rounding mode. `rug::Float` has directed rounding
-   but `rug` becomes optional (6.10), so either the certifier is a `rug`-only feature or it
-   uses another route (a pure-Rust type with directed rounding, or `f64` with explicit outward
-   rounding of each operation). The C also re-expresses $\alpha$ along the rows of the charge
+   but `rug` is gone (6.10), so the certifier needs another route: a pure-Rust type with
+   directed rounding (`malachite`'s `Float`, behind its `floats` feature, has rounding modes),
+   or `f64` with explicit outward rounding of each operation. The C also re-expresses $\alpha$ along the rows of the charge
    matrix to keep the bounds tight, and extends to n-folds and complete intersections only by
    analogy, which needs checking.
 
@@ -1080,40 +1124,32 @@ Layers, from cheapest to most independent:
    - Done as its own commit right after phase 0b (phase 0c), before the `Method` argument is
      added, so the dispatch is rewritten once.
 
-10. **`rug` becomes an optional feature (planned).** It was there for speed, and speed now
-   comes from `modular`. The default build uses a pure-Rust big integer / rational crate, so
-   it needs no GMP or MPFR and no C toolchain.
-   - *Shape*: the pure-Rust crate is always a dependency. `modular` uses it directly, and only
-     at the edges (the CRT lift and GW rationals), so its choice barely affects `modular`'s
-     speed. The reference pipeline uses it as its default coefficient type through
-     `PolynomialCoeff`; the `rug` feature adds the `rug::Rational` implementation and selects
-     it, for anyone who wants the reference pipeline at today's speed.
-   - *Work in the reference pipeline*: `PolynomialCoeff` is written against `rug`'s in-place
-     traits (`rug::Assign`, the `*Assign` operators with primitive right-hand sides,
-     `RecipMut`). The pure-Rust type needs a thin wrapper implementing those, and `Assign`
-     needs to become our own trait or be re-exported conditionally. The typed entry points
-     return `rug::Integer` / `rug::Rational` today and need backend-neutral result types
-     (the string dispatch used by the CLI and Python is unaffected).
-   - *What it buys*: no from-source GMP/MPFR build, which is most of cold CI time and the
-     reason for the `GMP_MPFR_SYS_CACHE` handling, the `m4`/`make` requirement and the `CC`
-     consistency rule. Possibly more on Windows, where the MSYS2/MINGW64 route and its
-     workarounds (`--no-build-isolation`, `PYO3_USE_RAW_DYLIB=0`) may no longer be needed for
-     the default build; I believe GMP is why that route exists but have not confirmed it. The
-     memory bench no longer needs the GMP allocator hooks without `rug`.
-   - *What it costs*: the reference pipeline gets slower in the default build. By how much is
-     unmeasured and depends on the crate; it matters for the requests that only `reference`
-     can serve. For that reason the switch waits until `modular` and `auto` are in place.
-   - *Certifier* (6.5, planned): the plan assumed `rug::Float` with directed rounding. Without
-     `rug` it needs another route to rigorous upward rounding, or it becomes a `rug`-only
-     feature.
-
-   Still open:
-   - *Which crate.* Candidates found on crates.io: `num-bigint` + `num-rational` (MIT/Apache,
-     by far the most used), `malachite` (algorithms derived from GMP/FLINT, so likely the
-     fastest; LGPL-3.0-only, whose fit with this crate's GPL-3.0-or-later should be confirmed),
-     `dashu` (MIT/Apache). To be chosen by running the reference benches with each.
-   - *What the wheels ship*: built with or without `rug`.
-   - Whether the reference benches keep a `rug` variant as the performance baseline.
+10. **`rug` replaced by `malachite` (done, phase 5b).** The plan was to make `rug` an optional
+   feature, with a pure-Rust crate by default, since speed now comes from `modular`. The
+   benchmarks of phase 5b changed that: `malachite` is as fast as `rug` on the reference
+   pipeline, faster on most scenarios, so `rug` was dropped altogether rather than kept as a
+   feature.
+   - *Shape*: `malachite` (with only its integers and rationals) is the only big-number crate.
+     `modular` uses `malachite::Integer` in the CRT lift and `malachite::Rational` for GW. The
+     reference pipeline stays generic over `PolynomialCoeff`, whose `Assign` is now our own
+     trait, and its one implementation is `reference::Rational`, a newtype over
+     `malachite::Rational` (the orphan rule forbids implementing `AddAssign<i32>` and the like on
+     the foreign type). The typed entry points return `malachite::Integer` and
+     `malachite::Rational`, and the crate re-exports `malachite`.
+   - *License*: `malachite` is LGPL-3.0-only. LGPL-3.0 is GPL-3.0 plus additional permissions,
+     so GPL-3.0-or-later code may use it, and the combination (the binary, the wheels) is
+     distributed under GPL-3.0; the source of the whole is available, which covers the LGPL's
+     relinking requirement. `rug` and GMP were LGPL-3.0-or-later, so nothing changes for anyone
+     who uses the crate under GPL-3.0; the only thing given up is distributing a combined work
+     under a hypothetical GPL-4.0.
+   - *MSRV*: `malachite` 0.13 needs Rust 1.90, which is now `rust-version`.
+   - *What it bought*: no from-source GMP build, so no C toolchain, `m4` or `make`, no
+     `GMP_MPFR_SYS_CACHE` handling and no `CC` consistency rule. On Windows the MSYS2/MINGW64
+     route existed for GMP (gmp-mpfr-sys only builds with MinGW), so CI and the wheels now use
+     the stock MSVC toolchain and cibuildwheel, and `--no-build-isolation` and
+     `PYO3_USE_RAW_DYLIB=0` went with it. With no custom shell left, the cargo caches are
+     `Swatinem/rust-cache` again. The memory bench no longer needs GMP allocator hooks.
+   - *Certifier* (6.5, planned): it assumed `rug::Float` with directed rounding; see there.
 
 11. **Feature parity in the reference pipeline (decided).** Since the reference pipeline stays,
    it is the main thing `modular` is compared against, in CI, long after the C oracle is gone.
@@ -1169,7 +1205,7 @@ Layers, from cheapest to most independent:
   porting. Phase 1 uses `u32` slot numbers, i.e. about four billion slots, which is more than
   fits in memory.
 - Peak memory is per-thread working tables plus $I$; the C's README quotes 3–6 GB at degree
-  26–28 for $h^{1,1}$ = 10–11. `benches/memory.rs` only counts GMP and Rust allocations, which
-  is fine here since everything will be Rust-allocated.
+  26–28 for $h^{1,1}$ = 10–11. `benches/memory.rs` counts Rust allocations, which since phase
+  5b are all of them.
 - What happens to PR #94 itself (close, or merge first and replace later) is your call and
   affects how the author is credited.

@@ -20,14 +20,11 @@
 use crate::cone::{check_cone_data, columns, ConeData};
 use crate::modular::key::KeyError;
 use crate::modular::{self, CandidateSource, CurveInvariants, Geometry, Options};
-use crate::reference::run_hkty;
+use crate::reference::{self, run_hkty};
 use crate::{check_strata, CYKind, InvariantKind, Method, Stratum};
 use core::fmt;
+use malachite::{Integer, Rational};
 use nalgebra::{DMatrix, DVector, RowDVector};
-use num_bigint::{BigInt, Sign};
-use num_rational::BigRational;
-use rug::integer::Order;
-use rug::{Integer, Rational};
 use std::collections::HashMap;
 
 /// An invariant, labeled by its curve class and the index of its reference surface, which is
@@ -119,9 +116,9 @@ pub(crate) fn check_target_points(
 
 /// The invariants as one of the pipelines gives them.
 enum Results {
-    Reference(Vec<Labeled<Rational>>),
+    Reference(Vec<Labeled<reference::Rational>>),
     ModularGv(Vec<CurveInvariants>),
-    ModularGw(Vec<CurveInvariants<BigRational>>),
+    ModularGw(Vec<CurveInvariants<Rational>>),
 }
 
 /// Runs the pipeline that `method` selects.
@@ -192,7 +189,7 @@ fn compute(
     // The reference truncates by the target points alone, so a maximum degree is applied to
     // its results.
     let truncate = max_deg.filter(|_| target_points.is_some());
-    let mut res = run_hkty::<Rational>(
+    let mut res = run_hkty::<reference::Rational>(
         generators,
         grading_vector.clone(),
         invariant_kind,
@@ -280,33 +277,12 @@ fn entries<T: PartialEq>(invariants: Vec<CurveInvariants<T>>, zero: &T) -> Vec<L
     res
 }
 
-fn to_integer(x: &BigInt) -> Integer {
-    let (sign, digits) = x.to_u32_digits();
-    let x = Integer::from_digits(&digits, Order::Lsf);
-    if sign == Sign::Minus {
-        -x
-    } else {
-        x
-    }
-}
-
-fn to_rational(x: BigRational) -> Rational {
-    let (num, den) = x.into_raw();
-    Rational::from((to_integer(&num), to_integer(&den)))
-}
-
 impl Results {
     /// The GV invariants, which are integers.
     fn into_gv(self) -> Vec<Labeled<Integer>> {
         match self {
-            Self::Reference(r) => r
-                .into_iter()
-                .map(|(k, gv)| (k, gv.into_numer_denom().0))
-                .collect(),
-            Self::ModularGv(r) => entries(r, &BigInt::from(0))
-                .into_iter()
-                .map(|(k, gv)| (k, to_integer(&gv)))
-                .collect(),
+            Self::Reference(r) => r.into_iter().map(|(k, gv)| (k, gv.numerator())).collect(),
+            Self::ModularGv(r) => entries(r, &Integer::default()),
             Self::ModularGw(_) => unreachable!("GW invariants were computed instead of GV"),
         }
     }
@@ -314,11 +290,8 @@ impl Results {
     /// The GW invariants, which are rational.
     fn into_gw(self) -> Vec<Labeled<Rational>> {
         match self {
-            Self::Reference(r) => r,
-            Self::ModularGw(r) => entries(r, &BigRational::from_integer(0.into()))
-                .into_iter()
-                .map(|(k, gw)| (k, to_rational(gw)))
-                .collect(),
+            Self::Reference(r) => r.into_iter().map(|(k, gw)| (k, gw.into_inner())).collect(),
+            Self::ModularGw(r) => entries(r, &Rational::default()),
             Self::ModularGv(_) => unreachable!("GV invariants were computed instead of GW"),
         }
     }
@@ -369,17 +342,17 @@ pub fn compute_gvgw_strings(
                 (
                     k,
                     match invariant_kind {
-                        InvariantKind::GV => gvgw.into_numer_denom().0.to_string(),
+                        InvariantKind::GV => gvgw.numerator().to_string(),
                         InvariantKind::GW => gvgw.to_string(),
                     },
                 )
             })
             .collect(),
-        Results::ModularGv(r) => entries(r, &BigInt::from(0))
+        Results::ModularGv(r) => entries(r, &Integer::default())
             .into_iter()
             .map(|(k, gv)| (k, gv.to_string()))
             .collect(),
-        Results::ModularGw(r) => entries(r, &BigRational::from_integer(0.into()))
+        Results::ModularGw(r) => entries(r, &Rational::default())
             .into_iter()
             .map(|(k, gw)| (k, gw.to_string()))
             .collect(),

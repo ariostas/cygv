@@ -10,13 +10,8 @@
 //! Together they take about 45 minutes on 16 cores, and the largest one needs
 //! about 12 GB of memory.
 //!
-//! Almost all of the memory this crate uses is held by GMP numbers, which are
-//! allocated by C code and therefore never reach Rust's global allocator. To
-//! account for them, this benchmark installs its own allocation functions with
-//! `mp_set_memory_functions` alongside a global allocator wrapper, so every
-//! allocation on either side is counted. GMP hands the size back on free and
-//! realloc, so the tracking needs no bookkeeping of its own beyond a few
-//! counters.
+//! Every allocation goes through Rust's global allocator, the big numbers
+//! included, so a wrapper around it that keeps a few counters sees all of them.
 //!
 //! Each scenario runs in its own child process. That keeps one scenario's peak
 //! from leaking into the next one, and it lets the child report a peak RSS that
@@ -26,7 +21,6 @@
 mod common;
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::ffi::c_void;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -61,7 +55,7 @@ fn on_realloc(old_size: usize, new_size: usize) {
 }
 
 // ---------------------------------------------------------------------------
-// Rust side
+// Allocator
 // ---------------------------------------------------------------------------
 
 struct TrackingAllocator;
@@ -99,59 +93,6 @@ unsafe impl GlobalAlloc for TrackingAllocator {
 
 #[global_allocator]
 static ALLOCATOR: TrackingAllocator = TrackingAllocator;
-
-// ---------------------------------------------------------------------------
-// GMP side
-// ---------------------------------------------------------------------------
-
-/// Alignment of the blocks handed to GMP. It only requires `mp_limb_t`
-/// alignment, but matching `max_align_t` keeps this safe should MPFR, which
-/// allocates through the same hooks, ever be used again.
-const GMP_ALIGN: usize = 16;
-
-/// GMP never asks for zero bytes, but the layout has to be valid regardless,
-/// and the same adjustment has to be made when the block comes back.
-fn gmp_layout(size: usize) -> Layout {
-    Layout::from_size_align(size.max(1), GMP_ALIGN).expect("invalid GMP allocation size")
-}
-
-// GMP declares its allocation functions as safe `extern "C"` pointers, so these
-// cannot be marked `unsafe` even though they are only ever called by GMP, with
-// the pointers and sizes it got from here.
-extern "C" fn gmp_alloc(size: usize) -> *mut c_void {
-    let ptr = unsafe { System.alloc(gmp_layout(size)) };
-    if ptr.is_null() {
-        std::alloc::handle_alloc_error(gmp_layout(size));
-    }
-    on_alloc(size);
-    ptr.cast()
-}
-
-extern "C" fn gmp_realloc(ptr: *mut c_void, old_size: usize, new_size: usize) -> *mut c_void {
-    let new_ptr = unsafe { System.realloc(ptr.cast(), gmp_layout(old_size), new_size.max(1)) };
-    if new_ptr.is_null() {
-        std::alloc::handle_alloc_error(gmp_layout(new_size));
-    }
-    on_realloc(old_size, new_size);
-    new_ptr.cast()
-}
-
-extern "C" fn gmp_free(ptr: *mut c_void, size: usize) {
-    on_free(size);
-    unsafe { System.dealloc(ptr.cast(), gmp_layout(size)) }
-}
-
-/// Routes GMP allocations through the counters.
-///
-/// # Safety
-///
-/// Must be called before any GMP object exists, since blocks allocated
-/// by the previous functions would be freed by the new ones.
-unsafe fn install_gmp_hooks() {
-    unsafe {
-        gmp_mpfr_sys::gmp::set_memory_functions(Some(gmp_alloc), Some(gmp_realloc), Some(gmp_free))
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Reporting
@@ -314,9 +255,6 @@ fn run_parent(filters: &[String]) {
 }
 
 fn main() {
-    // Nothing may touch GMP before this point.
-    unsafe { install_gmp_hooks() };
-
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().position(|a| a == "--run") {
         Some(pos) => {

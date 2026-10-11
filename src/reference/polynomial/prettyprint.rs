@@ -51,9 +51,10 @@ impl<'a, T: fmt::Display> fmt::Display for PrettyPrintPolynomial<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reference::polynomial::coefficient::Assign;
     use crate::reference::semigroup::Semigroup;
+    use crate::reference::Rational;
     use nalgebra::{DMatrix, DVector, RowDVector};
-    use rug::{Assign, Rational};
 
     #[test]
     fn test_display_named_variables() {
