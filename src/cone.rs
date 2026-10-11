@@ -13,8 +13,10 @@
 //! conversion between the two descriptions of a cone, by generators and by inequalities
 //! ([`facets`] and [`rays`]), which gives the hyperplanes of the Mori cone from its generators.
 
+mod hilbert;
 mod hull;
 
+pub use hilbert::{cone_data, hilbert_basis, ConeError};
 pub use hull::{facets, rays, Generators, Inequalities, TooLarge};
 
 use crate::Stratum;

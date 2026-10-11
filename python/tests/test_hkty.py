@@ -330,21 +330,22 @@ def test_cone_data() -> None:
         if (c[0] <= 2 and c[1] <= 2) or c in ((3, 0), (4, 0))
     ]
 
-    # Both parts are needed, the generators are needed by the reference method, and the
-    # cone data is checked.
+    # The reference method takes the Mori cone from the cone data too.
+    res = compute_gv(
+        None,
+        grading_vector,
+        q,
+        intnums,
+        max_deg=6,
+        mori_hyperplanes=hyperplanes,
+        cones=cones,
+        method="reference",
+    )
+    assert sorted(res) == expected
+
+    # Both parts are needed, and the cone data is checked.
     with pytest.raises(ValueError, match="mori_hyperplanes and cones"):
         compute_gv(None, grading_vector, q, intnums, max_deg=6, cones=cones)
-    with pytest.raises(ValueError, match="generators"):
-        compute_gv(
-            None,
-            grading_vector,
-            q,
-            intnums,
-            max_deg=6,
-            mori_hyperplanes=hyperplanes,
-            cones=cones,
-            method="reference",
-        )
     with pytest.raises(ValueError, match="every set"):
         compute_gv(
             None,

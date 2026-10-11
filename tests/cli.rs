@@ -203,11 +203,10 @@ fn test_cone_data() {
     let docs = YamlLoader::load_from_str(&String::from_utf8(with_cones.stdout).unwrap()).unwrap();
     check_results(&docs, &["gv"]);
 
-    // Without generators the reference method cannot run.
+    // Without generators the reference method takes the Mori cone from the cone data.
     let output = run(&["--method", "reference"], &input);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("generators"), "{stderr}");
+    assert!(output.status.success());
+    assert_eq!(output.stdout, reference.stdout);
 }
 
 #[test]

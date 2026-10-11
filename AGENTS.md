@@ -88,15 +88,25 @@ CLI and `src/python.rs` sit on top of those. `src/cone.rs` holds the optional *c
 (`ConeData`: the Mori cone's inequalities and equations, and the Hilbert basis of each cone
 $K_T$, the curve classes in the Mori cone that only meet the divisors in $T$ negatively, for
 every $T$ of one or two divisors and, in a vex phase, the three divisors of every stratum) and
-its validation (`check_cone_data`). Callers compute it
-with an external program such as Normaliz (the Python side deliberately does not call one);
-it is the shared home the native cone computations of `PLAN.md` phase 7 are meant to land in.
-The first of them is `src/cone/hull.rs` (phase 7a): `cone::facets` and `cone::rays` convert
-between generators and inequalities by the double description method, in `i128` with
-overflow checks (`TooLarge`), with a canonical output (equations in reduced row echelon form,
-each hyperplane reduced to vanish at their pivots). It sorts its input by 1-norm first, which
-is what makes it fast on Mori cones of thousands of generators. Nothing in the pipelines
-calls it yet.
+its validation (`check_cone_data`), and the native cone computations of `PLAN.md` phase 7,
+shared by both pipelines. Callers may still supply cone data, computed with an external
+program such as Normaliz, and it is used as given. `src/cone/hull.rs` (phase 7a):
+`cone::facets` and `cone::rays` convert between generators and inequalities by the double
+description method, in `i128` with overflow checks (`TooLarge`), with a canonical output
+(equations in reduced row echelon form, each hyperplane reduced to vanish at their pivots).
+It sorts its input by 1-norm first, which is what makes it fast on Mori cones of thousands of
+generators. `src/cone/hilbert.rs` (phase 7b): `cone::hilbert_basis` and `cone::cone_data`
+compute Hilbert bases by Pottier's algorithm (Normaliz's dual algorithm): cut a pointed cone
+with a known basis by one inequality at a time, pairing elements of opposite signs and
+dropping the sums an element of the same sign lies below. Its reduction is only sound for a
+pointed cone, so it starts from the simplicial cone of the first independent facets (its
+basis from the lattice points of the fundamental parallelepiped, at most
+`MAX_PARALLELEPIPED`), not from $\pm e_i$, and a face is handled in a lattice basis of its
+span. `cone_data` cuts the Mori cone's basis by the rows $Q_r$ down a tree (each row cut or
+left out, at most two left out, three for a stratum), dropping sums above `max_deg`, which
+is sound because every cone is then inside the Mori cone. Errors are `ConeError`. Phase 7b
+also tried enumerating the lattice points of each $K_T$ directly (`PLAN.md`); both matched
+Normaliz, and the Hilbert bases won because they feed the existing cone path unchanged.
 
 `src/modular.rs` and `src/modular/` hold the faster pipeline, which is still being extended and
 tuned. It computes modulo word-sized primes and lifts the results with the CRT, and shares no
@@ -110,7 +120,9 @@ the sums of the Hilbert basis elements of each $K_T$ of the cone data, skipping 
 in another and two-divisor cones whose form $Q_s K^{(k)} Q_u$ vanishes, as the C does, or the
 whole semigroup of the generators up to `max_deg`, enumerated in order of degree and filtered
 to the classes with at most two negative intersections; the cones are much faster and give
-every lattice point of the Mori cone, the enumeration only those the generators generate; in
+every lattice point of the Mori cone, the enumeration only those the generators generate, so
+the dispatch always passes cones, computed when the caller gave none, and `Generators` is
+left to library callers and the tests; in
 a vex phase both also keep the curves of negative anticanonical degree on a stratum,
 `Geometry::carries_period`), `period` (tables of factorials and harmonic numbers, then $c_0$,
 $c_1$ and the second derivatives already contracted with the bilinear forms, $S_2$, to which
@@ -185,9 +197,16 @@ indices differently (the first index is a reference surface in the n-fold case).
   `check_cone_data` and `check_target_points`) get there: `run_hkty` still panics on invalid
   input. `max_deg` may come with `target_points` (the reference then truncates its results by
   degree, since its semigroup only takes the targets). Both give only the nonzero invariants.
-  `modular` takes its candidates from the cone data when there is any (the reference ignores
-  it), and with cone data the generators may have no columns, in which case a request that
-  needs the reference is a `ComputeError::MissingGenerators`.
+  Both pipelines use every lattice point of the Mori cone (decision 6.2, phases 7b and 7d):
+  the Mori cone is described by the cone data's inequalities, or else by `cone::facets` of
+  the generators; `modular` takes its candidates from the cone data, or from
+  `cone::cone_data` of those inequalities (truncated at `max_deg`, lowered to the targets'
+  largest degree); the reference runs on `cone::hilbert_basis` of them instead of the
+  generators. The exception is a request with none of `max_deg`, `min_points` and
+  `target_points`, where the reference's semigroup is the generators as given
+  (`Semigroup::from_data`), so they are passed unchanged. With cone data the generators may
+  have no columns, except for such a request (`ComputeError::MissingGenerators`). Failures of
+  the cone computations are `ComputeError::MoriCone`.
   `run_hkty<T>` is generic over the coefficient type, which is only ever `reference::Rational`
   (`src/reference/rational.rs`) today, and takes the `InvariantKind` and `CYKind` enums at runtime. Adding an option means touching
   all of the dispatch sites. The computation is always exact: floating-point arithmetic (the old
@@ -251,8 +270,8 @@ stdout, flushing after each one. `--threads` and `--method` override the `n_thre
 `src/io.rs`, whose `Input` struct mirrors the arguments of `run_hkty` and whose field conventions
 match the Python API (each inner list is a *column*). `Input::from_yaml` rejects unknown fields and
 validates shapes eagerly — including a `process_int_nums` dry run, `method: modular` without
-`max_deg` or `target_points`, the cone data, the target points, and leaving out `generators` for a
-request that needs them — because
+`max_deg` or `target_points`, the cone data, the target points, and leaving out `generators`
+without cone data or without any of `max_deg`, `min_points` and `target_points` — because
 `run_hkty` itself still unwraps its errors. `Input::compute` sorts the results by degree and then lexicographically by
 curve class, since the order in which curve classes of equal degree come out of `run_hkty` is not
 deterministic. Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
@@ -292,11 +311,13 @@ like `fourfold/deg15/gw-rational` (the suffix predates the removal of the floati
 and is kept so that saved criterion baselines still match), and any argument after `--` that is
 not a flag filters on it. Adding a model or a degree means adding a row to `scenarios()`; nothing else has to
 change. Each row also names a `Pipeline`: the reference (`Method::Reference`, explicitly, since
-the default is `Auto`), or the modular one with its candidates from the generators or from the
-cone data. The modular ids end in `/modular` or `/modular-cones` (the reference ones have no
-suffix, so that older baselines still match), so `cargo bench -- modular` runs only those. The
-modular scenarios go to much higher degrees, mostly with the cone data, and its scenarios
-without it mostly measure the enumeration of the semigroup.
+the default is `Auto`), or the modular one without or with the supplied cone data. The modular
+ids end in `/modular` or `/modular-cones` (the reference ones have no suffix, so that older
+baselines still match), so `cargo bench -- modular` runs only those. The modular scenarios go
+to much higher degrees, mostly with the cone data. Those without it compute the cone data from
+the generators (the facets, then the Hilbert bases); before phase 7b they enumerated the
+semigroup of the generators, which took most of their time, so their numbers are not
+comparable across that change.
 
 There are two kinds of model. `threefold` ($h^{1,1} = 2$ hypersurface) and `fourfold` ($h^{1,1} = 6$
 CICY) are small, hardcoded, and run both variants. `h11_8`, `h11_9`, `h11_10` and `h11_11`

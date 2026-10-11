@@ -44,10 +44,10 @@
 //!     class: [1, "-1/2"]
 //! ```
 //!
-//! The modular method is much faster with cone data (see [`ConeData`]): the inequalities of
-//! the Mori cone, the equations of its span if it is a face, and the Hilbert basis of the cone
-//! $K_T$ of every set $T$ of one or two divisors, which an external program such as normaliz
-//! computes. Then the generators can be left out, but only the modular method can run.
+//! The Mori cone can also be given by cone data (see [`ConeData`]): its inequalities, the
+//! equations of its span if it is a face, and the Hilbert basis of the cone $K_T$ of every set
+//! $T$ of one or two divisors, which an external program such as normaliz computes. Then the
+//! generators can be left out. Without it, the cone data is computed from the generators.
 //!
 //! ```yaml
 //! mori_hyperplanes: [[1, 0], [0, 1]]
@@ -289,12 +289,12 @@ impl Input {
                 ComputeError::Unsupported(what).to_string(),
             ));
         }
-        // Without generators only the modular method can run, and only with cone data.
+        // The cone data describes the Mori cone without them, but without any truncation the
+        // generators are the curve classes to use.
+        let truncated = max_deg.is_some() || min_points.is_some() || target_points.is_some();
         let generators = match generators {
             Some(generators) => generators,
-            None if cone_data.is_some() && method != Method::Reference && unsupported.is_none() => {
-                DMatrix::zeros(h11, 0)
-            }
+            None if cone_data.is_some() && truncated => DMatrix::zeros(h11, 0),
             None => return Err(IoError::MissingField("generators")),
         };
         // These are checked again, deeper in the computation, but the errors there are
@@ -948,8 +948,8 @@ cones:
         let cone_data = load_one(&empty).unwrap().cone_data.unwrap();
         assert_eq!(cone_data.cones[0].hilbert_basis.shape(), (2, 0));
 
-        // The cone data needs both the hyperplanes and the cones, and without generators the
-        // request must be one for the modular method.
+        // The cone data needs both the hyperplanes and the cones, and replaces the generators
+        // for every method, unless nothing truncates the computation.
         let no_cones = &data[..data.find("cones:").unwrap()];
         assert_eq!(load_one(no_cones), Err(IoError::MissingField("cones")));
         let no_hyperplanes = data.replace("mori_hyperplanes: [[1, 0], [0, 1]]\n", "");
@@ -963,10 +963,15 @@ cones:
             Err(IoError::MissingField("mori_hyperplanes"))
         );
         assert_eq!(load_one(head), Err(IoError::MissingField("generators")));
-        for extra in ["method: reference\n", "min_points: 5\n"] {
+        for extra in ["method: reference\nmax_deg: 6\n", "min_points: 5\n"] {
             let data = data.replace("max_deg: 6\n", extra);
-            assert_eq!(load_one(&data), Err(IoError::MissingField("generators")));
+            assert_eq!(load_one(&data).unwrap().generators.shape(), (2, 0));
         }
+        let untruncated = data.replace("max_deg: 6\n", "method: reference\n");
+        assert_eq!(
+            load_one(&untruncated),
+            Err(IoError::MissingField("generators"))
+        );
 
         // The cone data is checked.
         let field_of = |data: &str| match load_one(data) {

@@ -306,9 +306,9 @@ impl Variant {
 pub enum Pipeline {
     /// The reference pipeline.
     Reference,
-    /// The modular pipeline, with the candidates from the semigroup of the generators.
+    /// The modular pipeline, which computes the cone data from the generators.
     Modular,
-    /// The modular pipeline, with the candidates from the cone data.
+    /// The modular pipeline, with the supplied cone data.
     ModularCones,
 }
 
@@ -494,8 +494,8 @@ pub fn scenarios() -> Vec<Scenario> {
     //
     // The modular pipeline is so much faster that its scenarios go to higher
     // degrees, mostly with the cone data, which is how it is meant to be used.
-    // Its scenarios with the candidates from the generators measure the
-    // enumeration of the semigroup, which dominates there.
+    // Its scenarios without the cone data also measure computing it from the
+    // generators.
     let both = |t: [f64; 2]| t.map(Some);
     let gv_rat = |t: f64| [Some(t), None];
     let (r, m, mc) = (

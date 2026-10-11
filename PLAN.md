@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b and 7a done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a, 7b and 7d done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": phase 5b replaced `rug` with `malachite` everywhere (6.10). Branch
 `gv-modular-rust` is PR #94 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main`
@@ -707,12 +707,66 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     Not wired into the pipelines or the inputs yet: the consumers are 7b (the $K_T$ by
     inequalities, and their rays for coordinate bounds), 7c (the hull facets) and an optional
     `mori_hyperplanes` derived from `generators`.
-- [ ] **7b. Candidate lattice points without normaliz: time-boxed comparison, then integrate
-  or drop** (5.1). Independent of phases 1–5 and can run alongside them.
-  - [ ] Direct enumeration of polytope lattice points.
-  - [ ] A correctly specified Pottier algorithm.
-  - [ ] Comparison on the benchmark geometries (5.1).
-  - [ ] The winner integrated, or the phase dropped.
+- [x] **7b. Candidate lattice points without normaliz: time-boxed comparison, then integrate
+  or drop** (5.1). Both approaches matched Normaliz; B integrated (decided with you).
+  - [x] Direct enumeration of polytope lattice points (A), as a prototype, dropped. One
+    polytope per set $T$ of divisors holding exactly the points whose negative intersections
+    are with $T$ (so the polytopes are disjoint): the Mori facets, $Q_r \cdot C \ge 0$ for
+    $r \notin T$, $Q_r \cdot C \le -1$ for $r \in T$ and the degree bound, over $T$ empty,
+    single, the pairs whose form does not vanish, and the strata. Vertices by `cone::rays`
+    of the homogenized cone, then the projections onto the first $k$ coordinates, so the
+    range of each coordinate given the earlier ones is exact. The enumeration was never the
+    cost (milliseconds, almost no empty branches); the projections were. Computing them as
+    `cone::facets` of the projected vertices blew up the double description (9–37 s on
+    `h11_10` / `h11_11`; reversing the insertion order helped, to 1.5–3.4 s, cdd's cutoff
+    rules did not). Fourier–Motzkin from the polytope's facets down, keeping after each step
+    only the inequalities that the projected vertices show to be facets (tight on vertices of
+    rank one less than the projection's), keeps every step at its true facet count (at most
+    15): 21–250 ms per geometry.
+  - [x] A correctly specified Pottier algorithm (B): `src/cone/hilbert.rs`, described in
+    CLAUDE.md. The reduction ($z$ dropped if an element $w$ of the same sign has
+    $|\lambda(w)| \le |\lambda(z)|$ and $z - w$ in the old cone) is unsound when the old cone
+    has a lineality space: started from $\pm e_i$ as 5.1 proposed, it collapsed `h11_8`'s
+    basis to 2 elements. Started from a unimodular cone containing the Mori cone (a lattice
+    basis $m, a_i + K m$ with $m$ the sum of the facets, $K = 4$), its first cut ran over 15
+    minutes with more than 45000 elements and growing. Started from the simplicial cone of
+    the first $n$ independent Mori facets (fundamental parallelepiped of 1 point on three
+    geometries and 16 on `h11_10`), it is immediate: the Mori cone's basis in 1–4 ms (at most
+    a few dozen elements throughout), all the $K_T$ in 14–147 ms.
+  - [x] Comparison on the benchmark geometries (5.1), release, on the protocol's inputs:
+    candidate sets identical to Normaliz's cone data on the four geometries at their Quick
+    and Heavy modular degrees (`h11_8` 16 / 20, `h11_9` 16 / 20, `h11_10` 12 / 16, `h11_11`
+    16 / 18; the Huge tier has no modular scenarios), on the facet of `h11_9` (A only; B's
+    face support came with the integration), on the vex phases h2 and h4 against cone data by
+    brute force, and on `h11_9` under its sparse grading at 300 / 400 / 500 against the
+    semigroup enumeration, up to the pairs with vanishing forms that both skip. Without
+    `[1,0,0,0,0,0,1,0,0]` the facets are the same, so the candidates stay saturated, where
+    the semigroup enumeration loses two. Times (A; B's Mori basis + cones; the enumeration of
+    the bases into candidates, the same for B and Normaliz's data): `h11_8` 19 / 25 ms,
+    1 + 21 ms, 6 / 15 ms; `h11_9` 58 / 94 ms, 1 + 14 / 1 + 23 ms, 11 / 68 ms; `h11_10`
+    130 / 186 ms, 4 + 26 / 4 + 37 ms, 10 / 107 ms; `h11_11` 222 / 227 ms, 3 + 122 / 3 + 147
+    ms, 10 / 31 ms. Normaliz took 2.5–7 s per geometry. Memory: neither has an intermediate
+    beyond a few dozen inequalities or basis elements; the candidates dominate and are the
+    same either way. B was chosen as the hybrid it is (compact bases, then the existing,
+    tested cone path, and the reference saturated by the Mori cone's basis); its unknowns at
+    larger $h^{1,1}$ are the parallelepiped (capped at $2^{22}$ points, `ConeError::TooLarge`)
+    and the size of the Mori cone's basis, A's the projections, one polytope per $T$.
+  - [x] The winner integrated. `cone::cone_data(hyperplanes, equations, q, strata, grading,
+    max_deg)` gives complete `ConeData` (every $T$, vanishing pairs included), checked against
+    Normaliz's bases on the four bench geometries and the facet (`tests/cones.rs`). The
+    dispatch describes the Mori cone by the cone data's inequalities or `cone::facets` of the
+    generators, and without cone data computes it, truncated at `max_deg` lowered to the
+    targets' degree, and runs `CandidateSource::Cones`; the target lightcones are then the
+    hyperplane ones too. `CandidateSource::Generators` stays for library callers. Errors:
+    `ComputeError::MoriCone(ConeError)` (a line in the cone, a grading that is not positive on
+    it, overflow). No opt-out and no size threshold yet (6.2).
+    Before and after, `cargo bench --bench memory`, eight threads (peak RSS, time; the result
+    counts are identical): modular without cone data, which used to enumerate the semigroup,
+    `h11_9` deg 12 105 MB, 0.48 s against 27 MB, 0.11 s; deg 14 223 MB, 1.74 s against 38 MB,
+    0.17 s; `h11_9_plike` deg 400 69 MB, 0.52 s against 53 MB, 0.18 s; deg 500 329 MB, 3.55 s
+    against 69 MB, 0.76 s. The reference, now on the Mori cone's Hilbert basis instead of
+    thousands of generators, `h11_9` deg 10 3.5 s against 1.9 s and `h11_10` deg 8 5.0 s
+    against 1.6 s, the same peak; the rest, and modular with supplied cone data, unchanged.
 - [ ] **7c. Phases from a fan** (6.3): derive `strata`, the default Mori rays and grading, and
   optionally check `kappa`, from the fan's maximal cones and `q`, without normaliz. Port of
   `cgv_phase.py`, with exact rational linear algebra on small matrices using the big-number
@@ -730,12 +784,17 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     Prop. 5).
   - [ ] Tests piece by piece against `cgv_phase.py` (normaliz needed on the development
     machine only) and end to end against `cgv/tests/refs_vex`.
-- [ ] **7d. Saturation for the reference pipeline** (6.11). Only if 7b is integrated;
-  afterwards `auto` has one saturation semantics (6.2).
-  - [ ] The lattice points of the Mori cone up to `max_deg`, which is exactly the saturated
-    semigroup the reference enumerates, from the 7b machinery (directly if 7b uses polytope
-    enumeration, from the Mori cone's Hilbert basis if it uses Pottier).
-  - [ ] `mori_hyperplanes` accepted by both methods.
+- [x] **7d. Saturation for the reference pipeline** (6.11). Done with 7b; `auto` has one
+  saturation semantics (6.2).
+  - [x] The lattice points of the Mori cone up to `max_deg`, which is exactly the saturated
+    semigroup the reference enumerates, from the 7b machinery: the reference runs on
+    `cone::hilbert_basis` of the Mori cone's inequalities instead of the generators. Except
+    without any of `max_deg`, `min_points` and `target_points`, where the generators are the
+    curve classes (`Semigroup::from_data`) and are passed as given.
+  - [x] `mori_hyperplanes` accepted by both methods: with cone data the generators are
+    optional for the reference too (YAML, CLI, Python), except for such an untruncated
+    request. `tests/cones.rs::test_saturation`: without the Hilbert basis element of GV 20,
+    both methods now give the full result, with or without cone data.
 - [ ] **8. Certifier** (6.5).
   - [ ] The majorant run, fed with the candidate GVs, behind its own switch.
   - [ ] Tests against `cgv_maj` on the benchmark geometries.
@@ -762,6 +821,7 @@ Follow-ups after the main plan, not tracked here: GPU and the other C features (
 Goal: produce the cone data of 6.1 inside the crate, so the fast path does not depend on an
 external program. No suitable crate was found on crates.io (no Hilbert basis crate, no normaliz
 or 4ti2 bindings; `howzat` does double description only, and was evaluated under phase 7a).
+Outcome: both candidates below worked; B (Pottier) was integrated, see phase 7b.
 
 What is actually needed is narrower than a Hilbert basis. `modular` needs the *lattice points*
 of each $K_T$ up to `max_deg`, and the reference (7d) needs those of the Mori cone up to
@@ -927,10 +987,13 @@ Layers, from cheapest to most independent:
    - Reporting which Hilbert basis elements the input missed (the C's old note) would need the
      Mori cone's basis again. Dropped, as in #100; it can come back as a diagnostic if wanted.
 
-   Still open: what "too large" means (a dimension threshold, a time budget, or both; to be
-   settled from the phase 7 measurements), whether skipping for size should warn or error, the
-   name of the opt-out, and whether the completed basis should also be offered to the
-   reference method as an input fix.
+   **Done (phases 7b and 7d)**: both methods saturate, from the Mori cone's inequalities
+   (the cone data's, or the facets of the generators), with the exception of requests without
+   any truncation, whose generators are the curve classes as given. No warnings are needed,
+   since `auto` never mixes semantics.
+   Still open: what "too large" means (a dimension threshold, a time budget, or both; nothing
+   on the benchmark geometries comes close, so no threshold yet), whether skipping for size
+   should warn or error, and the name of the opt-out; none exists yet.
 3. **Scope. Direction: the same geometries as the reference** — threefolds and n-folds,
    hypersurfaces and complete intersections. "Complete intersection" here means what cygv
    already supports through `nefpart`: a complete intersection in a toric variety given by a

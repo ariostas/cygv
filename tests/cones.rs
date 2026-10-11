@@ -69,19 +69,16 @@ fn test_h11_9() {
         expected
     );
 
-    // Without the generators only the modular method can run.
+    // Without the generators both methods take the Mori cone from the cone data.
     let input = self::input(H11_9, false, 8, H11_9_CONES);
     assert_eq!(input.generators.shape(), (9, 0));
     assert_eq!(results(&input, Method::Auto).unwrap(), expected);
-    assert_eq!(
-        results(&input, Method::Reference),
-        Err(ComputeError::MissingGenerators)
-    );
+    assert_eq!(results(&input, Method::Reference).unwrap(), expected);
 }
 
 /// Without an element of the Hilbert basis of the Mori cone among the generators, their
-/// semigroup has a hole, and the invariants computed over it are not integers. The cones have
-/// every lattice point.
+/// semigroup has a hole, over which the invariants would not be integers. Both methods use
+/// every lattice point of the cone the generators span instead, with or without cone data.
 #[test]
 fn test_saturation() {
     let missing = "[1,0,0,0,0,0,1,0,0]";
@@ -96,10 +93,9 @@ fn test_saturation() {
     let expected = results(&full, Method::Modular).unwrap();
     assert_eq!(expected[&(vec![1, 0, 0, 0, 0, 0, 1, 0, 0], 0)], "20");
     assert_eq!(results(&input, Method::Modular).unwrap(), expected);
-    assert_eq!(
-        results(&without_cones(&input), Method::Modular),
-        Err(ComputeError::Modular(cygv::modular::Error::NotStable))
-    );
+    for method in [Method::Modular, Method::Reference] {
+        assert_eq!(results(&without_cones(&input), method).unwrap(), expected);
+    }
 }
 
 /// The cones of a facet give the invariants of the curves on it.
@@ -129,6 +125,58 @@ fn sorted_columns(m: &DMatrix<i32>) -> Vec<Vec<i32>> {
         .collect();
     v.sort();
     v
+}
+
+/// The Hilbert bases that `cone::cone_data` computes from the hyperplanes are Normaliz's, up to
+/// the degree of the computation, on the four benchmark geometries and on the facet of `h11_9`.
+#[test]
+fn test_cone_data() {
+    let cases = [
+        (H11_8, include_str!("../benches/data/cones/h11_8.yaml"), 12),
+        (H11_9, include_str!("../benches/data/cones/h11_9.yaml"), 12),
+        (
+            H11_10,
+            include_str!("../benches/data/cones/h11_10.yaml"),
+            10,
+        ),
+        (
+            H11_11,
+            include_str!("../benches/data/cones/h11_11.yaml"),
+            12,
+        ),
+        (H11_9, H11_9_FACET, 10),
+    ];
+    for (bench, cones, max_deg) in cases {
+        let input = input(bench, cones != H11_9_FACET, max_deg, cones);
+        let normaliz = input.cone_data.unwrap();
+        let w = input.grading_vector.as_slice();
+        let found = cygv::cone::cone_data(
+            &normaliz.hyperplanes,
+            &normaliz.equations,
+            &input.q,
+            &[],
+            w,
+            max_deg,
+        )
+        .unwrap();
+        assert_eq!(found.cones.len(), normaliz.cones.len());
+        let degree = |c: &Vec<i32>| -> i32 { c.iter().zip(w).map(|(x, y)| x * y).sum() };
+        for cone in &found.cones {
+            let theirs = normaliz
+                .cones
+                .iter()
+                .find(|c| c.divisors == cone.divisors)
+                .unwrap();
+            let mut expected = sorted_columns(&theirs.hilbert_basis);
+            expected.retain(|c| degree(c) <= max_deg as i32);
+            assert_eq!(
+                sorted_columns(&cone.hilbert_basis),
+                expected,
+                "{:?}",
+                cone.divisors
+            );
+        }
+    }
 }
 
 /// The facets that `cone::facets` finds from the generators are Normaliz's, on the Mori cones
@@ -359,22 +407,18 @@ fn test_entry_points() {
         );
     }
 
-    // Without generators, the requests that need the reference method fail.
+    // Without generators or cone data there is no Mori cone. With cone data, the requests
+    // that need the reference method take it from there.
     assert_eq!(
         p11222(none.clone(), None, None, Method::Auto),
         Err(ComputeError::MissingGenerators)
     );
     assert_eq!(
-        p11222(none.clone(), Some(cd.clone()), None, Method::Reference),
-        Err(ComputeError::MissingGenerators)
+        p11222(none.clone(), Some(cd.clone()), None, Method::Reference).unwrap(),
+        expected
     );
     assert_eq!(
-        p11222(none.clone(), Some(cd.clone()), Some(10), Method::Auto),
-        Err(ComputeError::MissingGenerators)
-    );
-    // With them, such a request ignores the cone data.
-    assert_eq!(
-        p11222(gens.clone(), Some(cd.clone()), Some(10), Method::Auto).unwrap(),
+        p11222(none.clone(), Some(cd.clone()), Some(10), Method::Auto).unwrap(),
         p11222(gens.clone(), None, Some(10), Method::Auto).unwrap()
     );
 

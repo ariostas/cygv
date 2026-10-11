@@ -55,16 +55,19 @@ implementation of the HKTY procedure with exact rational arithmetic, and support
 default, `auto`, uses the modular one whenever it can. `n_threads` sets the number of threads,
 which defaults to one per core.
 
-The modular implementation is much faster again with *cone data*, which a program such as
-[Normaliz](https://www.normaliz.uni-osnabrueck.de/) computes: the inequalities $h \cdot C \ge 0$ of
-the Mori cone as `mori_hyperplanes` (plus `mori_equations` when it is a face), and, as `cones`, a
-list of `(divisors, hilbert_basis)` pairs with the Hilbert basis of the cone $K_T$ of the curve
-classes in the Mori cone that only meet the divisors in $T$ negatively, for every set $T$ of one or
+The curve classes are all the lattice points of the Mori cone that the generators span, even when
+the generators miss some (as a sample of lattice points can), except when none of `max_deg`,
+`min_points` and `target_points` is given, where the generators are used as given. The modular
+implementation takes them from the Hilbert bases of the cones $K_T$ of the curve classes in the
+Mori cone that only meet the divisors in $T$ negatively, which it computes itself. These can also
+be given as *cone data*, computed by a program such as
+[Normaliz](https://www.normaliz.uni-osnabrueck.de/): the inequalities $h \cdot C \ge 0$ of the
+Mori cone as `mori_hyperplanes` (plus `mori_equations` when it is a face), and, as `cones`, a list
+of `(divisors, hilbert_basis)` pairs with the Hilbert basis of $K_T$ for every set $T$ of one or
 two divisors, and in a vex phase also for the three divisors of every stratum. Hilbert basis
 elements of degree above `max_deg` can be left out. The data is trusted, so a missing element
-silently drops curve classes. With it the curve classes are all the lattice points of the Mori
-cone, even when the generators would miss some, and the generators can be `None`, in which case
-only the modular implementation can run.
+silently drops curve classes. With it the generators can be `None`, unless none of `max_deg`,
+`min_points` and `target_points` is given.
 
 The results are returned as a list of `(curve_class, invariant)` pairs, in no particular order. GV
 invariants are Python `int`s, and GW invariants are `fractions.Fraction`s. For CYs of dimension greater than three the invariants are labeled by a curve

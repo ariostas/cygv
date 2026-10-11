@@ -8,16 +8,19 @@
 //! Target points may come with a maximum degree, which then truncates their backward
 //! lightcones further; without one, the largest degree of the targets is the maximum.
 //!
-//! The optional [`ConeData`] lets the modular pipeline take its candidates from the Hilbert
-//! bases of the cones $K_T$ instead of enumerating the semigroup of the generators, which is
-//! much faster and uses every lattice point of the Mori cone. With it the generators may be
-//! empty (no columns), but then only the modular pipeline can run. The reference pipeline
-//! ignores the cone data.
+//! Both pipelines use every lattice point of the Mori cone, even when the generators do not
+//! generate them all (decision 6.2 of `PLAN.md`). The Mori cone is described by the
+//! inequalities of the optional [`ConeData`], or else by the facets of the cone the generators
+//! span ([`crate::cone::facets`]). The reference pipeline takes the Hilbert basis of its
+//! lattice points as its generators ([`crate::cone::hilbert_basis`]), and the modular one
+//! takes its candidates from the Hilbert bases of the cones $K_T$: those of the cone data, or
+//! else computed ([`crate::cone::cone_data`]). With cone data the generators may be empty (no
+//! columns).
 //!
 //! The reference pipeline still panics on invalid input, while the errors of the modular one
 //! are returned.
 
-use crate::cone::{check_cone_data, columns, ConeData};
+use crate::cone::{check_cone_data, columns, ConeData, ConeError};
 use crate::modular::key::KeyError;
 use crate::modular::{self, CandidateSource, CurveInvariants, Geometry, Options};
 use crate::reference::{self, run_hkty};
@@ -42,8 +45,11 @@ pub enum ComputeError {
     InvalidConeData(&'static str),
     /// The target points do not fit the grading vector, for the given reason.
     InvalidTargetPoints(&'static str),
-    /// There are no generators, but the request needs them.
+    /// There are no generators, but the request needs them: there is no cone data either, or
+    /// nothing truncates the computation, which then uses the generators as the curve classes.
     MissingGenerators,
+    /// The Hilbert bases of the Mori cone could not be computed.
+    MoriCone(ConeError),
     /// The modular pipeline failed.
     Modular(modular::Error),
 }
@@ -60,9 +66,10 @@ impl fmt::Display for ComputeError {
             | Self::InvalidTargetPoints(reason) => write!(f, "{reason}"),
             Self::MissingGenerators => write!(
                 f,
-                "the generators of the Mori cone are needed, except by the modular method with \
-                 cone data"
+                "the generators are needed, without cone data or without max_deg, min_points \
+                 and target_points"
             ),
+            Self::MoriCone(e) => write!(f, "{e}"),
             Self::Modular(e) => write!(f, "{e}"),
         }
     }
@@ -151,10 +158,20 @@ fn compute(
         check_target_points(target_points, &grading_vector)
             .map_err(ComputeError::InvalidTargetPoints)?;
     }
-    let has_generators = generators.ncols() > 0;
-    if !has_generators && cone_data.is_none() {
-        return Err(ComputeError::MissingGenerators);
+    let h11 = grading_vector.len();
+    if generators.ncols() > 0 && generators.nrows() != h11 {
+        return Err(modular::Error::DimensionMismatch.into());
     }
+    // The Mori cone by inequalities.
+    let (hyperplanes, equations) = match &cone_data {
+        Some(cone_data) => (cone_data.hyperplanes.clone(), cone_data.equations.clone()),
+        None if generators.ncols() == 0 => return Err(ComputeError::MissingGenerators),
+        None => {
+            let f = crate::cone::facets(&generators)
+                .map_err(|_| ComputeError::MoriCone(ConeError::TooLarge))?;
+            (f.hyperplanes, f.equations)
+        }
+    };
     let unsupported = modular_unsupported(max_deg, min_points, target_points.is_some());
     let use_modular = match (method, unsupported) {
         (Method::Reference, _) | (Method::Auto, Some(_)) => false,
@@ -162,14 +179,37 @@ fn compute(
         (_, None) => true,
     };
     if use_modular {
+        let computed;
+        let cone_data = match &cone_data {
+            Some(cone_data) => cone_data,
+            None => {
+                // The candidates up to the maximum degree, which the targets lower to theirs.
+                let targets: Vec<&[i32]> = target_points
+                    .as_ref()
+                    .map_or_else(Vec::new, |t| columns(t).collect());
+                let top = match max_degree(&targets, grading_vector.as_slice()) {
+                    Some(d) => max_deg.map_or(d, |m| m.min(d)),
+                    None => max_deg.unwrap_or(u32::MAX),
+                };
+                computed = crate::cone::cone_data(
+                    &hyperplanes,
+                    &equations,
+                    &q,
+                    &strata,
+                    grading_vector.as_slice(),
+                    top,
+                )
+                .map_err(ComputeError::MoriCone)?;
+                &computed
+            }
+        };
         let res = run_modular(
-            &generators,
             &grading_vector,
             &q,
             &nefpart,
             &intnums,
             &strata,
-            cone_data.as_ref(),
+            cone_data,
             invariant_kind,
             cy_kind,
             max_deg,
@@ -179,13 +219,28 @@ fn compute(
         match res {
             Err(ComputeError::Modular(modular::Error::Key(
                 KeyError::TooWide { .. } | KeyError::BoundTooLarge,
-            ))) if method == Method::Auto && has_generators => {}
+            ))) if method == Method::Auto => {}
             res => return res,
         }
     }
-    if !has_generators {
-        return Err(ComputeError::MissingGenerators);
-    }
+    let generators = if max_deg.is_none() && min_points.is_none() && target_points.is_none() {
+        // Without any truncation the generators are the curve classes to use, as given.
+        if generators.ncols() == 0 {
+            return Err(ComputeError::MissingGenerators);
+        }
+        generators
+    } else {
+        // Every lattice point of the Mori cone, from the Hilbert basis.
+        let basis =
+            crate::cone::hilbert_basis(&hyperplanes, &equations).map_err(ComputeError::MoriCone)?;
+        if basis
+            .column_iter()
+            .any(|g| grading_vector.dot(&g.transpose()) <= 0)
+        {
+            return Err(ComputeError::MoriCone(ConeError::NonpositiveDegree));
+        }
+        basis
+    };
     // The reference truncates by the target points alone, so a maximum degree is applied to
     // its results.
     let truncate = max_deg.filter(|_| target_points.is_some());
@@ -209,18 +264,31 @@ fn compute(
     Ok(Results::Reference(res))
 }
 
+/// The largest degree of the targets, if there are any.
+fn max_degree(targets: &[&[i32]], grading_vector: &[i32]) -> Option<u32> {
+    targets
+        .iter()
+        .map(|p| {
+            let d: i64 = p
+                .iter()
+                .zip(grading_vector)
+                .map(|(&x, &w)| x as i64 * w as i64)
+                .sum();
+            d.clamp(0, u32::MAX as i64) as u32
+        })
+        .max()
+}
+
 /// Runs the modular pipeline with its default options and `n_threads` threads, with the
-/// candidates from the cone data if there is any, and from the generators otherwise. One of
-/// `max_deg` and `target_points` must be given.
+/// candidates from the cone data. One of `max_deg` and `target_points` must be given.
 #[allow(clippy::too_many_arguments)]
 fn run_modular(
-    generators: &DMatrix<i32>,
     grading_vector: &RowDVector<i32>,
     q: &DMatrix<i32>,
     nefpart: &[DVector<i32>],
     intnums: &HashMap<(usize, usize, usize), i32>,
     strata: &[Stratum],
-    cone_data: Option<&ConeData>,
+    cone_data: &ConeData,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
     max_deg: Option<u32>,
@@ -233,11 +301,7 @@ fn run_modular(
     let max_deg = max_deg.unwrap_or(u32::MAX);
     let geometry = Geometry::from_toric(q, nefpart, intnums, cy_kind, grading_vector)?
         .with_strata(strata, grading_vector)?;
-    let gens: Vec<&[i32]> = columns(generators).collect();
-    let source = match cone_data {
-        Some(cone_data) => CandidateSource::Cones(cone_data),
-        None => CandidateSource::Generators(&gens),
-    };
+    let source = CandidateSource::Cones(cone_data);
     let options = Options {
         // Zero threads means one, as for the reference.
         threads: n_threads.map(|n| n.max(1) as usize),
