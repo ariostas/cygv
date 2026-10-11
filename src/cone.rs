@@ -9,7 +9,13 @@
 //! pipeline can enumerate them from
 //! the Hilbert bases of the $K_T$ without the rest of the Mori cone, which is much faster than
 //! enumerating the semigroup of the generators. This module holds that data, [`ConeData`],
-//! which callers compute with an external program such as normaliz for now.
+//! which callers compute with an external program such as normaliz for now, and the
+//! conversion between the two descriptions of a cone, by generators and by inequalities
+//! ([`facets`] and [`rays`]), which gives the hyperplanes of the Mori cone from its generators.
+
+mod hull;
+
+pub use hull::{facets, rays, Generators, Inequalities, TooLarge};
 
 use crate::Stratum;
 use nalgebra::DMatrix;

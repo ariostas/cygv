@@ -91,6 +91,12 @@ every $T$ of one or two divisors and, in a vex phase, the three divisors of ever
 its validation (`check_cone_data`). Callers compute it
 with an external program such as Normaliz (the Python side deliberately does not call one);
 it is the shared home the native cone computations of `PLAN.md` phase 7 are meant to land in.
+The first of them is `src/cone/hull.rs` (phase 7a): `cone::facets` and `cone::rays` convert
+between generators and inequalities by the double description method, in `i128` with
+overflow checks (`TooLarge`), with a canonical output (equations in reduced row echelon form,
+each hyperplane reduced to vanish at their pivots). It sorts its input by 1-norm first, which
+is what makes it fast on Mori cones of thousands of generators. Nothing in the pipelines
+calls it yet.
 
 `src/modular.rs` and `src/modular/` hold the faster pipeline, which is still being extended and
 tuned. It computes modulo word-sized primes and lifts the results with the CRT, and shares no

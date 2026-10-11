@@ -12,7 +12,10 @@ use cygv::{CYKind, CandidateCone, ConeData, InvariantKind, Method};
 use nalgebra::{dmatrix, DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
 
+const H11_8: &str = include_str!("../benches/data/h11_8.yaml");
 const H11_9: &str = include_str!("../benches/data/h11_9.yaml");
+const H11_10: &str = include_str!("../benches/data/h11_10.yaml");
+const H11_11: &str = include_str!("../benches/data/h11_11.yaml");
 const H11_9_CONES: &str = include_str!("data/h11_9_cones.yaml");
 const H11_9_FACET: &str = include_str!("data/h11_9_facet.yaml");
 
@@ -116,6 +119,67 @@ fn test_facet() {
         results(&without_cones(&input), Method::Modular).unwrap(),
         expected
     );
+}
+
+/// The columns of a matrix, sorted.
+fn sorted_columns(m: &DMatrix<i32>) -> Vec<Vec<i32>> {
+    let mut v: Vec<Vec<i32>> = m
+        .column_iter()
+        .map(|c| c.iter().copied().collect())
+        .collect();
+    v.sort();
+    v
+}
+
+/// The facets that `cone::facets` finds from the generators are Normaliz's, on the Mori cones
+/// of the four benchmark geometries and on the facet of `h11_9`.
+#[test]
+fn test_facets() {
+    let benches = [
+        (H11_8, include_str!("../benches/data/cones/h11_8.yaml")),
+        (H11_9, include_str!("../benches/data/cones/h11_9.yaml")),
+        (H11_10, include_str!("../benches/data/cones/h11_10.yaml")),
+        (H11_11, include_str!("../benches/data/cones/h11_11.yaml")),
+    ];
+    for (bench, cones) in benches {
+        let input = input(bench, true, 8, cones);
+        let normaliz = input.cone_data.unwrap();
+        let found = cygv::cone::facets(&input.generators).unwrap();
+        assert_eq!(found.equations.ncols(), 0);
+        assert_eq!(
+            sorted_columns(&found.hyperplanes),
+            sorted_columns(&normaliz.hyperplanes)
+        );
+    }
+
+    // On the facet, a hyperplane is only defined up to multiples of the equation, so
+    // Normaliz's are moved along it to vanish where `facets` makes them vanish, at the
+    // equation's first nonzero entry.
+    let input = input(H11_9, false, 10, H11_9_FACET);
+    let normaliz = input.cone_data.unwrap();
+    let found = cygv::cone::facets(&input.generators).unwrap();
+    assert_eq!(found.equations, normaliz.equations);
+    let e: Vec<i32> = normaliz.equations.iter().copied().collect();
+    let p = e.iter().position(|&x| x != 0).unwrap();
+    let reduced: Vec<i32> = normaliz
+        .hyperplanes
+        .column_iter()
+        .flat_map(|h| {
+            let v: Vec<i32> = h.iter().zip(&e).map(|(x, y)| e[p] * x - h[p] * y).collect();
+            let g = v.iter().fold(0, |g, &x| gcd(g, x.abs()));
+            v.into_iter().map(move |x| x / g)
+        })
+        .collect();
+    let reduced = DMatrix::from_vec(9, normaliz.hyperplanes.ncols(), reduced);
+    assert_eq!(sorted_columns(&found.hyperplanes), sorted_columns(&reduced));
+}
+
+fn gcd(a: i32, b: i32) -> i32 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
 }
 
 /// The curve classes of `results` below one of the columns of `targets`, i.e. those that leave

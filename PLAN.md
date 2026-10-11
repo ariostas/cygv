@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5 and 5b done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b and 7a done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": phase 5b replaced `rug` with `malachite` everywhere (6.10). Branch
 `gv-modular-rust` is PR #94 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main`
@@ -661,8 +661,52 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
   hyperplanes from spanning vectors, in any dimension, with exact integers. Needed regardless
   of how 7b turns out: it gives the Mori cone's facets (target points, `mori_rays` input, the
   default grading) and the hull facets that phase 7c needs.
-  - [ ] Decide: our own implementation or `howzat`.
-  - [ ] Implementation and tests.
+  - [x] Decide: our own implementation or `howzat`. Our own (decided with you), from this
+    evaluation.
+    `howzat` 0.4 (with `dashu`, not its default `rug`):
+    - It is AGPL-3.0-only, as are its dependencies `calculo` and `hullabaloo-core`. GPL-3.0
+      code may be combined with it, but the combination would put AGPL's network clause on
+      every downstream service built on `cygv`.
+    - Correct and fast on the full-dimensional Mori cones: on the generators of the four
+      `benches/data` files it gives Normaliz's facets in 0.06–0.95 s.
+    - It drops facets on a lower-dimensional cone. On the generators of
+      `tests/data/h11_9_facet.yaml` (an eight-dimensional cone in $\mathbb{Z}^9$), fed the
+      cdd way (the origin as a point, the generators as rays, as its own tests do), it returns
+      the equation and 7 of the 9 facets, whatever the order of the generators. Normaliz's 9
+      are all facets (each is tight on generators of rank 7). Fed as rays only, it returns
+      the 9 facets but no equation.
+
+    Our own, as a scratch prototype: the dual cone in exact `i128` with overflow checks
+    (none overflowed), the lineality handled as cdd does, Motzkin's iteration with the
+    combinatorial adjacency test, about 100 lines. It matches Normaliz on all five inputs,
+    the facet's equation included (its facet vectors differ from Normaliz's by multiples of
+    the equation, so the output needs a canonical reduction modulo the equations). The order
+    of the generators decides its speed: as given, 0.01–1.2 s (12–22 s on `h11_11` shuffled);
+    sorted by the 1-norm of the generators, 4–68 ms, i.e. 3–50x faster than `howzat`.
+  - [x] Implementation and tests. `src/cone/hull.rs`: `cone::facets` (generators to
+    `Inequalities`, i.e. hyperplanes and equations, the `ConeData` convention) and
+    `cone::rays` (inequalities to `Generators`, extreme rays and a lineality basis), both
+    through the dual cone of a set of vectors, public. Exact `i128` with overflow checks; an
+    entry of the result that does not fit 32 bits, or an intermediate one 128, is the error
+    `TooLarge` rather than a fallback to `malachite` (outputs go into `i32` matrices anyway).
+    Canonical output: zero, repeated and redundant inputs are dropped; the equations (the
+    lineality basis) are in reduced row echelon form, each row primitive with a positive
+    pivot; each hyperplane (ray) is moved along them to vanish at their pivots and made
+    primitive; both sorted. The input is sorted by 1-norm, then lexicographically, so the
+    result and the run time do not depend on its order: 10 / 30 / 130 / 10 ms on the
+    generators of `h11_8` / `h11_9` / `h11_10` / `h11_11` (release, shuffled or not; slower
+    than the prototype's best on `h11_10`, 68 ms, whose ties were in file order). Cones with
+    lines and lower-dimensional ones are handled: the adjacency test is the combinatorial one
+    alone, without the rank precheck, whose count would need the true dimension. Tests: by
+    hand (orthant, square, a face, a ray, half-plane, plane, $\{0\}$, faces through
+    `rays`), random cones in dimensions 2–5 against a brute force (normals of every $n - 1$
+    generators; a third of the cones on $x_n = x_1$, against the brute force of their
+    projection), the round trip `facets(rays(facets(G))) == facets(G)`, overflow, and
+    `tests/cones.rs::test_facets`: Normaliz's hyperplanes on the four bench geometries and
+    on the facet of `h11_9` (Normaliz's hyperplanes reduced along the equation the same way).
+    Not wired into the pipelines or the inputs yet: the consumers are 7b (the $K_T$ by
+    inequalities, and their rays for coordinate bounds), 7c (the hull facets) and an optional
+    `mori_hyperplanes` derived from `generators`.
 - [ ] **7b. Candidate lattice points without normaliz: time-boxed comparison, then integrate
   or drop** (5.1). Independent of phases 1–5 and can run alongside them.
   - [ ] Direct enumeration of polytope lattice points.
@@ -717,7 +761,7 @@ Follow-ups after the main plan, not tracked here: GPU and the other C features (
 
 Goal: produce the cone data of 6.1 inside the crate, so the fast path does not depend on an
 external program. No suitable crate was found on crates.io (no Hilbert basis crate, no normaliz
-or 4ti2 bindings; `howzat` does double description only and has not been evaluated).
+or 4ti2 bindings; `howzat` does double description only, and was evaluated under phase 7a).
 
 What is actually needed is narrower than a Hilbert basis. `modular` needs the *lattice points*
 of each $K_T$ up to `max_deg`, and the reference (7d) needs those of the Mori cone up to
