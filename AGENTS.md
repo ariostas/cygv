@@ -152,8 +152,10 @@ each exponential built by the Euler recurrence in per-degree tables) and `multic
 invariants from those, by gcd of the coordinates; exponent 3 and a division by the degree for
 threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats passes with the
 next primes until `crt::Residues` gives a stable lift (the lift from all but the last
-`check_primes` primes must agree with those), with `Options` for the lane count and a minimum
-number of primes; big integers come from `num-bigint`, a provisional choice confined to `crt`.
+`check_primes` primes must agree with those), with `Options` for the lane count (2 to 4 primes
+per pass; by default `choose_lanes` predicts it from a probe run at 3/4 of the degree, as the
+C's driver does), a minimum number of primes, the thread count and the extraction's tuning;
+big integers come from `num-bigint`, a provisional choice confined to `crt`.
 `compute_gw` derives the GW invariants from the lifted GV invariants
 (`multicover::gw_from_gv`, in `num-rational`), since they are not integers. Both truncate by
 `max_deg` and optionally by target points: `lightcone` holds the union of their backward
@@ -161,7 +163,7 @@ lightcones (the $C$ with $P - C$ in the Mori cone), tested by the Mori cone's hy
 cone data and by membership in the generated semigroup otherwise (which is then enumerated up
 to the targets' degree, matching the reference), and applied at the C's three points: the
 candidates, the curves the extraction subtracts, and each pass's output (GW too, since the
-multiples of a curve leave the lightcones). Everything is single-threaded so far. `Geometry` in `src/modular.rs` holds the integer data
+multiples of a curve leave the lightcones). `Geometry` in `src/modular.rs` holds the integer data
 the stages read: the CY kind, the charges, one anticanonical row per part of the nef
 partition, and $M$ bilinear forms, one for a threefold ($\sum_t w_t \kappa_{tab}$) and one per
 reference surface for an n-fold, which give $I$ $M$ components. `src/modular/reference_tests.rs`
@@ -249,6 +251,23 @@ indices differently (the first index is a reference surface in the n-fold case).
   swinging by tens of MiB from run to run. Where a worker needs bignum scratch space it gets it from
   `for_each_init`, which builds it once per rayon job instead of once per item (see `CScratch` in
   `src/reference/fundamental_period.rs`).
+- **Threading in `modular`** follows the same pattern: `modular::run` builds a private pool with
+  `Options::threads` workers (the dispatch passes `n_threads`, zero meaning one) and installs
+  candidates, passes and lift in it. The candidates enumerate the cones in parallel, the period
+  splits the candidates into chunks, and the products of `instanton` and the extraction use
+  shards: a `table::ShardedMap` (or the extraction's own shards, which also carry a degree heap)
+  splits a table by the high bits of the key hash, each shard behind a `Mutex`, and workers add
+  to it in batches (a chunk's own map, or per-shard buffers of `FLUSH` terms), so each lock is
+  taken rarely. The extraction applies the curves of a layer (degrees $[d, d + \delta)$, $\delta$
+  the lowest degree of $\alpha$) in parallel, each worker indexed by
+  `rayon::current_thread_index` with its own level tables; layers of few large curves (the first
+  ones) instead go level-synchronously, with the scatter of each curve into each of its levels as
+  a task (`extraction::Tuning`). Results do not depend on the thread count, since the arithmetic
+  is exact and every table is sorted when taken; `tests/stress.rs` (ignored, run with
+  `cargo test --release --test stress -- --ignored` before releases and after changes to the
+  parallel code) checks that over repeated runs, and `reference_tests::test_threads` forces both
+  extraction modes on a few threads in every test run. The tuning constants were measured on a
+  4-core machine with hyperthreading and are provisional.
 
 ### Command line interface
 
@@ -299,8 +318,12 @@ crossed with one or both `Variant`s (GV or GW), at a couple of maximum degrees. 
 like `fourfold/deg15/gw-rational` (the suffix predates the removal of the floating-point variants
 and is kept so that saved criterion baselines still match), and any argument after `--` that is
 not a flag filters on it. Adding a model or a degree means adding a row to `scenarios()`; nothing else has to
-change. Every scenario runs the reference pipeline (`Method::Reference`, explicitly, since the
-default is `Auto`); the modular pipeline has no benchmarks yet.
+change. Each row also names a `Pipeline`: the reference (`Method::Reference`, explicitly, since
+the default is `Auto`), or the modular one with its candidates from the generators or from the
+cone data. The modular ids end in `/modular` or `/modular-cones` (the reference ones have no
+suffix, so that older baselines still match), so `cargo bench -- modular` runs only those. The
+modular scenarios go to much higher degrees, mostly with the cone data, and its scenarios
+without it mostly measure the enumeration of the semigroup.
 
 There are two kinds of model. `threefold` ($h^{1,1} = 2$ hypersurface) and `fourfold` ($h^{1,1} = 6$
 CICY) are small, hardcoded, and run both variants. `h11_8`, `h11_9`, `h11_10` and `h11_11`
@@ -313,7 +336,10 @@ sparse grading vector with large entries, which spreads the curve classes over h
 levels and stresses the series inversion rather than the bignum arithmetic. The realistic models
 only run `gv-rational`. Their data comes from an external project's test set and was cross-checked
 against an independent HKTY implementation; the files record where each geometry comes from, and
-some drop generators above the highest degree any scenario reaches.
+some drop generators above the highest degree any scenario reaches. `benches/data/cones/` holds
+their cone data, computed with Normaliz and truncated at the highest degree of the modular
+scenarios; like `tests/data/`, it is excluded from the published crate. `h11_9_plike` has none,
+since the truncation is by the other grading.
 
 - `benches/bench.rs` measures wall clock with criterion. Each scenario carries a `sample_size` and
   an `expected_secs` that only sizes criterion's measurement window;

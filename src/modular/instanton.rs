@@ -11,12 +11,20 @@
 //! pipeline's instanton corrections, and for an n-fold $I^{(k)} = \mathrm{inst}_k$; in both
 //! cases it replaces the $\beta$ and $F$ series and the per-index products of the reference.
 //! All series are truncated at the maximum degree.
+//!
+//! The products run in parallel over chunks of their first factor, each accumulating in a map
+//! of its own that it then adds to a [`ShardedMap`]. Since each $\alpha_a$ has few terms,
+//! $\sum_a \alpha_a V^{(k)}_a = \frac12 \sum_{a, b} K^{(k)}_{ab}\, \alpha_a \alpha_b$ is taken
+//! as products of the columns of $\alpha$, only for the pairs $a \le b$ on which some form
+//! does not vanish, and by symmetry each pair of terms only once.
 
 use super::field::Ring;
 use super::key::Key;
 use super::period::PeriodData;
-use super::table::{DegreeHeap, SlotMap, SparsePoly};
+use super::table::{DegreeHeap, ShardedMap, SlotMap, SparsePoly};
 use super::{Error, Geometry};
+use core::ops::Range;
+use rayon::prelude::*;
 
 /// The output of the instanton stage.
 #[derive(Debug, Clone)]
@@ -27,47 +35,103 @@ pub struct InstantonData<K, E> {
     pub inst: SparsePoly<K, E>,
 }
 
-/// Adds $f(a_x, b_y)$ to the slot of $x + y$ in `acc` for every pair of terms with total
-/// degree at most `max_deg`.
-///
-/// `f` gets the values of the two terms and those of the slot.
-pub fn mul_into<K: Key, E: Copy + Default + PartialEq>(
-    a: &SparsePoly<K, E>,
-    b: &SparsePoly<K, E>,
-    max_deg: u32,
-    acc: &mut SlotMap<K, E>,
-    mut f: impl FnMut(&[E], &[E], &mut [E]),
+/// Splits the indices `0..n` into at most `n_chunks` consecutive ranges of similar total
+/// `cost`.
+fn chunks(n: usize, n_chunks: usize, cost: impl Fn(usize) -> usize) -> Vec<Range<usize>> {
+    let total: usize = (0..n).map(&cost).sum();
+    let per_chunk = total.div_ceil(n_chunks.max(1)).max(1);
+    let mut res = Vec::new();
+    let (mut start, mut acc) = (0, 0);
+    for x in 0..n {
+        acc += cost(x);
+        if acc >= per_chunk || x + 1 == n {
+            res.push(start..x + 1);
+            (start, acc) = (x + 1, 0);
+        }
+    }
+    res
+}
+
+/// Calls `body(x, map)` for every `x` in `0..n`, in parallel over chunks of similar total
+/// `cost` on the threads of the current rayon pool, where `map` is a map with `width` values
+/// per slot of the chunk's own. Each chunk then adds its map to `acc` with `add`.
+fn par_accumulate<K: Key, E: Copy + Default + PartialEq + Send + Sync>(
+    acc: &ShardedMap<K, E>,
+    width: usize,
+    n: usize,
+    cost: impl Fn(usize) -> usize,
+    body: impl Fn(usize, &mut SlotMap<K, E>) + Sync,
+    add: impl Fn(&mut [E], &[E]) + Sync,
 ) {
-    for x in 0..a.len() {
-        let dx = a.degs()[x];
-        if dx > max_deg {
-            break;
-        }
-        let (kx, vx) = (a.keys()[x], a.values(x));
-        for y in 0..b.len_upto(max_deg - dx) {
-            let out = acc.get_or_insert(kx + b.keys()[y], dx + b.degs()[y]);
-            f(vx, b.values(y), out);
-        }
+    let threads = rayon::current_num_threads();
+    let n_chunks = if threads == 1 { 1 } else { 4 * threads };
+    chunks(n, n_chunks, cost).into_par_iter().for_each_init(
+        || SlotMap::new(width, 1024),
+        |local, xs| {
+            for x in xs {
+                body(x, local);
+            }
+            acc.add_from(local, &add);
+        },
+    );
+}
+
+/// Adds $a \cdot b$, truncated at `max_deg`, to `acc`, where `a` has one value per term and
+/// `b` as many as `acc`.
+fn mul_scalar_into<R: Ring, K: Key>(
+    ring: &R,
+    a: &SparsePoly<K, R::Elem>,
+    b: &SparsePoly<K, R::Elem>,
+    max_deg: u32,
+    acc: &ShardedMap<K, R::Elem>,
+) {
+    debug_assert_eq!(a.width(), 1);
+    let inner = |x: usize| b.len_upto(max_deg - a.degs()[x]);
+    par_accumulate(
+        acc,
+        b.width(),
+        a.len_upto(max_deg),
+        inner,
+        |x, local| {
+            let (kx, dx, ax) = (a.keys()[x], a.degs()[x], a.values(x)[0]);
+            for y in 0..inner(x) {
+                let out = local.get_or_insert(kx + b.keys()[y], dx + b.degs()[y]);
+                for (o, &v) in out.iter_mut().zip(b.values(y)) {
+                    ring.fma(o, ax, v);
+                }
+            }
+        },
+        |out, v| add_into(ring, out, v),
+    );
+}
+
+/// The number of shards for a table that the threads of the current rayon pool add to.
+fn n_shards() -> usize {
+    match rayon::current_num_threads() {
+        1 => 1,
+        n => 4 * n,
     }
 }
 
 /// The product of a series with one value per term and one with any number, truncated at
-/// `max_deg`, with `acc` as the working space (it is left empty).
+/// `max_deg`, computed on the threads of the current rayon pool.
 pub fn mul_scalar<R: Ring, K: Key>(
     ring: &R,
     a: &SparsePoly<K, R::Elem>,
     b: &SparsePoly<K, R::Elem>,
     max_deg: u32,
-    acc: &mut SlotMap<K, R::Elem>,
 ) -> SparsePoly<K, R::Elem> {
-    debug_assert_eq!((a.width(), acc.width()), (1, b.width()));
-    acc.clear();
-    mul_into(a, b, max_deg, acc, |va, vb, out| {
-        for (o, &v) in out.iter_mut().zip(vb) {
-            ring.fma(o, va[0], v);
-        }
-    });
+    let acc = ShardedMap::new(b.width(), n_shards(), b.len());
+    mul_scalar_into(ring, a, b, max_deg, &acc);
     acc.take()
+}
+
+/// Adds `v` to `out`, value by value.
+#[inline]
+fn add_into<R: Ring>(ring: &R, out: &mut [R::Elem], v: &[R::Elem]) {
+    for (o, &x) in out.iter_mut().zip(v) {
+        *o = ring.add(*o, x);
+    }
 }
 
 /// The reciprocal of a series with one value per term, truncated at `max_deg`, with `acc`
@@ -126,54 +190,78 @@ pub fn instanton<R: Ring, K: Key>(
     if period.c1.width() != h11 || period.s2.width() != m {
         return Err(Error::DimensionMismatch);
     }
-    let zero = R::Elem::default();
-
     let mut acc = SlotMap::new(1, period.c0.len());
     let c0_inv = recip(ring, &period.c0, max_deg, &mut acc)?;
-    let mut acc = SlotMap::new(h11, period.c1.len());
-    let alpha = mul_scalar(ring, &c0_inv, &period.c1, max_deg, &mut acc);
     drop(acc);
+    let alpha = mul_scalar(ring, &c0_inv, &period.c1, max_deg);
 
-    // V, with the values of all forms side by side: v[k * h11 + a] = V^(k)_a.
-    let half = period.tables.inv[2];
-    let forms: Vec<R::Elem> = (0..m)
-        .flat_map(|k| {
-            geometry
-                .form(k)
-                .iter()
-                .map(|&x| ring.mul(ring.int(x), half))
-        })
-        .collect();
-    let mut v = SparsePoly::new(m * h11);
-    let mut vals = vec![zero; m * h11];
+    let acc = ShardedMap::new(m, n_shards(), period.s2.len() + alpha.len());
+    mul_scalar_into(ring, &c0_inv, &period.s2, max_deg, &acc);
+
+    // sum_a alpha_a V^(k)_a = 1/2 sum_{a, b} K^(k)_ab alpha_a alpha_b, by pairs of columns
+    // a <= b with some K_ab nonzero, since each alpha_a has few terms: the product of the two
+    // columns times K_ab for a < b, and for a = b half of it, i.e. the products of the terms
+    // x < y and half of those of x = y.
+    let mut columns: Vec<Vec<(K, u32, R::Elem)>> = vec![Vec::new(); h11];
     for x in 0..alpha.len() {
-        let al = alpha.values(x);
-        for (row, out) in forms.chunks_exact(h11).zip(vals.iter_mut()) {
-            *out = zero;
-            for (&kab, &ab) in row.iter().zip(al) {
-                ring.fma(out, kab, ab);
+        for (a, &v) in alpha.values(x).iter().enumerate() {
+            if !ring.is_zero(v) {
+                columns[a].push((alpha.keys()[x], alpha.degs()[x], v));
             }
-        }
-        if vals.iter().any(|&x| !ring.is_zero(x)) {
-            v.push(alpha.keys()[x], alpha.degs()[x], &vals);
         }
     }
-
-    let mut acc = SlotMap::new(m, period.s2.len() + alpha.len());
-    mul_into(&c0_inv, &period.s2, max_deg, &mut acc, |a, b, out| {
-        for (o, &s) in out.iter_mut().zip(b) {
-            ring.fma(o, a[0], s);
-        }
-    });
-    mul_into(&alpha, &v, max_deg, &mut acc, |al, vv, out| {
-        for (o, vk) in out.iter_mut().zip(vv.chunks_exact(h11)) {
-            let mut d = zero;
-            for (&x, &y) in al.iter().zip(vk) {
-                ring.fma(&mut d, x, y);
+    let half = period.tables.inv[2];
+    // For each pair of columns, the coefficients K^(k)_ab of the forms.
+    let mut pairs: Vec<(usize, usize, Vec<R::Elem>)> = Vec::new();
+    for a in 0..h11 {
+        for b in a..h11 {
+            let kab: Vec<i64> = (0..m).map(|k| geometry.form(k)[a * h11 + b]).collect();
+            if kab.iter().any(|&x| x != 0) && !columns[a].is_empty() && !columns[b].is_empty() {
+                pairs.push((a, b, kab.iter().map(|&x| ring.int(x)).collect()));
             }
-            *o = ring.sub(*o, d);
         }
-    });
+    }
+    // The outer terms: each pair with each term of its first column.
+    let outer: Vec<(u32, u32)> = pairs
+        .iter()
+        .enumerate()
+        .flat_map(|(p, &(a, _, _))| (0..columns[a].len() as u32).map(move |i| (p as u32, i)))
+        .collect();
+    let inner = |o: usize| {
+        let (p, i) = (outer[o].0 as usize, outer[o].1 as usize);
+        let (a, b, _) = &pairs[p];
+        let (col_a, col_b) = (&columns[*a], &columns[*b]);
+        let d = col_a[i].1;
+        let start = if a == b { i } else { 0 };
+        let end = if d > max_deg {
+            0
+        } else {
+            col_b.partition_point(|t| t.1 <= max_deg - d)
+        };
+        start..end.max(start)
+    };
+    par_accumulate(
+        &acc,
+        m,
+        outer.len(),
+        |o| inner(o).len(),
+        |o, local| {
+            let (p, i) = (outer[o].0 as usize, outer[o].1 as usize);
+            let (a, b, kab) = &pairs[p];
+            let (kx, dx, vx) = columns[*a][i];
+            for j in inner(o) {
+                let (ky, dy, vy) = columns[*b][j];
+                let mut v = ring.mul(vx, vy);
+                if a == b && i == j {
+                    v = ring.mul(v, half);
+                }
+                for (out, &k) in local.get_or_insert(kx + ky, dx + dy).iter_mut().zip(kab) {
+                    *out = ring.sub(*out, ring.mul(k, v));
+                }
+            }
+        },
+        |out, v| add_into(ring, out, v),
+    );
     let inst = acc.take();
     Ok(InstantonData { alpha, inst })
 }
@@ -259,9 +347,7 @@ mod tests {
         for (max_deg, width) in [(10, 1), (10, 3), (6, 2), (0, 1)] {
             let a = random_series(&mut rng, &lf, &layout, 1, 10, Some(3));
             let b = random_series(&mut rng, &lf, &layout, width, 10, None);
-            let mut acc = SlotMap::new(width, 4);
-            let p = mul_scalar(&lf, &a, &b, max_deg, &mut acc);
-            assert!(acc.is_empty());
+            let p = mul_scalar(&lf, &a, &b, max_deg);
             assert_eq!(as_map(&p), naive_mul(&lf, &a, &b, max_deg));
             assert!(p.degs().iter().all(|&d| d <= max_deg));
         }

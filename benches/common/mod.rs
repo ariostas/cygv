@@ -9,7 +9,7 @@ use cygv::dispatch::{
     compute_gv_rat_nfold, compute_gv_rat_threefold, compute_gw_rat_nfold, compute_gw_rat_threefold,
 };
 use cygv::io::Input;
-use cygv::{CYKind, Method};
+use cygv::{CYKind, ConeData, Method};
 use nalgebra::{dmatrix, dvector, DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
 
@@ -38,6 +38,9 @@ pub struct Model {
     pub nefpart: Vec<DVector<i32>>,
     pub intnums: HashMap<(usize, usize, usize), i32>,
     pub cy_kind: CYKind,
+    /// The cone data, for the realistic models, with which the modular pipeline takes its
+    /// candidates from the Hilbert bases of the cones $K_T$.
+    pub cone_data: Option<ConeData>,
 }
 
 /// Looks up one of the benchmark models by name.
@@ -45,11 +48,23 @@ pub fn model(name: &str) -> Model {
     match name {
         "threefold" => threefold(),
         "fourfold" => fourfold(),
-        "h11_8" => fixture("h11_8", include_str!("../data/h11_8.yaml")),
+        "h11_8" => fixture(
+            "h11_8",
+            include_str!("../data/h11_8.yaml"),
+            include_str!("../data/cones/h11_8.yaml"),
+        ),
         "h11_9" => h11_9(),
         "h11_9_plike" => h11_9_plike(),
-        "h11_10" => fixture("h11_10", include_str!("../data/h11_10.yaml")),
-        "h11_11" => fixture("h11_11", include_str!("../data/h11_11.yaml")),
+        "h11_10" => fixture(
+            "h11_10",
+            include_str!("../data/h11_10.yaml"),
+            include_str!("../data/cones/h11_10.yaml"),
+        ),
+        "h11_11" => fixture(
+            "h11_11",
+            include_str!("../data/h11_11.yaml"),
+            include_str!("../data/cones/h11_11.yaml"),
+        ),
         _ => panic!("unknown model {name:?}"),
     }
 }
@@ -61,10 +76,13 @@ pub fn model(name: &str) -> Model {
 ///
 /// These are the realistic models: CY threefold hypersurfaces with
 /// $h^{1,1}$ between 8 and 11, whose generators include thousands of lattice
-/// points of the Mori cone, the way CYTools passes them.
-fn fixture(name: &'static str, data: &str) -> Model {
-    let mut inputs =
-        Input::load_all(data).unwrap_or_else(|e| panic!("invalid fixture {name:?}: {e}"));
+/// points of the Mori cone, the way CYTools passes them. Their cone data, from
+/// `benches/data/cones`, is appended to them; it was computed with Normaliz
+/// and is only complete up to the degree the scenarios reach (see the comments
+/// at the top of those files). It is left out of the published crate.
+fn fixture(name: &'static str, data: &str, cones: &str) -> Model {
+    let mut inputs = Input::load_all(&format!("{data}\n{cones}"))
+        .unwrap_or_else(|e| panic!("invalid fixture {name:?}: {e}"));
     assert_eq!(inputs.len(), 1, "fixture {name:?} must hold one document");
     let input = inputs.remove(0);
     Model {
@@ -75,13 +93,18 @@ fn fixture(name: &'static str, data: &str) -> Model {
         nefpart: input.nefpart,
         intnums: input.intnums,
         cy_kind: input.cy_kind,
+        cone_data: input.cone_data,
     }
 }
 
 /// A CY threefold hypersurface with $h^{1,1} = 9$ whose semigroup grows
 /// quickly with the degree.
 pub fn h11_9() -> Model {
-    fixture("h11_9", include_str!("../data/h11_9.yaml"))
+    fixture(
+        "h11_9",
+        include_str!("../data/h11_9.yaml"),
+        include_str!("../data/cones/h11_9.yaml"),
+    )
 }
 
 /// The [`h11_9`] model under a grading vector with large entries of both signs.
@@ -95,6 +118,8 @@ pub fn h11_9_plike() -> Model {
         grading_vector: RowDVector::from_row_slice(&[
             148, -121, -108, -29, -147, -114, -89, -141, -136,
         ]),
+        // The cone data leaves out elements by their degree under the other grading.
+        cone_data: None,
         ..h11_9()
     }
 }
@@ -132,6 +157,7 @@ pub fn threefold() -> Model {
         nefpart,
         intnums,
         cy_kind: CYKind::Threefold,
+        cone_data: None,
     }
 }
 
@@ -250,6 +276,7 @@ pub fn fourfold() -> Model {
         nefpart,
         intnums,
         cy_kind: CYKind::Nfold,
+        cone_data: None,
     }
 }
 
@@ -274,6 +301,29 @@ impl Variant {
     }
 }
 
+/// The pipeline a scenario runs, and where the modular one takes its candidates from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pipeline {
+    /// The reference pipeline.
+    Reference,
+    /// The modular pipeline, with the candidates from the semigroup of the generators.
+    Modular,
+    /// The modular pipeline, with the candidates from the cone data.
+    ModularCones,
+}
+
+impl Pipeline {
+    /// The suffix of the scenario ids, empty for the reference so that the ids
+    /// of baselines saved before the modular pipeline had scenarios still match.
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Pipeline::Reference => "",
+            Pipeline::Modular => "/modular",
+            Pipeline::ModularCones => "/modular-cones",
+        }
+    }
+}
+
 /// How expensive a scenario is, which decides when it is run.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tier {
@@ -287,11 +337,13 @@ pub enum Tier {
     Huge,
 }
 
-/// A single benchmark case: one model, up to one degree, with one variant.
+/// A single benchmark case: one model, up to one degree, with one variant, in
+/// one pipeline.
 pub struct Scenario {
     pub model: &'static str,
     pub max_deg: u32,
     pub variant: Variant,
+    pub pipeline: Pipeline,
     /// Number of samples criterion should collect for this case.
     pub sample_size: usize,
     /// Rough time of a single run, in seconds. Only used to size criterion's
@@ -310,7 +362,12 @@ impl Scenario {
 
     /// Fully qualified name, unique across all scenarios.
     pub fn id(&self) -> String {
-        format!("{}/{}", self.group(), self.variant.name())
+        format!(
+            "{}/{}{}",
+            self.group(),
+            self.variant.name(),
+            self.pipeline.suffix()
+        )
     }
 
     /// How long criterion should keep sampling this case.
@@ -337,8 +394,14 @@ impl Scenario {
         let nefpart = m.nefpart.clone();
         let intnums = m.intnums.clone();
         let threads = n_threads();
-        // The benchmarks measure the reference pipeline for now.
-        let method = Method::Reference;
+        let (method, cone_data) = match self.pipeline {
+            Pipeline::Reference => (Method::Reference, None),
+            Pipeline::Modular => (Method::Modular, None),
+            Pipeline::ModularCones => (
+                Method::Modular,
+                Some(m.cone_data.clone().expect("the model has no cone data")),
+            ),
+        };
 
         match (self.variant, m.cy_kind) {
             (Variant::GvRat, CYKind::Threefold) => compute_gv_rat_threefold(
@@ -351,7 +414,7 @@ impl Scenario {
                 nefpart,
                 intnums,
                 vec![],
-                None,
+                cone_data,
                 threads,
                 method,
             )
@@ -367,7 +430,7 @@ impl Scenario {
                 nefpart,
                 intnums,
                 vec![],
-                None,
+                cone_data,
                 threads,
                 method,
             )
@@ -383,7 +446,7 @@ impl Scenario {
                 nefpart,
                 intnums,
                 vec![],
-                None,
+                cone_data,
                 threads,
                 method,
             )
@@ -399,7 +462,7 @@ impl Scenario {
                 nefpart,
                 intnums,
                 vec![],
-                None,
+                cone_data,
                 threads,
                 method,
             )
@@ -420,35 +483,60 @@ pub fn scenarios() -> Vec<Scenario> {
     use Tier::{Heavy, Huge, Quick};
 
     // Per-run times are for one variant, in the order of `Variant::ALL`, and
-    // `None` skips that variant. The `threefold` and `fourfold` times were
-    // measured on a 6-core machine, the rest on a 16-core one.
+    // `None` skips that variant. For the reference, the `threefold` and
+    // `fourfold` times were measured on a 6-core machine and the rest on a
+    // 16-core one; for the modular pipeline, all of them on 4 cores with
+    // hyperthreading.
     //
     // The realistic models only run `gv-rational`, which is what they are used
     // for in practice; `gw-rational` would double their cost for little extra
     // coverage, since the toy models already exercise it.
+    //
+    // The modular pipeline is so much faster that its scenarios go to higher
+    // degrees, mostly with the cone data, which is how it is meant to be used.
+    // Its scenarios with the candidates from the generators measure the
+    // enumeration of the semigroup, which dominates there.
     let both = |t: [f64; 2]| t.map(Some);
     let gv_rat = |t: f64| [Some(t), None];
-    //   model,          deg, samples, per-run secs,         tier
+    let (r, m, mc) = (
+        Pipeline::Reference,
+        Pipeline::Modular,
+        Pipeline::ModularCones,
+    );
+    //   model,          deg, pipeline, samples, per-run secs,         tier
     #[rustfmt::skip]
     let cases = [
-        ("threefold",    10,     100, both([0.01, 0.01]),  Quick),
-        ("threefold",    30,      10, both([0.76, 0.66]),  Quick),
-        ("fourfold",     10,      20, both([0.09, 0.11]),  Quick),
-        ("h11_9",        10,      10, gv_rat(1.1),         Quick),
-        ("h11_9_plike", 200,      10, gv_rat(3.1),         Quick),
-        ("h11_10",        8,      10, gv_rat(2.2),         Quick),
-        ("h11_11",       10,      10, gv_rat(1.9),         Quick),
-        ("threefold",    50,      10, both([9.6, 7.8]),    Heavy),
-        ("fourfold",     15,      10, both([1.13, 1.50]),  Heavy),
-        ("h11_8",        14,      10, gv_rat(11.0),        Heavy),
-        ("h11_9",        14,      10, gv_rat(23.0),        Heavy),
-        ("h11_9_plike", 240,      10, gv_rat(14.0),        Heavy),
-        ("h11_10",       10,      10, gv_rat(8.5),         Heavy),
-        ("h11_11",       12,      10, gv_rat(12.0),        Heavy),
-        ("h11_8",        20,       1, gv_rat(1600.0),      Huge),
-        ("h11_9",        18,       1, gv_rat(800.0),       Huge),
-        ("h11_9_plike", 300,       1, gv_rat(123.0),       Huge),
-        ("h11_11",       16,       1, gv_rat(240.0),       Huge),
+        ("threefold",    10, r,     100, both([0.01, 0.01]),  Quick),
+        ("threefold",    30, r,      10, both([0.76, 0.66]),  Quick),
+        ("fourfold",     10, r,      20, both([0.09, 0.11]),  Quick),
+        ("h11_9",        10, r,      10, gv_rat(1.1),         Quick),
+        ("h11_9_plike", 200, r,      10, gv_rat(3.1),         Quick),
+        ("h11_10",        8, r,      10, gv_rat(2.2),         Quick),
+        ("h11_11",       10, r,      10, gv_rat(1.9),         Quick),
+        ("fourfold",     15, m,      20, both([0.1, 0.1]),    Quick),
+        ("h11_9",        12, m,      10, gv_rat(0.5),         Quick),
+        ("h11_9_plike", 400, m,      10, gv_rat(0.56),        Quick),
+        ("h11_8",        16, mc,     10, gv_rat(0.55),        Quick),
+        ("h11_9",        16, mc,     10, gv_rat(0.5),         Quick),
+        ("h11_10",       12, mc,     10, gv_rat(0.45),        Quick),
+        ("h11_11",       16, mc,     10, gv_rat(0.7),         Quick),
+        ("threefold",    50, r,      10, both([9.6, 7.8]),    Heavy),
+        ("fourfold",     15, r,      10, both([1.13, 1.50]),  Heavy),
+        ("h11_8",        14, r,      10, gv_rat(11.0),        Heavy),
+        ("h11_9",        14, r,      10, gv_rat(23.0),        Heavy),
+        ("h11_9_plike", 240, r,      10, gv_rat(14.0),        Heavy),
+        ("h11_10",       10, r,      10, gv_rat(8.5),         Heavy),
+        ("h11_11",       12, r,      10, gv_rat(12.0),        Heavy),
+        ("h11_9",        14, m,      10, gv_rat(1.8),         Heavy),
+        ("h11_9_plike", 500, m,      10, gv_rat(3.7),         Heavy),
+        ("h11_8",        20, mc,     10, gv_rat(9.5),         Heavy),
+        ("h11_9",        20, mc,     10, gv_rat(5.0),         Heavy),
+        ("h11_10",       16, mc,     10, gv_rat(10.0),        Heavy),
+        ("h11_11",       18, mc,     10, gv_rat(1.8),         Heavy),
+        ("h11_8",        20, r,       1, gv_rat(1600.0),      Huge),
+        ("h11_9",        18, r,       1, gv_rat(800.0),       Huge),
+        ("h11_9_plike", 300, r,       1, gv_rat(123.0),       Huge),
+        ("h11_11",       16, r,       1, gv_rat(240.0),       Huge),
     ];
 
     let heavy_enabled = std::env::var_os("CYGV_BENCH_HEAVY").is_some();
@@ -456,25 +544,28 @@ pub fn scenarios() -> Vec<Scenario> {
 
     cases
         .into_iter()
-        .filter(|&(_, _, _, _, tier)| match tier {
+        .filter(|&(_, _, _, _, _, tier)| match tier {
             Quick => true,
             Heavy => heavy_enabled,
             Huge => huge_enabled,
         })
-        .flat_map(|(model, max_deg, sample_size, expected_secs, tier)| {
-            Variant::ALL.into_iter().zip(expected_secs).filter_map(
-                move |(variant, expected_secs)| {
-                    Some(Scenario {
-                        model,
-                        max_deg,
-                        variant,
-                        sample_size,
-                        expected_secs: expected_secs?,
-                        tier,
-                    })
-                },
-            )
-        })
+        .flat_map(
+            |(model, max_deg, pipeline, sample_size, expected_secs, tier)| {
+                Variant::ALL.into_iter().zip(expected_secs).filter_map(
+                    move |(variant, expected_secs)| {
+                        Some(Scenario {
+                            model,
+                            max_deg,
+                            variant,
+                            pipeline,
+                            sample_size,
+                            expected_secs: expected_secs?,
+                            tier,
+                        })
+                    },
+                )
+            },
+        )
         .collect()
 }
 

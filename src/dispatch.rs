@@ -177,6 +177,7 @@ fn compute(
             cy_kind,
             max_deg,
             target_points.as_ref(),
+            n_threads,
         );
         match res {
             Err(ComputeError::Modular(modular::Error::Key(
@@ -211,9 +212,9 @@ fn compute(
     Ok(Results::Reference(res))
 }
 
-/// Runs the modular pipeline with its default options, with the candidates from the cone data
-/// if there is any, and from the generators otherwise. One of `max_deg` and `target_points`
-/// must be given.
+/// Runs the modular pipeline with its default options and `n_threads` threads, with the
+/// candidates from the cone data if there is any, and from the generators otherwise. One of
+/// `max_deg` and `target_points` must be given.
 #[allow(clippy::too_many_arguments)]
 fn run_modular(
     generators: &DMatrix<i32>,
@@ -227,6 +228,7 @@ fn run_modular(
     cy_kind: CYKind,
     max_deg: Option<u32>,
     target_points: Option<&DMatrix<i32>>,
+    n_threads: Option<u32>,
 ) -> Result<Results, ComputeError> {
     let grading_vector = grading_vector.as_slice();
     let targets: Vec<&[i32]> = target_points.map_or_else(Vec::new, |t| columns(t).collect());
@@ -239,7 +241,11 @@ fn run_modular(
         Some(cone_data) => CandidateSource::Cones(cone_data),
         None => CandidateSource::Generators(&gens),
     };
-    let options = Options::default();
+    let options = Options {
+        // Zero threads means one, as for the reference.
+        threads: n_threads.map(|n| n.max(1) as usize),
+        ..Options::default()
+    };
     Ok(match invariant_kind {
         InvariantKind::GV => Results::ModularGv(modular::compute_gv(
             source,

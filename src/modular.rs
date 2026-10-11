@@ -15,8 +15,10 @@
 //!
 //! The entry points of [`dispatch`](crate::dispatch) reach it through
 //! [`Method`](crate::Method). The candidates come either from the Hilbert bases of the cones
-//! of [`crate::cone`] or from the enumeration of the semigroup of the generators, and
-//! everything runs on one thread.
+//! of [`crate::cone`] or from the enumeration of the semigroup of the generators. The stages
+//! run on the threads of a rayon pool that each run builds for itself (see
+//! [`Options::threads`]); the extraction, which dominates, applies the curves of each degree
+//! in parallel (see [`extraction::extract`]).
 
 pub mod candidates;
 pub mod crt;
@@ -413,21 +415,31 @@ pub struct Options {
     /// The number of primes that only check the lift, at least one: the lift from the other
     /// primes is accepted when it agrees with these at every curve.
     pub check_primes: usize,
-    /// The number of primes per pass, from 1 to 4.
-    pub lanes: usize,
+    /// The number of primes per pass, from 2 to 4, or `None` to choose it from the size of the
+    /// invariants: up to degree 12 two, and above that as many as the largest invariant needs,
+    /// predicted from a run at 3/4 of the degree, plus the check primes, as the C program's
+    /// driver does.
+    pub lanes: Option<usize>,
     /// The minimum number of primes, even if fewer give a stable lift.
     pub min_primes: usize,
     /// The number of passes after which an unstable lift is an error.
     pub max_passes: usize,
+    /// The number of worker threads, at least one, or `None` for one per core. The run
+    /// builds a thread pool of its own rather than use rayon's global one.
+    pub threads: Option<usize>,
+    /// How the extraction parallelizes.
+    pub extraction: extraction::Tuning,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
             check_primes: 1,
-            lanes: 2,
+            lanes: None,
             min_primes: 0,
             max_passes: 8,
+            threads: None,
+            extraction: extraction::Tuning::default(),
         }
     }
 }
@@ -510,9 +522,21 @@ fn run<T>(
     options: &Options,
     finish: impl FnOnce(Vec<CurveInvariants>, u32, &dyn Fn(&[i32]) -> bool) -> T,
 ) -> Result<T, Error> {
-    if options.check_primes == 0 || !(1..=4).contains(&options.lanes) {
+    if options.check_primes == 0
+        || options.lanes.is_some_and(|l| !(2..=4).contains(&l))
+        || options.threads == Some(0)
+    {
         return Err(Error::InvalidOptions);
     }
+    let threads = options.threads.unwrap_or_else(|| {
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+    });
+    // The stages parallelize with rayon and run in whichever pool they are installed in, so
+    // a private one honours `threads` and keeps out of a library consumer's own use of rayon.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .expect("failed to build the worker thread pool");
     let max_deg = if targets.is_empty() {
         max_deg
     } else {
@@ -523,7 +547,7 @@ fn run<T>(
     let candidates::Candidates {
         points: cands,
         lightcone,
-    } = source.candidates(&layout, grading_vector, max_deg, targets, geometry)?;
+    } = pool.install(|| source.candidates(&layout, grading_vector, max_deg, targets, geometry))?;
     let in_lightcone = |c: &[i32]| layout.fits(c) && lightcone.contains(layout.pack(c), c);
     // Without zero, which is the only class of degree zero, nothing is below the targets.
     if cands.first().is_none_or(|&(_, deg)| deg != 0) {
@@ -535,27 +559,107 @@ fn run<T>(
         cands: &cands,
         max_deg,
         lightcone: &lightcone,
+        tuning: &options.extraction,
     };
-    let residues = match options.lanes {
-        1 => passes::<1, _>(&run, options),
-        2 => passes::<2, _>(&run, options),
-        3 => passes::<3, _>(&run, options),
-        _ => passes::<4, _>(&run, options),
-    }?;
-    let mut curve = vec![0; layout.dim()];
-    let gv = residues
-        .lift()
-        .into_iter()
-        .map(|(key, degree, values)| {
-            layout.unpack(key, &mut curve);
-            CurveInvariants {
-                curve: curve.clone(),
-                degree,
-                values,
-            }
-        })
-        .collect();
+    let gv = pool.install(|| {
+        let lanes = match options.lanes {
+            Some(lanes) => lanes,
+            None => choose_lanes(&run, options)?,
+        };
+        let residues = match lanes {
+            2 => passes::<2, _>(&run, options),
+            3 => passes::<3, _>(&run, options),
+            _ => passes::<4, _>(&run, options),
+        }?;
+        let mut curve = vec![0; layout.dim()];
+        Ok::<_, Error>(
+            residues
+                .lift()
+                .into_iter()
+                .map(|(key, degree, values)| {
+                    layout.unpack(key, &mut curve);
+                    CurveInvariants {
+                        curve: curve.clone(),
+                        degree,
+                        values,
+                    }
+                })
+                .collect(),
+        )
+    })?;
     Ok(finish(gv, max_deg, &in_lightcone))
+}
+
+/// The number of primes per pass for a run whose options leave it open, chosen the way the C
+/// program's driver does: enough for the largest invariant, plus the check primes.
+///
+/// Up to degree 12 that is taken to be two. Above, a probe computes the invariants up to 3/4 of
+/// the maximum degree, with two primes per pass, and the largest number of bits per degree
+/// over its upper half is extrapolated linearly to the maximum degree, with a margin that grows
+/// with the scatter of the fit; $k$ primes of 62 bits lift values below about $2^{62k - 2}$.
+fn choose_lanes<L: KeyLayout>(run: &Run<'_, L>, options: &Options) -> Result<usize, Error> {
+    let max_deg = run.max_deg;
+    if max_deg <= 12 {
+        return Ok(2);
+    }
+    let probe_deg = 3 * max_deg / 4;
+    if probe_deg < 8 {
+        return Ok(3);
+    }
+    let n = run.cands.partition_point(|&(_, deg)| deg <= probe_deg);
+    let probe = Run {
+        cands: &run.cands[..n],
+        max_deg: probe_deg,
+        ..*run
+    };
+    let probe_options = Options {
+        min_primes: 0,
+        ..options.clone()
+    };
+    let residues = passes::<2, _>(&probe, &probe_options)?;
+    // The largest number of bits of an invariant of each degree, i.e. floor(log2 |GV|).
+    let mut bits: Vec<Option<f64>> = vec![None; probe_deg as usize + 1];
+    for (_, deg, values) in residues.lift() {
+        for v in values {
+            if v.bits() > 0 {
+                let b = (v.bits() - 1) as f64;
+                let max = &mut bits[deg as usize];
+                *max = Some(max.map_or(b, |m: f64| m.max(b)));
+            }
+        }
+    }
+    let points: Vec<(f64, f64)> = (probe_deg / 2..=probe_deg)
+        .filter_map(|d| bits[d as usize].map(|b| (d as f64, b)))
+        .collect();
+    let Some(&(last_deg, last_bits)) = points.last() else {
+        return Ok(2);
+    };
+    // The least-squares line through the points, and the scatter around it.
+    let n = points.len() as f64;
+    let (sx, sy) = points
+        .iter()
+        .fold((0.0, 0.0), |(sx, sy), &(x, y)| (sx + x, sy + y));
+    let (sxx, sxy) = points
+        .iter()
+        .fold((0.0, 0.0), |(sxx, sxy), &(x, y)| (sxx + x * x, sxy + x * y));
+    let slope = if points.len() >= 2 {
+        ((n * sxy - sx * sy) / (n * sxx - sx * sx)).max(0.0)
+    } else {
+        1.0
+    };
+    let intercept = (sy - slope * sx) / n;
+    let rmse = (points
+        .iter()
+        .map(|&(x, y)| (y - intercept - slope * x).powi(2))
+        .sum::<f64>()
+        / n)
+        .sqrt();
+    let predicted = last_bits + slope * (max_deg as f64 - last_deg) + 4.0 + 2.0 * rmse;
+    let mut k = 1;
+    while 62.0 * k as f64 - 2.0 < predicted {
+        k += 1;
+    }
+    Ok((k + options.check_primes).clamp(2, 4))
 }
 
 /// What the passes of one run share.
@@ -565,6 +669,7 @@ struct Run<'a, L: KeyLayout> {
     cands: &'a [(L::Key, u32)],
     max_deg: u32,
     lightcone: &'a Lightcone<L::Key>,
+    tuning: &'a extraction::Tuning,
 }
 
 /// Runs passes over `NL` primes each, taken in order from [`field::primes`], until the lift
@@ -597,6 +702,7 @@ fn pass<const NL: usize, L: KeyLayout>(
         cands,
         max_deg,
         lightcone,
+        tuning,
     } = *run;
     let pd = period::period(ring, layout, geometry, cands, max_deg)?;
     let inst = instanton::instanton(ring, geometry, &pd, max_deg)?;
@@ -609,6 +715,7 @@ fn pass<const NL: usize, L: KeyLayout>(
         inv,
         max_deg,
         lightcone,
+        tuning,
     )?;
     let mut gv = multicover::multicover(ring, layout, geometry.kind(), &coeffs, inv, max_deg)?;
     // The products of curves in the lightcones reach curves outside them, where the values

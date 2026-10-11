@@ -276,7 +276,7 @@ fn run_parent(filters: &[String]) {
     let exe = std::env::current_exe().expect("cannot locate the benchmark binary");
 
     println!(
-        "{:<32} {:>12} {:>12} {:>12} {:>12} {:>10} {:>10}",
+        "{:<42} {:>12} {:>12} {:>12} {:>12} {:>10} {:>10}",
         "scenario", "peak alloc", "total alloc", "allocs", "peak RSS", "time (s)", "results"
     );
 
@@ -301,7 +301,7 @@ fn run_parent(filters: &[String]) {
         };
 
         println!(
-            "{:<32} {:>12} {:>12} {:>12} {:>12} {:>10.3} {:>10}",
+            "{:<42} {:>12} {:>12} {:>12} {:>12} {:>10.3} {:>10}",
             id,
             human_bytes(measurement.peak),
             human_bytes(measurement.total),

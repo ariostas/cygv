@@ -22,12 +22,19 @@ fn run(args: &[&str], stdin: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to run the cygv binary");
-    child
+    // A binary that rejects its arguments exits without reading its input, which may close
+    // the pipe before the input is written.
+    match child
         .stdin
         .as_mut()
         .expect("failed to open stdin")
         .write_all(stdin.as_bytes())
-        .expect("failed to write to stdin");
+    {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
+            panic!("failed to write to stdin: {e}")
+        }
+        _ => {}
+    }
     child.wait_with_output().expect("failed to read the output")
 }
 

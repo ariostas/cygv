@@ -339,20 +339,20 @@ fn test_quintic_gv() {
     check_gv(&quintic(12), &Options::default());
 }
 
-/// One prime per pass and at least five primes, so that the lift merges five passes and
+/// Two primes per pass and at least six primes, so that the lift merges three passes and
 /// goes through big integers.
 #[test]
 fn test_several_passes() {
     let options = Options {
-        lanes: 1,
-        min_primes: 5,
+        lanes: Some(2),
+        min_primes: 6,
         ..Options::default()
     };
     check_gv(&quintic(12), &options);
     check_gv(&p11222(8), &options);
     // Two check primes, with three lanes.
     let options = Options {
-        lanes: 3,
+        lanes: Some(3),
         check_primes: 2,
         ..Options::default()
     };
@@ -382,7 +382,15 @@ fn test_invalid_options() {
             ..Options::default()
         },
         Options {
-            lanes: 5,
+            lanes: Some(5),
+            ..Options::default()
+        },
+        Options {
+            lanes: Some(1),
+            ..Options::default()
+        },
+        Options {
+            threads: Some(0),
             ..Options::default()
         },
     ] {
@@ -398,17 +406,21 @@ fn test_invalid_options() {
             Err(super::Error::InvalidOptions)
         );
     }
-    // Never stable with a single pass of one prime.
+    // The GV invariants of the quintic of degree 7 and up need two primes, which a single pass
+    // of two, one of them checking, does not have.
+    let case = quintic(12);
+    let geometry = Geometry::from_toric(&case.q, &[], &case.intnums, case.cy_kind, &[1]).unwrap();
+    let gens: Vec<&[i32]> = case.generators.as_slice().chunks(1).collect();
     let options = Options {
-        lanes: 1,
+        lanes: Some(2),
         max_passes: 1,
         ..Options::default()
     };
     assert_eq!(
         compute_gv(
             CandidateSource::Generators(&gens),
-            &[1, 1],
-            4,
+            &[1],
+            12,
             &[],
             &geometry,
             &options
@@ -506,6 +518,35 @@ bench_gv_tests! {
     test_h11_9_gv: "h11_9", 6;
     test_h11_10_gv: "h11_10", 5;
     test_h11_11_gv: "h11_11", 5;
+}
+
+/// Several threads, with every layer of the extraction applied curve by curve and then
+/// level-synchronously, on a threefold and on the fourfold, whose instanton series has
+/// fourteen components.
+#[test]
+#[cfg(feature = "cli")]
+fn test_threads() {
+    use super::extraction::Tuning;
+    let by_level = Tuning {
+        sync_max_curves: usize::MAX,
+        sync_min_terms: 0,
+    };
+    let cases = [
+        load("h11_9", include_str!("../../benches/data/h11_9.yaml"), 6),
+        load("fourfold", include_str!("../../examples/fourfold.yaml"), 10),
+    ];
+    for case in &cases {
+        for threads in [2, 3] {
+            for extraction in [Tuning::default(), by_level.clone()] {
+                let options = Options {
+                    threads: Some(threads),
+                    extraction,
+                    ..Options::default()
+                };
+                check_gv(case, &options);
+            }
+        }
+    }
 }
 
 /// The fourfold of the examples, a complete intersection. (Without its nef partition the

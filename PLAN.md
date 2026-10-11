@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b and 6–6c done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c and 5 done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": decision 6.10 makes `rug` optional. Branch `gv-modular-rust` is PR #94
 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main` (6fe293a, v0.3.0), plus our
@@ -303,9 +303,8 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     degree 14.
   - [x] `instanton`: `mul_into` / `mul_scalar`, `recip`, $\alpha$ as one series with
     $h^{1,1}$ values per term (that is the union of the supports the extraction takes), $V$
-    and $I$ with $M$ values per term. 25 ms at degree 14. Not done yet (phase 5): the
-    product $\sum_a \alpha_a V_a$ is symmetric under swapping its two factors, so half of
-    its pairs would do.
+    and $I$ with $M$ values per term. 25 ms at degree 14. (Phase 5 takes
+    $\sum_a \alpha_a V_a$ by pairs of columns of $\alpha$ and halves it by symmetry.)
   - [x] $I$, `c0` and `c1` tested against the reference stages mod p, and $S_2$ against the
     reference's `c2` contracted with the forms (`modular/reference_tests.rs`), on two lanes,
     at every element of the semigroup: the quintic, P(1,1,2,2,2)[8], the toy threefold
@@ -329,11 +328,12 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     that have no coefficient. `Geometry` now records the CY kind.
   - [x] `crt` (`Residues`: per-prime columns, merging passes that find different curves) and
     `compute_gv` in `modular.rs`, the pass loop, with `Options { check_primes, lanes,
-    min_primes, max_passes }`. The test knob is `lanes: 1` with `min_primes: 5`.
+    min_primes, max_passes }`. The test knob is `lanes: 1` with `min_primes: 5` (two lanes and
+    six primes since phase 5).
   - [x] End-to-end differential tests against `run_hkty` (`modular/reference_tests.rs`):
     the quintic at degree 12 (two passes with the default options), P(1,1,2,2,2)[8] at 12,
-    the four `benches/data` models at degree 5–6, several passes with one lane and with
-    three lanes and two check primes. Checked to fail when the exponent or the division by
+    the four `benches/data` models at degree 5–6, several passes with one lane (two since
+    phase 5) and with three lanes and two check primes. Checked to fail when the exponent or the division by
     the degree is broken in the multicover, or the degree weight in the Euler recurrence.
     Also compared by hand with the C oracle (normaliz cone data, 8 threads): identical GVs
     for `h11_9` at degree 18 (77458), `h11_8` at 16 (42300) and `h11_10` at 12 (15008).
@@ -536,15 +536,74 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     identical on `liam_h2_fan1` at 50, `liam_h3_fan4/6/8` at 30, `pair_h4_1` at 30 and
     `pair_h5_1/2` at 28 (up to 5156 invariants, 0.1–3.2 s on one thread against the C's
     0.3–1.7 s on eight); the cone path against the generators path at 26–40 on all of them.
-- [ ] **5. Parallelism and tuning.** Target parity with the C *with cone data* (section 2).
-  - [ ] Rayon over candidates / product chunks / curves per layer.
-  - [ ] Sharded $I$ with per-shard locks.
-  - [ ] The level-synchronous mode for few large curves.
-  - [ ] Lane probe.
-  - [ ] Bench scenarios.
-  - [ ] Stress test (5.2).
-  - [ ] Compile time and binary size measured: the code is generic over the key type, the lane
-    count and the coefficient type, and the combinations multiply.
+- [x] **5. Parallelism and tuning.** Target parity with the C *with cone data* (section 2).
+  Measured on a 4-core machine with hyperthreading (8 threads), old enough that the tuning is
+  provisional and worth redoing on newer hardware.
+  - [x] Rayon over candidates / product chunks / curves per layer. Each run builds a private
+    pool of `Options::threads` workers (`n_threads` from the dispatch). Candidates: the cones in
+    parallel, the union sorted. Period: chunks of candidates, appended in order. Instanton:
+    products in chunks of similar cost, each into a map of its own, added to a `ShardedMap`;
+    $\sum_a \alpha_a V_a$ as products of pairs of columns $a \le b$ with some $K_{ab} \ne 0$,
+    each pair of terms once (each $\alpha_a$ has few terms: 1.9 → 0.58 s on one thread for
+    `h11_10` at 16, against the C's 0.79 s). Extraction: the curves of each layer in parallel,
+    one worker per thread with its own level tables, with the C's super-layers (degrees
+    $[d, d + \delta)$). Software prefetch in the scatter (x86-64), as the C does: about 10 %.
+    The multicover and the lift stay serial (under 0.15 s everywhere measured).
+  - [x] Sharded $I$ with per-shard locks: $4 \times$ threads shards by the high bits of the key
+    hash, per-shard buffers of 1024 terms per worker, the rest folded per shard in parallel at
+    the end of each layer, as the C does.
+  - [x] The level-synchronous mode for few large curves (`extraction::Tuning`): each degree is
+    finalized for every curve, then the scatters of every (curve, target level) run as tasks,
+    largest first. It only pays for layers of fewer than 2 curves per thread (the C uses 4, but
+    here 25 curves on 8 threads went faster curve by curve), with $\alpha$ having at least
+    20000 terms up to the layer's top degree. It gives about 2× on such layers; the layers just
+    above them, with a few dozen curves, still scale only 2–3×, on both sides.
+  - [x] Lane probe (`choose_lanes`), the C driver's rule: two primes per pass up to degree 12,
+    above that a probe at 3/4 of the degree extrapolates the largest bits per degree, plus the
+    check primes. `Options::lanes` is now `None` by default, and 2–4 primes: one per pass was
+    never efficient (it always needs a second pass for the check) and cost compile time, so
+    `NL = 1` is gone and the test knob is two lanes with six primes. On `h11_8` at 20 this turns
+    two passes of two primes into one of three (44 → 27 s on one thread).
+  - [x] Bench scenarios: a `Pipeline` per scenario (reference, modular, modular with cone data;
+    the ids of the modular ones end in `/modular` or `/modular-cones`), cone data for the four
+    realistic models in `benches/data/cones/` (Normaliz, truncated at the highest degree of the
+    modular scenarios, 570 KB, excluded from the crate). Quick: the fourfold at 15 (GV and GW),
+    `h11_9` at 12 and `h11_9_plike` at 400 from the generators, the realistic models at 12–16
+    with cones; heavy: `h11_9` at 14 and `h11_9_plike` at 500 from the generators, the
+    realistic models at 16–20 with cones.
+  - [x] Stress test (5.2): `tests/stress.rs`, ignored by default, 40 runs per case at 2, 3, 4
+    and 8 threads with both extraction modes against one thread (`h11_9` with cones and from
+    its generators, the fourfold), 24 s in release. `reference_tests::test_threads` forces both
+    modes on 2 and 3 threads against the reference in every test run.
+  - [x] Compile time and binary size measured (release, the crate alone, the CLI binary): before
+    phase 5 51 s and 2.33 MB; with the parallel code and lanes 1–4 74 s and 3.19 MB; with
+    lanes 2 only 49 s and 2.60 MB; as committed (lanes 2–4) 66 s and 3.00 MB. Each lane count
+    costs about 8 s and 200 KB, the parallel code (rayon closures, monomorphized per lane
+    count) about a third on top of what it replaced.
+  - Results, through the CLI (YAML in and out) against the C (`cgv`, its own lane probe, plain
+    text out), outputs identical in every case:
+
+    | Case | cygv, 8 threads | C, 8 threads | cygv, 1 thread | C, 1 thread |
+    |------|-----------------|--------------|----------------|-------------|
+    | `h11_8`, deg 18 | 2.2 s | 2.0 s | 6.2 s | 5.7 s |
+    | `h11_8`, deg 20 | 9.4 s | 8.0 s | 27.5 s | 24.0 s |
+    | `h11_9`, deg 18 | 1.5 s | 1.2 s | 3.8 s | 3.3 s |
+    | `h11_9`, deg 20 | 4.9 s | 4.4 s | 14.4 s | 13.3 s |
+    | `h11_10`, deg 14 | 2.1 s | 1.7 s | 4.9 s | 4.5 s |
+    | `h11_10`, deg 16 | 10.2 s | 9.5 s | 30.3 s | 27.3 s |
+    | `h11_11`, deg 16 | 0.6 s | 0.4 s | 1.3 s | 1.0 s |
+    | `h11_11`, deg 18 | 1.8 s | 1.4 s | 4.9 s | 3.9 s |
+
+    So within 5–25 %. The extraction does exactly the C's work (7.23e7 scatter steps on
+    `h11_11` at 18) about 15 % slower per step on one thread, and at parity layer by layer on
+    eight; neither `target-cpu=native` (the C builds with `-march=native`), unchecked indexing
+    in the level tables nor other prefetch distances or hints changed that measurably on this
+    machine (`perf` is not available on it). The rest is the CLI's YAML. Also checked with the
+    parallel code: the C's lightcone mode, the 16 `refs_vex` references with their lightcones,
+    and the cone path against the generators path on the vex pairs at 30. Not done: the stats
+    struct of 4.1.7, so the timings above come from temporary instrumentation; and the key
+    sizes of 6.4 (whether `u64` keys, which three of the four models fit, pay off in a stage
+    bound by memory latency), which belongs with the tuning on newer hardware.
 - [ ] **5b. Make `rug` optional** (6.10). After phase 4, so that `auto` already routes most
   requests to `modular` when the reference pipeline's default build gets slower.
   - [ ] The pure-Rust crate chosen from benchmarks (if it is `malachite`, confirm that
@@ -894,7 +953,7 @@ Layers, from cheapest to most independent:
    them, with little headroom; the bound grows linearly with `max_deg`, so sparse gradings run
    to degrees in the hundreds probably need `i16` (not computed for `h11_9_plike`).
 
-   Unmeasured, to settle in phase 5: the cost of 32-byte keys against 16 (estimate: 10–30% on
+   Unmeasured, to settle in phase 5 (still open after it): the cost of 32-byte keys against 16 (estimate: 10–30% on
    extraction), whether `u64` keys give a real gain, and whether an `i8` variant is worth
    having next to `i16`. Phase 1 implements the trait and the packed `u128`; the others follow
    once there is a benchmark to compare them on.

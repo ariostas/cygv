@@ -15,7 +15,9 @@
 
 use super::key::Key;
 use core::cmp::Reverse;
+use rayon::prelude::*;
 use std::collections::BinaryHeap;
+use std::sync::Mutex;
 
 /// Marks an unused bucket of a [`SlotMap`].
 const EMPTY: u32 = u32::MAX;
@@ -312,6 +314,29 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
         self.vals.extend_from_slice(values);
     }
 
+    /// Appends the terms of `other`, which must all come after those of `self` in the order
+    /// of degree, then key; this is only checked in debug builds.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the widths differ.
+    pub fn append(&mut self, mut other: Self) {
+        assert_eq!(
+            self.width, other.width,
+            "appended series need the same width"
+        );
+        debug_assert!(
+            self.keys
+                .last()
+                .zip(other.keys.first())
+                .is_none_or(|(&a, &b)| { (*self.degs.last().unwrap(), a) < (other.degs[0], b) }),
+            "the terms of a sparse series are appended in order"
+        );
+        self.keys.append(&mut other.keys);
+        self.degs.append(&mut other.degs);
+        self.vals.append(&mut other.vals);
+    }
+
     /// Keeps only the terms whose key satisfies `keep`, in their order.
     pub fn retain(&mut self, mut keep: impl FnMut(K) -> bool) {
         let mut n = 0;
@@ -334,6 +359,103 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
     #[inline]
     pub fn len_upto(&self, deg: u32) -> usize {
         self.degs.partition_point(|&d| d <= deg)
+    }
+
+    /// The series with the terms of all of `parts`, which must have the same width and no key
+    /// in common, such as the shards of a table split by key.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the widths differ.
+    pub fn merge(width: usize, parts: Vec<Self>) -> Self {
+        assert!(
+            parts.iter().all(|p| p.width == width),
+            "merged series need the same width"
+        );
+        if parts.len() == 1 {
+            return parts.into_iter().next().unwrap();
+        }
+        let mut order: Vec<(u32, K, u32, u32)> = parts
+            .iter()
+            .enumerate()
+            .flat_map(|(p, part)| {
+                (0..part.len()).map(move |i| (part.degs[i], part.keys[i], p as u32, i as u32))
+            })
+            .collect();
+        order.par_sort_unstable();
+        debug_assert!(
+            order.windows(2).all(|w| w[0].1 != w[1].1),
+            "merged series have no key in common"
+        );
+        let mut res = Self::new(width);
+        res.keys.reserve(order.len());
+        res.degs.reserve(order.len());
+        res.vals.reserve(order.len() * width);
+        for (deg, key, p, i) in order {
+            res.keys.push(key);
+            res.degs.push(deg);
+            res.vals
+                .extend_from_slice(parts[p as usize].values(i as usize));
+        }
+        res
+    }
+}
+
+/// The shard of a key among `n_shards`, from the high bits of its hash, since tables index by
+/// the low ones.
+#[inline]
+pub fn shard_of<K: Key>(key: K, n_shards: usize) -> usize {
+    ((key.hash64() >> 40) % n_shards as u64) as usize
+}
+
+/// A [`SlotMap`] split into shards by key, each behind its own lock, which several threads
+/// add to at once.
+#[derive(Debug)]
+pub struct ShardedMap<K, V> {
+    shards: Vec<Mutex<SlotMap<K, V>>>,
+}
+
+impl<K: Key, V: Copy + Default + PartialEq + Send> ShardedMap<K, V> {
+    /// An empty map with `width` values per slot, in `n_shards` shards with room for
+    /// `capacity` slots in all.
+    pub fn new(width: usize, n_shards: usize, capacity: usize) -> Self {
+        let n_shards = n_shards.max(1);
+        Self {
+            shards: (0..n_shards)
+                .map(|_| Mutex::new(SlotMap::new(width, capacity / n_shards)))
+                .collect(),
+        }
+    }
+
+    /// Adds the values of every slot of `map` to those of the same key, with `add`, and
+    /// clears `map`. Each shard is locked once.
+    pub fn add_from(&self, map: &mut SlotMap<K, V>, add: impl Fn(&mut [V], &[V])) {
+        let n = self.shards.len();
+        let mut by_shard: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for (s, &key) in map.keys().iter().enumerate() {
+            by_shard[shard_of(key, n)].push(s as u32);
+        }
+        for (shard, slots) in self.shards.iter().zip(by_shard) {
+            if slots.is_empty() {
+                continue;
+            }
+            let mut shard = shard.lock().unwrap();
+            for s in slots {
+                add(shard.get_or_insert(map.key(s), map.deg(s)), map.values(s));
+            }
+        }
+        map.clear();
+    }
+
+    /// The slots with a nonzero value, as a [`SparsePoly`].
+    pub fn take(self) -> SparsePoly<K, V> {
+        let parts: Vec<SparsePoly<K, V>> = self
+            .shards
+            .into_par_iter()
+            .map(|s| s.into_inner().unwrap().take())
+            .collect();
+        let width = parts[0].width();
+        SparsePoly::merge(width, parts)
     }
 }
 
@@ -493,6 +615,25 @@ impl<K: Key, V: Copy + Default> LevelTable<K, V> {
         }
     }
 
+    /// Asks the processor to fetch the entry where `key` would be probed first into the cache,
+    /// ahead of a lookup a few iterations later. It does nothing on other architectures than
+    /// x86-64, or before the table has memory.
+    #[inline]
+    pub fn prefetch(&self, key: K) {
+        #[cfg(target_arch = "x86_64")]
+        if !self.entries.is_empty() {
+            let h = key.hash64() as usize & (self.entries.len() - 1);
+            let ptr = self.entries[h..].as_ptr().cast::<i8>();
+            // SAFETY: a prefetch has no effect on memory, and SSE is part of x86-64.
+            #[allow(unused_unsafe)]
+            unsafe {
+                core::arch::x86_64::_mm_prefetch(ptr, core::arch::x86_64::_MM_HINT_T0);
+            }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = key;
+    }
+
     /// The entries in use, in order of insertion.
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (K, V)> + '_ {
@@ -573,6 +714,55 @@ mod tests {
                 assert_eq!(map.get(pool_key(&mut rng, 3000)), None);
             }
         }
+    }
+
+    /// Adding maps to a sharded map from several threads, merging its shards, and appending
+    /// series give what one map gives.
+    #[test]
+    fn test_sharded() {
+        let mut rng = TestRng::new(8);
+        let mut whole: SlotMap<PackedKey, u64> = SlotMap::new(2, 16);
+        let mut parts: Vec<SlotMap<PackedKey, u64>> = Vec::new();
+        for _ in 0..12 {
+            let mut part = SlotMap::new(2, 16);
+            for _ in 0..200 {
+                let key = pool_key(&mut rng, 300);
+                let deg = (key.hash64() % 7) as u32;
+                let v = [rng.range(0, 5) as u64, rng.range(0, 5) as u64];
+                for (map, v) in [(&mut whole, v), (&mut part, v)] {
+                    for (x, y) in map.get_or_insert(key, deg).iter_mut().zip(v) {
+                        *x = (*x + y) % 5;
+                    }
+                }
+            }
+            parts.push(part);
+        }
+        let expected = whole.take();
+        let add = |out: &mut [u64], v: &[u64]| {
+            for (x, &y) in out.iter_mut().zip(v) {
+                *x = (*x + y) % 5;
+            }
+        };
+        for n_shards in [1, 3, 16] {
+            let sharded = ShardedMap::new(2, n_shards, 64);
+            parts.clone().into_par_iter().for_each(|mut part| {
+                sharded.add_from(&mut part, add);
+                assert!(part.is_empty());
+            });
+            assert_eq!(sharded.take(), expected, "{n_shards} shards");
+        }
+        // Split by degree and appended in order.
+        let mut appended = SparsePoly::new(2);
+        for d in 0..7 {
+            let mut part = SparsePoly::new(2);
+            for i in 0..expected.len() {
+                if expected.degs()[i] == d {
+                    part.push(expected.keys()[i], d, expected.values(i));
+                }
+            }
+            appended.append(part);
+        }
+        assert_eq!(appended, expected);
     }
 
     #[test]

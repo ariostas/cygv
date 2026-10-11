@@ -27,6 +27,7 @@ use super::field::Ring;
 use super::key::KeyLayout;
 use super::table::SparsePoly;
 use super::{dot, Error, Geometry};
+use rayon::prelude::*;
 
 /// Factorials, their inverses, inverses and harmonic numbers of the integers below a bound.
 #[derive(Debug, Clone)]
@@ -373,42 +374,70 @@ pub fn period<R: Ring, L: KeyLayout>(
     if layout.dim() != h11 {
         return Err(Error::DimensionMismatch);
     }
-    let mut c = vec![0; h11];
+    let chunk = candidates
+        .len()
+        .div_ceil(4 * rayon::current_num_threads())
+        .max(256);
 
     // The tables must reach every |C . Q_r| and |C . Q0_j| that is looked up, and every degree.
-    let mut max_arg = max_deg as u64;
-    for &(key, _) in candidates {
-        layout.unpack(key, &mut c);
-        let rows = (0..geometry.n_divisors())
-            .map(|r| geometry.q(r))
-            .chain((0..geometry.n_anticanonical()).map(|j| geometry.q0(j)));
-        for row in rows {
-            max_arg = max_arg.max(dot(&c, row).unsigned_abs());
-        }
-    }
+    let max_arg = candidates
+        .par_chunks(chunk)
+        .map(|cands| {
+            let mut c = vec![0; h11];
+            let mut max_arg = 0;
+            for &(key, _) in cands {
+                layout.unpack(key, &mut c);
+                let rows = (0..geometry.n_divisors())
+                    .map(|r| geometry.q(r))
+                    .chain((0..geometry.n_anticanonical()).map(|j| geometry.q0(j)));
+                for row in rows {
+                    max_arg = max_arg.max(dot(&c, row).unsigned_abs());
+                }
+            }
+            max_arg
+        })
+        .max()
+        .unwrap_or(0)
+        .max(max_deg as u64);
     let tables = Tables::new(ring, max_arg as usize + 2)?;
 
     let eval = Evaluator::new(ring, geometry, &tables)?;
-    let mut sc = eval.scratch();
     let m = geometry.n_forms();
+    // Each chunk of candidates gives the terms of a range of keys, in order.
+    let parts = candidates
+        .par_chunks(chunk)
+        .map(|cands| {
+            let mut c = vec![0; h11];
+            let mut sc = eval.scratch();
+            let mut c0 = SparsePoly::new(1);
+            let mut c1 = SparsePoly::new(h11);
+            let mut s2 = SparsePoly::new(m);
+            let mut v0 = R::Elem::default();
+            let mut v1 = vec![R::Elem::default(); h11];
+            let mut v2 = vec![R::Elem::default(); m];
+            for &(key, deg) in cands {
+                layout.unpack(key, &mut c);
+                eval.point(&c, &mut sc, &mut v0, &mut v1, &mut v2)?;
+                if !ring.is_zero(v0) {
+                    c0.push(key, deg, &[v0]);
+                }
+                if v1.iter().any(|&x| !ring.is_zero(x)) {
+                    c1.push(key, deg, &v1);
+                }
+                if v2.iter().any(|&x| !ring.is_zero(x)) {
+                    s2.push(key, deg, &v2);
+                }
+            }
+            Ok((c0, c1, s2))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
     let mut c0 = SparsePoly::new(1);
     let mut c1 = SparsePoly::new(h11);
     let mut s2 = SparsePoly::new(m);
-    let mut v0 = R::Elem::default();
-    let mut v1 = vec![R::Elem::default(); h11];
-    let mut v2 = vec![R::Elem::default(); m];
-    for &(key, deg) in candidates {
-        layout.unpack(key, &mut c);
-        eval.point(&c, &mut sc, &mut v0, &mut v1, &mut v2)?;
-        if !ring.is_zero(v0) {
-            c0.push(key, deg, &[v0]);
-        }
-        if v1.iter().any(|&x| !ring.is_zero(x)) {
-            c1.push(key, deg, &v1);
-        }
-        if v2.iter().any(|&x| !ring.is_zero(x)) {
-            s2.push(key, deg, &v2);
-        }
+    for (p0, p1, p2) in parts {
+        c0.append(p0);
+        c1.append(p1);
+        s2.append(p2);
     }
     Ok(PeriodData { c0, c1, s2, tables })
 }

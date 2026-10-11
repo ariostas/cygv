@@ -53,7 +53,7 @@ computes modulo word-sized primes and recovers the exact integers by the Chinese
 which is much faster, but it does not support `min_points`. The `reference` one is a faithful
 implementation of the HKTY procedure with exact rational arithmetic, and supports everything. The
 default, `auto`, uses the modular one whenever it can. `n_threads` sets the number of threads,
-which defaults to one per core (the modular implementation only uses one so far).
+which defaults to one per core.
 
 The modular implementation is much faster again with *cone data*, which a program such as
 [Normaliz](https://www.normaliz.uni-osnabrueck.de/) computes: the inequalities $h \cdot C \ge 0$ of
