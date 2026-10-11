@@ -769,21 +769,23 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     against 1.6 s, the same peak; the rest, and modular with supplied cone data, unchanged.
 - [x] **7c. Phases from a fan** (6.3): derive `strata`, the default Mori rays and grading, and
   check `kappa`, from the fan's maximal cones and `q`, without normaliz. Port of
-  `cgv_phase.py` in `src/phase.rs` (`phase::Fan`, `Phase`, `FanError`), exact
+  `cgv_phase.py` in `src/phase.rs` (`phase::Fan`, `MoriCone`, `FanError`), exact
   `malachite::Rational` on small systems. A directly supplied `strata` input stays accepted;
   with 7b the vex path is normaliz-free.
   - [x] Rays as the integer Gale dual of `q` (`kernel_basis` from 7b, unimodular column
     operations, so the rays span the lattice they live in).
   - [x] Walls (every 3-cone, each a face of exactly two maximal cones, which is the
     completeness check) and their classes by Cox–Little–Schenck 6.4.4. The default Mori cone
-    is given by the extreme rays of the cone of the wall classes (`cone::facets` then
-    `cone::rays`), where `cgv_phase.py` keeps every distinct wall class; same cone.
+    is given by the facets of the cone of the wall classes (`cone::facets`; pointed when
+    the sum of the facets is positive on every class), where `cgv_phase.py` keeps every
+    distinct wall class; same cone.
   - [x] Vex cones: the fan's 2- and 3-faces whose rays share no facet of the hull of the rays
     (`cone::facets` of the rays homogenized).
   - [x] The toric intersection ring for the `kappa` check, recursive by linear equivalence as
     in `cgv_phase.py`, but compared as trilinear forms on $h^{1,1}$ independent divisors
     $D_i$ (where the given numbers are integers, $\sum Q Q Q \kappa$) instead of inverting
-    to the $J$ basis; $O((h^{1,1})^4)$ for the contraction.
+    to the $J$ basis; both sides sparse (the given numbers transformed term by term, the
+    fan's only on its faces).
   - [x] Rejection of inputs outside the paper's assumptions: dimension four (h11 + 4
     divisors, charges of rank h11), cones of four distinct independent rays, no repeats,
     completeness, every ray in a cone, the polytope of the rays reflexive (every facet at
@@ -811,6 +813,17 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     and checks `intnums`; threefold hypersurfaces only. Errors:
     `ComputeError::InvalidFan(FanError)`, `ComputeError::MissingGradingVector`.
     `examples/fan.yaml` is `examples/vex.yaml` by its fan and gives the same output.
+  - [x] Scaling, on a fan from CYTools with $h^{1,1} = 491$ (2477 cones, 4954 walls,
+    scratch test): the wall classes each solved $Q n = d$ by a fresh elimination of $Q$,
+    598 s in all, now 0.27 s through a left inverse of $Q$ computed once; `check_intnums`
+    20.5 s and two dense $(h^{1,1})^3$ `i128` tensors (1.9 GB each), now 0.26 s and sparse
+    (agrees with CYTools' `kappa`, which takes 4.4 s in floating point); `Fan::new` 1.0 s.
+    The Mori cone's double description (3499 distinct classes in dimension 491) did not
+    finish in 19 minutes, so the dispatch only computes it for a default grading
+    vector or, without cone data, a missing Mori cone; a given grading vector is checked on
+    the wall classes instead (`FanError::NonpositiveGrading`), which also shows the fan
+    regular. `io` computes it for a missing grading vector and the dispatch again for
+    missing generators; negligible at the sizes the pipelines reach.
 - [x] **7d. Saturation for the reference pipeline** (6.11). Done with 7b; `auto` has one
   saturation semantics (6.2).
   - [x] The lattice points of the Mori cone up to `max_deg`, which is exactly the saturated

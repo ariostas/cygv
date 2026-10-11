@@ -47,7 +47,8 @@
 //! They can instead be derived from the fan of the ambient toric variety (see [`Fan`]), given by
 //! its maximal cones as indices of the divisors. The fan also gives the Mori cone and a grading
 //! vector, so `generators` and `grading_vector` can be left out (the generators only when the
-//! computation is truncated), and the intersection numbers are checked against it.
+//! computation is truncated), and the intersection numbers and a grading vector that is given
+//! are checked against it.
 //!
 //! ```yaml
 //! fan: [[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 3, 4], [0, 2, 3, 4], [1, 2, 3, 5], [1, 2, 4, 5],
@@ -304,8 +305,8 @@ impl Input {
         if min_points.is_some() && (max_deg.is_some() || target_points.is_some()) {
             return Err(IoError::ConflictingTruncations);
         }
-        // The phase is derived again by the computation, but the grading vector is needed
-        // here, and the fan is checked with it.
+        // The fan is checked again by the computation, but the default grading vector is
+        // needed here.
         let grading_vector = match &fan {
             None => RowDVector::from_vec(grading_vector.unwrap_or_default()),
             Some(cones) => {
@@ -324,11 +325,20 @@ impl Input {
                     FanError::InvalidIntnums => IoError::invalid_field("intnums", e.to_string()),
                     e => fan_err(e),
                 })?;
-                let phase = fan.phase().map_err(fan_err)?;
-                RowDVector::from_vec(
-                    grading_vector
-                        .unwrap_or_else(|| phase.grading_vector.iter().copied().collect()),
-                )
+                fan.strata().map_err(fan_err)?;
+                match grading_vector {
+                    Some(g) => {
+                        let g = RowDVector::from_vec(g);
+                        fan.check_grading(&g).map_err(|e| match e {
+                            FanError::NonpositiveGrading => {
+                                IoError::invalid_field("grading_vector", e.to_string())
+                            }
+                            e => fan_err(e),
+                        })?;
+                        g
+                    }
+                    None => fan.mori_cone().map_err(fan_err)?.grading_vector,
+                }
             }
         };
         if let Some(target_points) = &target_points {

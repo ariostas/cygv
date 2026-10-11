@@ -112,13 +112,18 @@ cones of the fan of the ambient toric fourfold and the charges, with the rays as
 Gale dual of the charges (`kernel_basis` of `src/cone/hilbert.rs`), and checks the paper's
 assumptions as far as the fan shows them (simplicial, complete, a reflexive polytope of rays
 none of which is interior to a facet, regular through a pointed Mori cone, no vex 2-cones;
-that every boundary point not interior to a facet is a ray is not checked). `Fan::phase`
-gives the Mori cone (the extreme rays of the cone of the wall classes, Cox–Little–Schenck
-6.4.4), the default grading vector (the sum of its facets) and the strata (the 3-cones whose
-rays share no facet of the polytope, from `cone::facets`, with their wall classes), and
-`Fan::check_intnums` compares the intersection numbers with the toric intersection ring
-(`Ring`, recursive by linear equivalence) as trilinear forms on $h^{1,1}$ independent
-divisors. Exact `malachite::Rational` arithmetic on small systems; errors are `FanError`.
+that every boundary point not interior to a facet is a ray is not checked). `Fan::strata`
+gives the strata (the 3-cones whose rays share no facet of the polytope, from
+`cone::facets`, with their wall classes, Cox–Little–Schenck 6.4.4), `Fan::mori_cone` the
+Mori cone (the facets of the cone of the wall classes) and the default grading vector (the
+sum of its facets), `Fan::check_grading` checks a given grading vector on the wall classes,
+and `Fan::check_intnums` compares the intersection numbers with the toric intersection ring
+(`Ring`, recursive by linear equivalence, over the neighbors of each divisor) as sparse
+trilinear forms on $h^{1,1}$ independent divisors. The wall classes go through a left
+inverse of the charges computed once (`left_inverse`, free for CYTools' identity block).
+Everything but `mori_cone`, a double description in dimension $h^{1,1}$, takes about a
+second at $h^{1,1} = 491$, so the dispatch only calls it for a default it needs. Exact
+`malachite::Rational` arithmetic; errors are `FanError`.
 `tests/phase.rs` compares it with `cgv_phase.prepare` on the 20 fans of `cgv/tests/refs_vex`.
 
 `src/modular.rs` and `src/modular/` hold the faster pipeline, which is still being extended and
@@ -220,11 +225,12 @@ indices differently (the first index is a reference surface in the n-fold case).
   (`Semigroup::from_data`), so they are passed unchanged. With cone data the generators may
   have no columns, except for such a request (`ComputeError::MissingGenerators`). Failures of
   the cone computations are `ComputeError::MoriCone`. The optional `fan` (threefold
-  hypersurfaces only) is turned into a `phase::Phase` first: its strata replace the `strata`
-  argument, which must then be empty, its Mori cone spans the cone when the generators have
-  no columns, and its grading vector is used when `grading_vector` is empty
-  (`ComputeError::MissingGradingVector` without a fan); the intersection numbers are checked
-  against it, and its errors are `ComputeError::InvalidFan`.
+  hypersurfaces only) is read first: its strata replace the `strata` argument, which must
+  then be empty, its Mori cone is the cone when the generators have no columns and there is
+  no cone data, and its grading vector is used when `grading_vector` is empty
+  (`ComputeError::MissingGradingVector` without a fan), the Mori cone being computed only
+  for those; the intersection numbers and a given grading vector are checked against it,
+  and its errors are `ComputeError::InvalidFan`.
   `run_hkty<T>` is generic over the coefficient type, which is only ever `reference::Rational`
   (`src/reference/rational.rs`) today, and takes the `InvariantKind` and `CYKind` enums at runtime. Adding an option means touching
   all of the dispatch sites. The computation is always exact: floating-point arithmetic (the old

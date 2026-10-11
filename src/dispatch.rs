@@ -19,8 +19,10 @@
 //!
 //! The optional fan of the ambient toric variety (its maximal cones) gives the strata, which
 //! then cannot be given too, and defaults for the Mori cone, spanned by the classes of its
-//! walls, used when the generators are empty, and for the grading vector, used when it is
-//! empty ([`crate::phase::Fan`]). The intersection numbers are checked against it.
+//! walls, used when the generators are empty and there is no cone data, and for the grading
+//! vector, used when it is empty ([`crate::phase::Fan`]). The Mori cone is only computed for
+//! these defaults, since it takes a double description in dimension $h^{1,1}$. The
+//! intersection numbers and a grading vector that is given are checked against the fan.
 //!
 //! The reference pipeline still panics on invalid input, while the errors of the modular one
 //! are returned.
@@ -160,9 +162,10 @@ fn compute(
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Results, ComputeError> {
-    // The phase from the fan: its strata, and the defaults for the Mori cone and the grading.
-    let phase = match fan {
-        None => None,
+    // From the fan: the strata, and, when needed, the Mori cone, which is expensive at large
+    // h11: for a default grading vector, or as the cone without cone data or generators.
+    let (strata, grading_vector, mori_cone) = match fan {
+        None => (strata, grading_vector, None),
         Some(_) if !cy_kind.is_threefold() || !nefpart.is_empty() => {
             return Err(ComputeError::InvalidFan(FanError::NotHypersurface))
         }
@@ -175,19 +178,24 @@ fn compute(
             let fan = Fan::new(&cones, &q).map_err(ComputeError::InvalidFan)?;
             fan.check_intnums(&intnums)
                 .map_err(ComputeError::InvalidFan)?;
-            Some(fan.phase().map_err(ComputeError::InvalidFan)?)
-        }
-    };
-    let (strata, grading_vector) = match &phase {
-        Some(p) => (
-            p.strata.clone(),
-            if grading_vector.is_empty() {
-                p.grading_vector.clone()
+            let strata = fan.strata().map_err(ComputeError::InvalidFan)?;
+            let needed =
+                grading_vector.is_empty() || (cone_data.is_none() && generators.ncols() == 0);
+            let mori_cone = if needed {
+                Some(fan.mori_cone().map_err(ComputeError::InvalidFan)?)
             } else {
-                grading_vector
-            },
-        ),
-        None => (strata, grading_vector),
+                None
+            };
+            let grading_vector = match &mori_cone {
+                Some(m) if grading_vector.is_empty() => m.grading_vector.clone(),
+                _ => {
+                    fan.check_grading(&grading_vector)
+                        .map_err(ComputeError::InvalidFan)?;
+                    grading_vector
+                }
+            };
+            (strata, grading_vector, mori_cone)
+        }
     };
     if grading_vector.is_empty() {
         return Err(ComputeError::MissingGradingVector);
@@ -208,17 +216,16 @@ fn compute(
     if generators.ncols() > 0 && generators.nrows() != h11 {
         return Err(modular::Error::DimensionMismatch.into());
     }
-    // The Mori cone by inequalities: the cone data's, or the facets of the generators, or of
-    // the fan's Mori cone without them.
-    let (hyperplanes, equations) = match (&cone_data, &phase) {
+    // The Mori cone by inequalities: the cone data's, or the fan's without generators, or the
+    // facets of the generators.
+    let (hyperplanes, equations) = match (&cone_data, mori_cone) {
         (Some(cone_data), _) => (cone_data.hyperplanes.clone(), cone_data.equations.clone()),
-        (None, None) if generators.ncols() == 0 => return Err(ComputeError::MissingGenerators),
+        (None, Some(m)) if generators.ncols() == 0 => {
+            (m.inequalities.hyperplanes, m.inequalities.equations)
+        }
+        (None, _) if generators.ncols() == 0 => return Err(ComputeError::MissingGenerators),
         (None, _) => {
-            let spanning = match &phase {
-                Some(p) if generators.ncols() == 0 => &p.generators,
-                _ => &generators,
-            };
-            let f = crate::cone::facets(spanning)
+            let f = crate::cone::facets(&generators)
                 .map_err(|_| ComputeError::MoriCone(ConeError::TooLarge))?;
             (f.hyperplanes, f.equations)
         }

@@ -13,6 +13,9 @@ use cygv::{Method, Stratum};
 use nalgebra::{DMatrix, RowDVector};
 use std::collections::HashMap;
 
+/// A stratum: its three divisors and its class, as fractions.
+type StratumData = ([usize; 3], &'static [(i64, i64)]);
+
 struct Case {
     name: &'static str,
     cones: &'static [[usize; 4]],
@@ -21,7 +24,7 @@ struct Case {
     kappa: &'static [[i32; 4]],
     mori_rays: &'static [&'static [i32]],
     grading: &'static [i32],
-    strata: &'static [([usize; 3], &'static [(i64, i64)])],
+    strata: &'static [StratumData],
 }
 
 impl Case {
@@ -1090,15 +1093,15 @@ const CASES: &[Case] = &[
 fn test_phases() {
     for case in CASES {
         let fan = case.fan().unwrap();
-        let phase = fan.phase().unwrap();
+        let mori = fan.mori_cone().unwrap();
         assert_eq!(
-            facets(&phase.generators).unwrap(),
+            mori.inequalities,
             facets(&columns(case.mori_rays)).unwrap(),
             "{}",
             case.name
         );
         assert_eq!(
-            phase.grading_vector.as_slice(),
+            mori.grading_vector.as_slice(),
             case.grading,
             "{}",
             case.name
@@ -1111,7 +1114,13 @@ fn test_phases() {
                 class: class.to_vec(),
             })
             .collect();
-        assert_eq!(phase.strata, strata, "{}", case.name);
+        assert_eq!(fan.strata(), Ok(strata), "{}", case.name);
+        assert_eq!(
+            fan.check_grading(&mori.grading_vector),
+            Ok(()),
+            "{}",
+            case.name
+        );
         assert_eq!(fan.check_intnums(&case.intnums()), Ok(()), "{}", case.name);
         let mut intnums = case.intnums();
         *intnums.values_mut().next().unwrap() += 1;
@@ -1197,6 +1206,28 @@ fn test_compute_from_fan() {
         Err(ComputeError::InvalidFan(FanError::IntnumsMismatch([
             1, 1, 1
         ])))
+    );
+
+    // A grading vector that is given is checked against the Mori cone, which contains the
+    // class (1, -1).
+    let negative = compute_gv_rat_threefold(
+        DMatrix::zeros(0, 0),
+        RowDVector::from_row_slice(&[0, 1]),
+        Some(6),
+        None,
+        None,
+        columns(case.q),
+        Vec::new(),
+        case.intnums(),
+        Vec::new(),
+        Some(case.cones.iter().map(|c| c.to_vec()).collect()),
+        None,
+        None,
+        Method::Auto,
+    );
+    assert_eq!(
+        negative,
+        Err(ComputeError::InvalidFan(FanError::NonpositiveGrading))
     );
 
     // A fan is only supported for threefold hypersurfaces, and without one the grading

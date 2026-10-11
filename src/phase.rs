@@ -46,6 +46,8 @@ pub enum FanError {
     Vex2Cone([usize; 2]),
     /// The Mori cone contains a line, i.e. the fan is not regular.
     NotRegular,
+    /// The grading vector does not have $h^{1,1}$ entries, or is not positive on the Mori cone.
+    NonpositiveGrading,
     /// The intersection numbers have an index above $h^{1,1}$, or two of them, of the same
     /// divisors, differ.
     InvalidIntnums,
@@ -83,6 +85,10 @@ impl fmt::Display for FanError {
                  is fine and uses every boundary point not interior to a facet"
             ),
             Self::NotRegular => write!(f, "the fan is not regular (its Mori cone has a line)"),
+            Self::NonpositiveGrading => write!(
+                f,
+                "the grading vector must have h11 entries and be positive on the Mori cone"
+            ),
             Self::InvalidIntnums => write!(
                 f,
                 "the intersection numbers must have indices below h11 and agree on permutations"
@@ -109,15 +115,13 @@ impl From<cone::TooLarge> for FanError {
     }
 }
 
-/// The data of a phase that the computations take from the fan.
+/// The Mori cone of the fan's toric variety, from [`Fan::mori_cone`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Phase {
-    /// The extreme rays of the Mori cone, one per column.
-    pub generators: DMatrix<i32>,
-    /// The sum of the facets of the Mori cone, which is positive on it.
+pub struct MoriCone {
+    /// Its inequalities (no equations, since the fan is regular).
+    pub inequalities: Inequalities,
+    /// The sum of its facets, which is positive on it.
     pub grading_vector: RowDVector<i32>,
-    /// The strata of the vex 3-cones, sorted by their divisors; none in a non-vex phase.
-    pub strata: Vec<Stratum>,
 }
 
 /// A complete simplicial fan in dimension four, given by its maximal cones and the charges of
@@ -131,6 +135,10 @@ pub struct Fan {
     cones: Vec<[usize; 4]>,
     /// Every face of a maximal cone, the cones themselves and $\{0\}$ included, sorted.
     faces: HashSet<Vec<usize>>,
+    /// A left inverse of the charges, from [`left_inverse`].
+    inverse: Vec<(usize, Vec<Rational>)>,
+    /// The divisors that share a 2-cone with each divisor, sorted.
+    neighbors: Vec<Vec<usize>>,
 }
 
 impl Fan {
@@ -149,9 +157,10 @@ impl Fan {
         let rays: Vec<[i64; 4]> = (0..n)
             .map(|i| std::array::from_fn(|k| kernel[k][i]))
             .collect();
-        let q = (0..n)
+        let q: Vec<Vec<i64>> = (0..n)
             .map(|i| charges.iter().map(|r| r[i]).collect())
             .collect();
+        let inverse = left_inverse(&q, h11);
 
         let mut sorted = Vec::with_capacity(cones.len());
         let mut faces = HashSet::new();
@@ -186,11 +195,19 @@ impl Fan {
         if walls.values().any(|&k| k != 2) || (0..n).any(|i| !faces.contains(&vec![i])) {
             return Err(FanError::NotComplete);
         }
+        let mut neighbors = vec![Vec::new(); n];
+        for f in faces.iter().filter(|f| f.len() == 2) {
+            neighbors[f[0]].push(f[1]);
+            neighbors[f[1]].push(f[0]);
+        }
+        neighbors.iter_mut().for_each(|v| v.sort_unstable());
         let fan = Self {
             q,
             rays,
             cones: sorted,
             faces,
+            inverse,
+            neighbors,
         };
         fan.polytope_facets()?;
         Ok(fan)
@@ -341,38 +358,74 @@ impl Fan {
     /// The curve class $n$, $n_a = J_a \cdot C$, with intersections `d` with the divisors,
     /// from $D_i \cdot C = \sum_a Q_{ia} n_a$.
     fn curve_class(&self, d: &[Rational]) -> Vec<Rational> {
-        let a: Vec<Vec<Rational>> = self
-            .q
-            .iter()
-            .map(|r| r.iter().map(|&x| Rational::from(x)).collect())
-            .collect();
-        solve(&a, d, self.h11()).expect("the intersections of a curve satisfy the relations")
+        let mut n = vec![Rational::from(0); self.h11()];
+        for (p, t) in &self.inverse {
+            if d[*p] != 0u32 {
+                n.iter_mut().zip(t).for_each(|(x, y)| *x += &d[*p] * y);
+            }
+        }
+        n
     }
 
-    /// The Mori cone, spanned by the classes of the walls, its default grading vector and the
-    /// strata of the vex 3-cones.
-    pub fn phase(&self) -> Result<Phase, FanError> {
-        let h11 = self.h11();
-        let mut classes: Vec<Vec<i32>> = Vec::new();
+    /// The distinct primitive classes of the walls, nonzero ones only, one per column.
+    fn wall_classes(&self) -> Result<DMatrix<i32>, FanError> {
+        let mut classes = Vec::new();
         for w in self.walls() {
             let c = primitive(&self.wall_class(w))?;
             if c.iter().any(|&x| x != 0) {
                 classes.push(c);
             }
         }
-        let classes = DMatrix::from_iterator(h11, classes.len(), classes.into_iter().flatten());
+        classes.sort_unstable();
+        classes.dedup();
+        let n = classes.len();
+        Ok(DMatrix::from_iterator(
+            self.h11(),
+            n,
+            classes.into_iter().flatten(),
+        ))
+    }
+
+    /// The Mori cone, spanned by the classes of the walls, by its inequalities, and its default
+    /// grading vector, the sum of its facets. The fan is checked to be regular: the grading
+    /// vector is then positive on every wall class, and zero on the line of the Mori cone of a
+    /// fan that is not. This is the only expensive part of the fan, a double description in
+    /// dimension $h^{1,1}$.
+    pub fn mori_cone(&self) -> Result<MoriCone, FanError> {
+        let classes = self.wall_classes()?;
         let inequalities = cone::facets(&classes)?;
-        let generators = cone::rays(&inequalities.hyperplanes, &inequalities.equations)?;
-        if generators.lineality.ncols() > 0 || inequalities.equations.ncols() > 0 {
-            return Err(FanError::NotRegular);
-        }
-        let mut grading = vec![0i32; h11];
+        let mut grading = RowDVector::zeros(self.h11());
         for h in columns(&inequalities.hyperplanes) {
             for (g, &x) in grading.iter_mut().zip(h) {
-                *g = g.checked_add(x).ok_or(FanError::TooLarge)?;
+                *g = i32::checked_add(*g, x).ok_or(FanError::TooLarge)?;
             }
         }
+        if inequalities.equations.ncols() > 0 || !positive(&grading, &classes) {
+            return Err(FanError::NotRegular);
+        }
+        Ok(MoriCone {
+            inequalities,
+            grading_vector: grading,
+        })
+    }
 
+    /// Checks that the grading vector is positive on the Mori cone, i.e. on every wall class.
+    /// That shows the Mori cone pointed, i.e. the fan regular, without computing it; otherwise
+    /// it is computed, to tell [`FanError::NotRegular`] apart.
+    pub fn check_grading(&self, grading_vector: &RowDVector<i32>) -> Result<(), FanError> {
+        if grading_vector.len() != self.h11() {
+            return Err(FanError::NonpositiveGrading);
+        }
+        if positive(grading_vector, &self.wall_classes()?) {
+            return Ok(());
+        }
+        self.mori_cone()?;
+        Err(FanError::NonpositiveGrading)
+    }
+
+    /// The strata of the vex 3-cones, sorted by their divisors; none in a non-vex phase. The
+    /// vex faces are checked to be 3-cones.
+    pub fn strata(&self) -> Result<Vec<Stratum>, FanError> {
         let mut strata = Vec::new();
         for s in self.vex_cones() {
             let divisors: [usize; 3] = match s[..] {
@@ -387,11 +440,7 @@ impl Fan {
                 .collect::<Result<_, _>>()?;
             strata.push(Stratum { divisors, class });
         }
-        Ok(Phase {
-            generators: generators.rays,
-            grading_vector: RowDVector::from_vec(grading),
-            strata,
-        })
+        Ok(strata)
     }
 
     /// Checks the intersection numbers of a threefold hypersurface, $\kappa_{abc} = J_a J_b
@@ -405,7 +454,6 @@ impl Fan {
         intnums: &HashMap<(usize, usize, usize), i32>,
     ) -> Result<(), FanError> {
         let h = self.h11();
-        let mut kappa = vec![0i128; h * h * h];
         let mut seen = HashMap::new();
         for (&(a, b, c), &v) in intnums {
             let mut k = [a, b, c];
@@ -413,73 +461,86 @@ impl Fan {
             if k[2] >= h || *seen.entry(k).or_insert(v) != v {
                 return Err(FanError::InvalidIntnums);
             }
-            for [x, y, z] in [
+        }
+        // Independent divisors (those of the inverse), and the numbers on them,
+        // sum_abc q_ia q_jb q_kc kappa_abc, on sorted triples of positions in `basis`. Both
+        // sides are sparse: kappa has few entries, and the fan's numbers vanish off its faces.
+        let mut basis: Vec<usize> = self.inverse.iter().map(|(p, _)| *p).collect();
+        basis.sort_unstable();
+        let mut columns: Vec<Vec<(usize, i128)>> = vec![Vec::new(); h];
+        for (i, &d) in basis.iter().enumerate() {
+            for (a, &x) in self.q[d].iter().enumerate() {
+                if x != 0 {
+                    columns[a].push((i, x as i128));
+                }
+            }
+        }
+        let mut given: HashMap<[usize; 3], i128> = HashMap::new();
+        for ([a, b, c], v) in seen {
+            let mut orders = vec![
                 [a, b, c],
                 [a, c, b],
                 [b, a, c],
                 [b, c, a],
                 [c, a, b],
                 [c, b, a],
-            ] {
-                kappa[(x * h + y) * h + z] = v as i128;
-            }
-        }
-        // Independent divisors, and the numbers on them: sum_abc q_ia q_jb q_kc kappa_abc,
-        // contracting one index at a time.
-        let mut basis: Vec<usize> = Vec::new();
-        for i in 0..self.n() {
-            if basis.len() == h {
-                break;
-            }
-            let mut rows: Vec<Vec<i64>> = basis.iter().map(|&j| self.q[j].clone()).collect();
-            rows.push(self.q[i].clone());
-            if rank(&rows) == rows.len() {
-                basis.push(i);
-            }
-        }
-        let mut t = kappa;
-        for _ in 0..3 {
-            // t[x][y][z] -> t'[y][z][i] = sum_x q[basis[i]][x] t[x][y][z]
-            let mut next = vec![0i128; h * h * h];
-            for (i, &d) in basis.iter().enumerate() {
-                for (x, &qx) in self.q[d].iter().enumerate() {
-                    if qx == 0 {
-                        continue;
-                    }
-                    for yz in 0..h * h {
-                        let v = t[x * h * h + yz];
-                        if v != 0 {
-                            let e = &mut next[yz * h + i];
-                            *e = v
-                                .checked_mul(qx as i128)
+            ];
+            orders.sort_unstable();
+            orders.dedup();
+            for [x, y, z] in orders {
+                for &(i, qx) in &columns[x] {
+                    for &(j, qy) in columns[y].iter().filter(|(j, _)| *j >= i) {
+                        for &(k, qz) in columns[z].iter().filter(|(k, _)| *k >= j) {
+                            let e = given.entry([i, j, k]).or_default();
+                            *e = (v as i128)
+                                .checked_mul(qx * qy)
+                                .and_then(|p| p.checked_mul(qz))
                                 .and_then(|p| e.checked_add(p))
                                 .ok_or(FanError::TooLarge)?;
                         }
                     }
                 }
             }
-            t = next;
         }
+        // The triples on the faces of the fan, with each face's divisors at least once.
+        let position: HashMap<usize, usize> =
+            basis.iter().enumerate().map(|(i, &d)| (d, i)).collect();
+        let mut triples: Vec<[usize; 3]> = Vec::new();
+        for f in &self.faces {
+            let Some(p) = f
+                .iter()
+                .map(|d| position.get(d).copied())
+                .collect::<Option<Vec<usize>>>()
+            else {
+                continue;
+            };
+            match p[..] {
+                [i] => triples.push([i, i, i]),
+                [i, j] => triples.extend([[i, i, j], [i, j, j]]),
+                [i, j, k] => triples.push([i, j, k]),
+                _ => {}
+            }
+        }
+        triples.extend(given.keys().copied());
+        triples.sort_unstable();
+        triples.dedup();
         let mut ring = Ring {
             fan: self,
             memo: HashMap::new(),
         };
-        for i in 0..h {
-            for j in i..h {
-                for k in j..h {
-                    let (a, b, c) = (basis[i], basis[j], basis[k]);
-                    let mut distinct = vec![a, b, c];
-                    distinct.dedup();
-                    let mut value = Rational::from(0);
-                    if self.faces.contains(&distinct) {
-                        for l in 0..self.n() {
-                            value += ring.number([a, b, c, l]);
-                        }
-                    }
-                    if value != t[(i * h + j) * h + k] {
-                        return Err(FanError::IntnumsMismatch([a, b, c]));
-                    }
+        for [i, j, k] in triples {
+            let (a, b, c) = (basis[i], basis[j], basis[k]);
+            let mut distinct = vec![a, b, c];
+            distinct.dedup();
+            let mut value = Rational::from(0);
+            if self.faces.contains(&distinct) {
+                // D_l only meets the face if it is a or shares a 2-cone with it.
+                for &l in std::iter::once(&a).chain(&self.neighbors[a]) {
+                    value += ring.number([a, b, c, l]);
                 }
+            }
+            if value != given.get(&[i, j, k]).copied().unwrap_or(0) {
+                return Err(FanError::IntnumsMismatch([a, b, c]));
             }
         }
         Ok(())
@@ -501,9 +562,10 @@ impl Ring<'_> {
         let fan = self.fan;
         let mut distinct = m.to_vec();
         distinct.dedup();
-        let value = if !fan.faces.contains(&distinct) {
-            Rational::from(0)
-        } else if distinct.len() == 4 {
+        if !fan.faces.contains(&distinct) {
+            return Rational::from(0);
+        }
+        let value = if distinct.len() == 4 {
             let rows: Vec<Vec<i64>> = m.iter().map(|&i| fan.rays[i].to_vec()).collect();
             Rational::from_integers(Integer::from(1), Integer::from(det(&rows).unwrap()).abs())
         } else {
@@ -525,7 +587,8 @@ impl Ring<'_> {
             let u = solve(&a, &b, 4).expect("the rays of a cone are independent");
             let mut rest = m;
             let mut value = Rational::from(0);
-            for j in (0..fan.n()).filter(|j| !distinct.contains(j)) {
+            // Only the divisors that share a 2-cone with D_i meet the rest.
+            for &j in fan.neighbors[i].iter().filter(|j| !distinct.contains(j)) {
                 let uj: Rational = u
                     .iter()
                     .zip(fan.rays[j])
@@ -582,6 +645,74 @@ fn solve(a: &[Vec<Rational>], b: &[Rational], n: usize) -> Option<Vec<Rational>>
         x[c] = m[r][n].clone();
     }
     Some(x)
+}
+
+/// Pivot divisors $p_k$ and vectors $t_k$ with $n = \sum_k (Q n)_{p_k} t_k$ for every $n$: the
+/// inverse of the rows $p_k$ of the charges `q` (one row per divisor), which have rank `h`.
+/// The divisors with the fewest nonzero charges are tried first, so that an identity block,
+/// which CYTools' charges have, takes no arithmetic.
+fn left_inverse(q: &[Vec<i64>], h: usize) -> Vec<(usize, Vec<Rational>)> {
+    // Row a is column a of the charges, then row a of the identity; reducing it to T Q^T | T
+    // leaves t_k = (Q_P^{-1})^T e_k in row r_k, the row of the k-th pivot.
+    let n = q.len();
+    let mut m: Vec<Vec<Rational>> = (0..h)
+        .map(|a| {
+            (0..n + h)
+                .map(|c| {
+                    if c < n {
+                        Rational::from(q[c][a])
+                    } else {
+                        Rational::from(i64::from(c - n == a))
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&i| q[i].iter().filter(|&&x| x != 0).count());
+    let mut pivots = Vec::with_capacity(h);
+    let mut used = vec![false; h];
+    for c in order {
+        if pivots.len() == h {
+            break;
+        }
+        let Some(r) = (0..h).find(|&r| !used[r] && m[r][c] != 0u32) else {
+            continue;
+        };
+        used[r] = true;
+        let inv = Rational::from(1) / &m[r][c];
+        if inv != 1u32 {
+            m[r].iter_mut().for_each(|x| *x *= &inv);
+        }
+        let pivot = m[r].clone();
+        for (i, row) in m.iter_mut().enumerate() {
+            if i != r && row[c] != 0u32 {
+                let f = row[c].clone();
+                row.iter_mut()
+                    .zip(&pivot)
+                    .filter(|(_, y)| **y != 0u32)
+                    .for_each(|(x, y)| *x -= &f * y);
+            }
+        }
+        pivots.push((c, r));
+    }
+    assert_eq!(pivots.len(), h, "the charges have rank h");
+    pivots
+        .into_iter()
+        .map(|(c, r)| (c, m[r][n..].to_vec()))
+        .collect()
+}
+
+/// Whether the grading vector is positive on every column of `classes`.
+fn positive(grading_vector: &RowDVector<i32>, classes: &DMatrix<i32>) -> bool {
+    columns(classes).all(|c| {
+        grading_vector
+            .iter()
+            .zip(c)
+            .map(|(&w, &x)| w as i64 * x as i64)
+            .sum::<i64>()
+            > 0
+    })
 }
 
 fn gcd(a: i128, b: i128) -> i128 {
@@ -663,14 +794,17 @@ mod tests {
         assert_eq!(fan.walls().len(), 10);
         assert_eq!(fan.wall_class([0, 1, 2]), vec![Rational::from(1)]);
         assert!(fan.vex_cones().is_empty());
+        let mori = fan.mori_cone().unwrap();
         assert_eq!(
-            fan.phase(),
-            Ok(Phase {
-                generators: DMatrix::from_element(1, 1, 1),
-                grading_vector: RowDVector::from_element(1, 1),
-                strata: Vec::new(),
-            })
+            mori.inequalities.hyperplanes,
+            DMatrix::from_element(1, 1, 1)
         );
+        assert_eq!(mori.grading_vector, RowDVector::from_element(1, 1));
+        assert_eq!(fan.strata(), Ok(Vec::new()));
+        assert_eq!(fan.check_grading(&RowDVector::from_element(1, 2)), Ok(()));
+        for g in [RowDVector::from_element(1, -1), RowDVector::zeros(2)] {
+            assert_eq!(fan.check_grading(&g), Err(FanError::NonpositiveGrading));
+        }
         // The quintic.
         let mut intnums = HashMap::from([((0, 0, 0), 5)]);
         assert_eq!(fan.check_intnums(&intnums), Ok(()));
