@@ -44,6 +44,16 @@
 //!     class: [1, "-1/2"]
 //! ```
 //!
+//! They can instead be derived from the fan of the ambient toric variety (see [`Fan`]), given by
+//! its maximal cones as indices of the divisors. The fan also gives the Mori cone and a grading
+//! vector, so `generators` and `grading_vector` can be left out (the generators only when the
+//! computation is truncated), and the intersection numbers are checked against it.
+//!
+//! ```yaml
+//! fan: [[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 3, 4], [0, 2, 3, 4], [1, 2, 3, 5], [1, 2, 4, 5],
+//!   [1, 3, 4, 5], [2, 3, 4, 5]]
+//! ```
+//!
 //! The Mori cone can also be given by cone data (see [`ConeData`]): its inequalities, the
 //! equations of its span if it is a face, and the Hilbert basis of the cone $K_T$ of every set
 //! $T$ of one or two divisors, which an external program such as normaliz computes. Then the
@@ -80,6 +90,7 @@ use crate::cone::{check_cone_data, CandidateCone, ConeData};
 use crate::dispatch::{
     check_target_points, compute_gvgw_strings, modular_unsupported, ComputeError,
 };
+use crate::phase::{Fan, FanError};
 use crate::reference::misc::process_int_nums;
 use crate::{check_strata, CYKind, InvariantKind, Method, Stratum};
 use error::IoError;
@@ -90,7 +101,7 @@ use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
 /// The fields that are accepted in an input document.
-const INPUT_FIELDS: [&str; 17] = [
+const INPUT_FIELDS: [&str; 18] = [
     "name",
     "generators",
     "grading_vector",
@@ -105,6 +116,7 @@ const INPUT_FIELDS: [&str; 17] = [
     "n_threads",
     "method",
     "strata",
+    "fan",
     "mori_hyperplanes",
     "mori_equations",
     "cones",
@@ -131,6 +143,9 @@ pub struct Input {
     pub intnums: HashMap<(usize, usize, usize), i32>,
     /// The strata of a vex phase. It is empty otherwise.
     pub strata: Vec<Stratum>,
+    /// The maximal cones of the fan of the ambient toric variety, as indices of rows of `q`,
+    /// from which the strata are derived (see [`Fan`]).
+    pub fan: Option<Vec<Vec<usize>>>,
     /// The cone data for the modular method, if any.
     pub cone_data: Option<ConeData>,
     /// Which invariants to compute.
@@ -186,12 +201,25 @@ impl Input {
         let generators = get_field(hash, "generators")
             .map(|y| as_matrix(y, "generators"))
             .transpose()?;
-        let grading_vector = as_int_vec(require_field(hash, "grading_vector")?, "grading_vector")?;
-        let h11 = grading_vector.len();
+        let grading_vector = get_field(hash, "grading_vector")
+            .map(|y| as_int_vec(y, "grading_vector"))
+            .transpose()?;
+        let fan = get_field(hash, "fan").map(as_fan).transpose()?;
+        if grading_vector.is_none() && fan.is_none() {
+            return Err(IoError::MissingField("grading_vector"));
+        }
+        let q = as_matrix(require_field(hash, "q")?, "q")?;
+        // Without a grading vector, which the fan gives a default for, the charges give h11.
+        let h11 = grading_vector.as_ref().map_or(q.ncols(), Vec::len);
         if let Some(generators) = &generators {
             if generators.nrows() != h11 {
+                let field = if grading_vector.is_some() {
+                    "grading_vector"
+                } else {
+                    "q"
+                };
                 return Err(IoError::invalid_field(
-                    "grading_vector",
+                    field,
                     format!(
                         "expected {} entries to match the generators",
                         generators.nrows()
@@ -199,8 +227,6 @@ impl Input {
                 ));
             }
         }
-        let grading_vector = RowDVector::from_row_slice(&grading_vector);
-        let q = as_matrix(require_field(hash, "q")?, "q")?;
         if q.ncols() != h11 {
             return Err(IoError::invalid_field(
                 "q",
@@ -278,6 +304,33 @@ impl Input {
         if min_points.is_some() && (max_deg.is_some() || target_points.is_some()) {
             return Err(IoError::ConflictingTruncations);
         }
+        // The phase is derived again by the computation, but the grading vector is needed
+        // here, and the fan is checked with it.
+        let grading_vector = match &fan {
+            None => RowDVector::from_vec(grading_vector.unwrap_or_default()),
+            Some(cones) => {
+                let fan_err = |e: FanError| IoError::invalid_field("fan", e.to_string());
+                if !cy_kind.is_threefold() || !nefpart.is_empty() {
+                    return Err(fan_err(FanError::NotHypersurface));
+                }
+                if !strata.is_empty() {
+                    return Err(IoError::invalid_field(
+                        "strata",
+                        "the strata are derived from the fan, so they cannot be given with it",
+                    ));
+                }
+                let fan = Fan::new(cones, &q).map_err(fan_err)?;
+                fan.check_intnums(&intnums).map_err(|e| match e {
+                    FanError::InvalidIntnums => IoError::invalid_field("intnums", e.to_string()),
+                    e => fan_err(e),
+                })?;
+                let phase = fan.phase().map_err(fan_err)?;
+                RowDVector::from_vec(
+                    grading_vector
+                        .unwrap_or_else(|| phase.grading_vector.iter().copied().collect()),
+                )
+            }
+        };
         if let Some(target_points) = &target_points {
             check_target_points(target_points, &grading_vector)
                 .map_err(|reason| IoError::invalid_field("target_points", reason))?;
@@ -294,7 +347,7 @@ impl Input {
         let truncated = max_deg.is_some() || min_points.is_some() || target_points.is_some();
         let generators = match generators {
             Some(generators) => generators,
-            None if cone_data.is_some() && truncated => DMatrix::zeros(h11, 0),
+            None if (cone_data.is_some() || fan.is_some()) && truncated => DMatrix::zeros(h11, 0),
             None => return Err(IoError::MissingField("generators")),
         };
         // These are checked again, deeper in the computation, but the errors there are
@@ -336,6 +389,7 @@ impl Input {
             nefpart,
             intnums,
             strata,
+            fan,
             cone_data,
             invariant_kind,
             cy_kind,
@@ -383,6 +437,7 @@ impl Input {
             self.nefpart.clone(),
             self.intnums.clone(),
             self.strata.clone(),
+            self.fan.clone(),
             self.cone_data.clone(),
             self.invariant_kind,
             self.cy_kind,
@@ -527,6 +582,26 @@ fn as_matrix(data: &Yaml, field: &str) -> Result<DMatrix<i32>, IoError> {
         n_cols,
         columns.into_iter().flatten(),
     ))
+}
+
+/// Read the maximal cones of a fan, a list of lists of indices.
+fn as_fan(data: &Yaml) -> Result<Vec<Vec<usize>>, IoError> {
+    let err = || IoError::invalid_field("fan", "expected a list of lists of indices of rows of q");
+    data.as_vec()
+        .ok_or_else(err)?
+        .iter()
+        .map(|c| {
+            c.as_vec()
+                .ok_or_else(err)?
+                .iter()
+                .map(|i| {
+                    i.as_i64()
+                        .and_then(|i| usize::try_from(i).ok())
+                        .ok_or_else(err)
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Read the strata of a vex phase, a list of mappings with the three `divisors` and the
@@ -892,6 +967,64 @@ min_points: 20
             Err(IoError::InvalidField { field, .. }) if field == "strata"
         ));
         assert!(load_one(&format!("{base}{strata}method: modular\n")).is_ok());
+    }
+
+    /// A vex phase of P(1,1,2,2,2)[8] given by its fan.
+    const FAN: &str = "\
+q: [[1, 0, -1, 1, 0, 1], [0, 1, 1, 1, 1, 0]]
+intnums: [[0, 1, 1, 4], [1, 1, 1, 2]]
+max_deg: 6
+fan: [[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 3, 4], [0, 2, 3, 4], [1, 2, 3, 5], [1, 2, 4, 5],
+  [1, 3, 4, 5], [2, 3, 4, 5]]
+";
+
+    #[test]
+    fn test_parse_fan() {
+        // The grading vector is derived from the fan; the strata and the generators are
+        // left to the computation.
+        let input = load_one(FAN).unwrap();
+        assert_eq!(input.grading_vector, RowDVector::from_row_slice(&[2, 1]));
+        assert_eq!(input.generators.shape(), (2, 0));
+        assert!(input.strata.is_empty());
+        assert_eq!(input.fan.as_ref().map(Vec::len), Some(8));
+        let given = load_one(&format!("{FAN}grading_vector: [3, 1]\n")).unwrap();
+        assert_eq!(given.grading_vector, RowDVector::from_row_slice(&[3, 1]));
+
+        let field_of = |data: &str| match load_one(data) {
+            Err(IoError::InvalidField { field, .. }) => field,
+            res => panic!("{res:?}"),
+        };
+        let strata = "strata: [{divisors: [1, 2, 4], class: [1, -1]}]\n";
+        assert_eq!(field_of(&format!("{FAN}{strata}")), "strata");
+        assert_eq!(field_of(&format!("{FAN}is_threefold: false\n")), "fan");
+        assert_eq!(
+            field_of(&FAN.replace("[1, 1, 1, 2]", "[1, 1, 1, 3]")),
+            "fan"
+        );
+        assert_eq!(
+            field_of(&FAN.replace("[1, 1, 1, 2]", "[1, 1, 2, 2]")),
+            "intnums"
+        );
+        assert_eq!(field_of(&FAN.replace("[0, 1, 2, 3], ", "")), "fan");
+        assert_eq!(
+            field_of(&FAN.replace("[0, 1, 2, 3]", "[0, 1, 2, -3]")),
+            "fan"
+        );
+        assert_eq!(field_of(&format!("{FAN}generators: [[1, 0, 0]]\n")), "q");
+        // Without any truncation the generators are the curve classes to use.
+        let untruncated = FAN.replace("max_deg: 6\n", "method: reference\n");
+        assert_eq!(
+            load_one(&untruncated),
+            Err(IoError::MissingField("generators"))
+        );
+        assert!(load_one(&format!("{untruncated}generators: [[0, 1], [1, -1]]\n")).is_ok());
+        // Without a fan, the grading vector is needed.
+        let without = FAN.replace("fan: ", "strata: []\nignored: ");
+        let without = &without[..without.find("ignored").unwrap()];
+        assert_eq!(
+            load_one(without),
+            Err(IoError::MissingField("grading_vector"))
+        );
     }
 
     /// P(1,1,2,2,2)[8] with its cone data and no generators.

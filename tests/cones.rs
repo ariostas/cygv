@@ -376,6 +376,7 @@ fn p11222(
         Vec::new(),
         HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]),
         Vec::new(),
+        None,
         cone_data,
         InvariantKind::GV,
         CYKind::Threefold,

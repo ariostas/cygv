@@ -260,6 +260,23 @@ def test_vex_phase() -> None:
     with pytest.raises(ValueError, match="not integers"):
         compute_gv(*args, max_deg=6)
 
+    # The fan gives the stratum, the Mori cone and the grading vector.
+    fan = [
+        (0, 1, 2, 3),
+        (0, 1, 2, 4),
+        (0, 1, 3, 4),
+        (0, 2, 3, 4),
+        (1, 2, 3, 5),
+        (1, 2, 4, 5),
+        (1, 3, 4, 5),
+        (2, 3, 4, 5),
+    ]
+    assert dict(compute_gv(None, None, q, intnums, max_deg=4, fan=fan)) == gv
+    with pytest.raises(ValueError, match="derived from the fan"):
+        compute_gv(None, None, q, intnums, max_deg=4, fan=fan, strata=strata)
+    with pytest.raises(ValueError, match="intersection ring"):
+        compute_gv(None, None, q, {(0, 1, 1): 4, (1, 1, 1): 3}, max_deg=4, fan=fan)
+
 
 def test_cone_data() -> None:
     # P(1,1,2,2,2)[8], whose Mori cone is spanned by (1, 0) and (0, 1). Only the last

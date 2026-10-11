@@ -34,6 +34,7 @@ def _compute_gvgw_subprocess(
     mori_hyperplanes: list[Any] | None = None,
     mori_equations: list[Any] | None = None,
     cones: list[Any] | None = None,
+    fan: list[Any] | None = None,
 ) -> None:
     with stderr_path.open("wb") as f:
         os.dup2(f.fileno(), 2)
@@ -56,6 +57,7 @@ def _compute_gvgw_subprocess(
                 mori_hyperplanes,
                 mori_equations,
                 cones,
+                fan,
             )
         )
     # Errors that the Rust side reports, such as invalid input, keep their type.
@@ -88,6 +90,7 @@ def _wrapped_compute_gvgw(
     mori_hyperplanes: list[Any] | None = None,
     mori_equations: list[Any] | None = None,
     cones: list[Any] | None = None,
+    fan: list[Any] | None = None,
 ) -> Any:
     parent_conn, child_conn = Pipe(duplex=False)
     with tempfile.NamedTemporaryFile(delete=False) as f:
@@ -113,6 +116,7 @@ def _wrapped_compute_gvgw(
             mori_hyperplanes,
             mori_equations,
             cones,
+            fan,
         ),
     )
     process.start()
@@ -206,9 +210,16 @@ def _regularize_cones(
     ]
 
 
+def _regularize_fan(fan: Iterable[ArrayLike] | None) -> list[Any] | None:
+    """Turn the maximal cones of a fan into lists of indices."""
+    if fan is None:
+        return None
+    return [[int(i) for i in np.asarray(cone).ravel()] for cone in fan]
+
+
 def compute_gv(
     generators: ArrayLike | None,
-    grading_vector: ArrayLike,
+    grading_vector: ArrayLike | None,
     q: ArrayLike,
     intnums: dict[tuple[int, int, int], int],
     max_deg: int | None = None,
@@ -221,9 +232,12 @@ def compute_gv(
     mori_hyperplanes: ArrayLike | None = None,
     mori_equations: ArrayLike | None = None,
     cones: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
+    fan: Iterable[ArrayLike] | None = None,
 ) -> list[Any]:
     generators = _regularize_vectors(generators, "generators") or []
-    grading_vector = np.array(grading_vector, dtype=int)
+    grading_vector = np.array(
+        [] if grading_vector is None else grading_vector, dtype=int
+    )
     q = np.array(q, dtype=int)
     target_points = _regularize_target_points(target_points)
     is_threefold = _is_threefold(q, nefpart)
@@ -244,6 +258,7 @@ def compute_gv(
         _regularize_vectors(mori_hyperplanes, "mori_hyperplanes"),
         _regularize_vectors(mori_equations, "mori_equations"),
         _regularize_cones(cones),
+        _regularize_fan(fan),
     )
     if is_threefold:
         res = [(tuple(v), int(gv)) for ((v, _), gv) in res_tmp]
@@ -254,7 +269,7 @@ def compute_gv(
 
 def compute_gw(
     generators: ArrayLike | None,
-    grading_vector: ArrayLike,
+    grading_vector: ArrayLike | None,
     q: ArrayLike,
     intnums: dict[tuple[int, int, int], int],
     max_deg: int | None = None,
@@ -267,9 +282,12 @@ def compute_gw(
     mori_hyperplanes: ArrayLike | None = None,
     mori_equations: ArrayLike | None = None,
     cones: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
+    fan: Iterable[ArrayLike] | None = None,
 ) -> list[Any]:
     generators = _regularize_vectors(generators, "generators") or []
-    grading_vector = np.array(grading_vector, dtype=int)
+    grading_vector = np.array(
+        [] if grading_vector is None else grading_vector, dtype=int
+    )
     q = np.array(q, dtype=int)
     target_points = _regularize_target_points(target_points)
     is_threefold = _is_threefold(q, nefpart)
@@ -290,6 +308,7 @@ def compute_gw(
         _regularize_vectors(mori_hyperplanes, "mori_hyperplanes"),
         _regularize_vectors(mori_equations, "mori_equations"),
         _regularize_cones(cones),
+        _regularize_fan(fan),
     )
     if is_threefold:
         res = [(tuple(v), Fraction(gw)) for ((v, _), gw) in res_tmp]

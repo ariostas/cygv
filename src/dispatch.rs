@@ -17,12 +17,18 @@
 //! else computed ([`crate::cone::cone_data`]). With cone data the generators may be empty (no
 //! columns).
 //!
+//! The optional fan of the ambient toric variety (its maximal cones) gives the strata, which
+//! then cannot be given too, and defaults for the Mori cone, spanned by the classes of its
+//! walls, used when the generators are empty, and for the grading vector, used when it is
+//! empty ([`crate::phase::Fan`]). The intersection numbers are checked against it.
+//!
 //! The reference pipeline still panics on invalid input, while the errors of the modular one
 //! are returned.
 
 use crate::cone::{check_cone_data, columns, ConeData, ConeError};
 use crate::modular::key::KeyError;
 use crate::modular::{self, CandidateSource, CurveInvariants, Geometry, Options};
+use crate::phase::{Fan, FanError};
 use crate::reference::{self, run_hkty};
 use crate::{check_strata, CYKind, InvariantKind, Method, Stratum};
 use core::fmt;
@@ -45,9 +51,14 @@ pub enum ComputeError {
     InvalidConeData(&'static str),
     /// The target points do not fit the grading vector, for the given reason.
     InvalidTargetPoints(&'static str),
-    /// There are no generators, but the request needs them: there is no cone data either, or
-    /// nothing truncates the computation, which then uses the generators as the curve classes.
+    /// There are no generators, but the request needs them: there is no cone data or fan
+    /// either, or nothing truncates the computation, which then uses the generators as the
+    /// curve classes.
     MissingGenerators,
+    /// There is no grading vector (it has no entries), and no fan to derive one from.
+    MissingGradingVector,
+    /// The fan, or the intersection numbers that come with it, were rejected.
+    InvalidFan(FanError),
     /// The Hilbert bases of the Mori cone could not be computed.
     MoriCone(ConeError),
     /// The modular pipeline failed.
@@ -66,9 +77,11 @@ impl fmt::Display for ComputeError {
             | Self::InvalidTargetPoints(reason) => write!(f, "{reason}"),
             Self::MissingGenerators => write!(
                 f,
-                "the generators are needed, without cone data or without max_deg, min_points \
-                 and target_points"
+                "the generators are needed, without cone data or a fan, or without max_deg, \
+                 min_points and target_points"
             ),
+            Self::MissingGradingVector => write!(f, "the grading vector is needed without a fan"),
+            Self::InvalidFan(e) => write!(f, "{e}"),
             Self::MoriCone(e) => write!(f, "{e}"),
             Self::Modular(e) => write!(f, "{e}"),
         }
@@ -137,6 +150,7 @@ fn compute(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    fan: Option<Vec<Vec<usize>>>,
     cone_data: Option<ConeData>,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
@@ -146,6 +160,38 @@ fn compute(
     n_threads: Option<u32>,
     method: Method,
 ) -> Result<Results, ComputeError> {
+    // The phase from the fan: its strata, and the defaults for the Mori cone and the grading.
+    let phase = match fan {
+        None => None,
+        Some(_) if !cy_kind.is_threefold() || !nefpart.is_empty() => {
+            return Err(ComputeError::InvalidFan(FanError::NotHypersurface))
+        }
+        Some(_) if !strata.is_empty() => {
+            return Err(ComputeError::InvalidStrata(
+                "the strata are derived from the fan, so they cannot be given with it",
+            ))
+        }
+        Some(cones) => {
+            let fan = Fan::new(&cones, &q).map_err(ComputeError::InvalidFan)?;
+            fan.check_intnums(&intnums)
+                .map_err(ComputeError::InvalidFan)?;
+            Some(fan.phase().map_err(ComputeError::InvalidFan)?)
+        }
+    };
+    let (strata, grading_vector) = match &phase {
+        Some(p) => (
+            p.strata.clone(),
+            if grading_vector.is_empty() {
+                p.grading_vector.clone()
+            } else {
+                grading_vector
+            },
+        ),
+        None => (strata, grading_vector),
+    };
+    if grading_vector.is_empty() {
+        return Err(ComputeError::MissingGradingVector);
+    }
     check_strata(&strata, q.nrows(), q.ncols(), cy_kind, nefpart.is_empty())
         .map_err(ComputeError::InvalidStrata)?;
     if let Some(cone_data) = &cone_data {
@@ -162,12 +208,17 @@ fn compute(
     if generators.ncols() > 0 && generators.nrows() != h11 {
         return Err(modular::Error::DimensionMismatch.into());
     }
-    // The Mori cone by inequalities.
-    let (hyperplanes, equations) = match &cone_data {
-        Some(cone_data) => (cone_data.hyperplanes.clone(), cone_data.equations.clone()),
-        None if generators.ncols() == 0 => return Err(ComputeError::MissingGenerators),
-        None => {
-            let f = crate::cone::facets(&generators)
+    // The Mori cone by inequalities: the cone data's, or the facets of the generators, or of
+    // the fan's Mori cone without them.
+    let (hyperplanes, equations) = match (&cone_data, &phase) {
+        (Some(cone_data), _) => (cone_data.hyperplanes.clone(), cone_data.equations.clone()),
+        (None, None) if generators.ncols() == 0 => return Err(ComputeError::MissingGenerators),
+        (None, _) => {
+            let spanning = match &phase {
+                Some(p) if generators.ncols() == 0 => &p.generators,
+                _ => &generators,
+            };
+            let f = crate::cone::facets(spanning)
                 .map_err(|_| ComputeError::MoriCone(ConeError::TooLarge))?;
             (f.hyperplanes, f.equations)
         }
@@ -374,6 +425,7 @@ pub fn compute_gvgw_strings(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    fan: Option<Vec<Vec<usize>>>,
     cone_data: Option<ConeData>,
     invariant_kind: InvariantKind,
     cy_kind: CYKind,
@@ -390,6 +442,7 @@ pub fn compute_gvgw_strings(
         nefpart,
         intnums,
         strata,
+        fan,
         cone_data,
         invariant_kind,
         cy_kind,
@@ -434,6 +487,7 @@ pub fn compute_gv_rat_threefold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    fan: Option<Vec<Vec<usize>>>,
     cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
@@ -445,6 +499,7 @@ pub fn compute_gv_rat_threefold(
         nefpart,
         intnums,
         strata,
+        fan,
         cone_data,
         InvariantKind::GV,
         CYKind::Threefold,
@@ -472,6 +527,7 @@ pub fn compute_gw_rat_threefold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    fan: Option<Vec<Vec<usize>>>,
     cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
@@ -483,6 +539,7 @@ pub fn compute_gw_rat_threefold(
         nefpart,
         intnums,
         strata,
+        fan,
         cone_data,
         InvariantKind::GW,
         CYKind::Threefold,
@@ -510,6 +567,7 @@ pub fn compute_gv_rat_nfold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    fan: Option<Vec<Vec<usize>>>,
     cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
@@ -521,6 +579,7 @@ pub fn compute_gv_rat_nfold(
         nefpart,
         intnums,
         strata,
+        fan,
         cone_data,
         InvariantKind::GV,
         CYKind::Nfold,
@@ -544,6 +603,7 @@ pub fn compute_gw_rat_nfold(
     nefpart: Vec<DVector<i32>>,
     intnums: HashMap<(usize, usize, usize), i32>,
     strata: Vec<Stratum>,
+    fan: Option<Vec<Vec<usize>>>,
     cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
@@ -555,6 +615,7 @@ pub fn compute_gw_rat_nfold(
         nefpart,
         intnums,
         strata,
+        fan,
         cone_data,
         InvariantKind::GW,
         CYKind::Nfold,

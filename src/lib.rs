@@ -5,6 +5,7 @@ pub mod dispatch;
 #[cfg(feature = "cli")]
 pub mod io;
 pub mod modular;
+pub mod phase;
 #[cfg(feature = "python")]
 pub mod python;
 pub mod reference;

@@ -107,6 +107,19 @@ left out, at most two left out, three for a stratum), dropping sums above `max_d
 is sound because every cone is then inside the Mori cone. Errors are `ConeError`. Phase 7b
 also tried enumerating the lattice points of each $K_T$ directly (`PLAN.md`); both matched
 Normaliz, and the Hilbert bases won because they feed the existing cone path unchanged.
+`src/phase.rs` (phase 7c, a port of `cgv/tools/cgv_phase.py`): `phase::Fan` takes the maximal
+cones of the fan of the ambient toric fourfold and the charges, with the rays as the integer
+Gale dual of the charges (`kernel_basis` of `src/cone/hilbert.rs`), and checks the paper's
+assumptions as far as the fan shows them (simplicial, complete, a reflexive polytope of rays
+none of which is interior to a facet, regular through a pointed Mori cone, no vex 2-cones;
+that every boundary point not interior to a facet is a ray is not checked). `Fan::phase`
+gives the Mori cone (the extreme rays of the cone of the wall classes, Cox–Little–Schenck
+6.4.4), the default grading vector (the sum of its facets) and the strata (the 3-cones whose
+rays share no facet of the polytope, from `cone::facets`, with their wall classes), and
+`Fan::check_intnums` compares the intersection numbers with the toric intersection ring
+(`Ring`, recursive by linear equivalence) as trilinear forms on $h^{1,1}$ independent
+divisors. Exact `malachite::Rational` arithmetic on small systems; errors are `FanError`.
+`tests/phase.rs` compares it with `cgv_phase.prepare` on the 20 fans of `cgv/tests/refs_vex`.
 
 `src/modular.rs` and `src/modular/` hold the faster pipeline, which is still being extended and
 tuned. It computes modulo word-sized primes and lifts the results with the CRT, and shares no
@@ -206,7 +219,12 @@ indices differently (the first index is a reference surface in the n-fold case).
   `target_points`, where the reference's semigroup is the generators as given
   (`Semigroup::from_data`), so they are passed unchanged. With cone data the generators may
   have no columns, except for such a request (`ComputeError::MissingGenerators`). Failures of
-  the cone computations are `ComputeError::MoriCone`.
+  the cone computations are `ComputeError::MoriCone`. The optional `fan` (threefold
+  hypersurfaces only) is turned into a `phase::Phase` first: its strata replace the `strata`
+  argument, which must then be empty, its Mori cone spans the cone when the generators have
+  no columns, and its grading vector is used when `grading_vector` is empty
+  (`ComputeError::MissingGradingVector` without a fan); the intersection numbers are checked
+  against it, and its errors are `ComputeError::InvalidFan`.
   `run_hkty<T>` is generic over the coefficient type, which is only ever `reference::Rational`
   (`src/reference/rational.rs`) today, and takes the `InvariantKind` and `CYKind` enums at runtime. Adding an option means touching
   all of the dispatch sites. The computation is always exact: floating-point arithmetic (the old
@@ -270,8 +288,10 @@ stdout, flushing after each one. `--threads` and `--method` override the `n_thre
 `src/io.rs`, whose `Input` struct mirrors the arguments of `run_hkty` and whose field conventions
 match the Python API (each inner list is a *column*). `Input::from_yaml` rejects unknown fields and
 validates shapes eagerly — including a `process_int_nums` dry run, `method: modular` without
-`max_deg` or `target_points`, the cone data, the target points, and leaving out `generators`
-without cone data or without any of `max_deg`, `min_points` and `target_points` — because
+`max_deg` or `target_points`, the cone data, the target points, the fan (from which it derives the
+grading vector when `grading_vector` is left out, since the output needs it), and leaving out
+`generators` without cone data or a fan, or without any of `max_deg`, `min_points` and
+`target_points` — because
 `run_hkty` itself still unwraps its errors. `Input::compute` sorts the results by degree and then lexicographically by
 curve class, since the order in which curve classes of equal degree come out of `run_hkty` is not
 deterministic. Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
@@ -295,7 +315,8 @@ parsed on the Python side into `int` or `fractions.Fraction` depending on `find_
 `is_threefold` from the shape of `q` and the nef partition, and run the Rust call in a
 `multiprocessing.Process` so Ctrl-C interrupts the computation without killing the interpreter
 (the Rust side installs a ctrlc handler that calls `exit(1)`). They take `method` (a name, or
-`None` for the Rust default) and `n_threads`. Exceptions raised in the subprocess keep their type
+`None` for the Rust default) and `n_threads`, and `generators` and `grading_vector` may be
+`None` (with cone data or a `fan`; `None` becomes an empty list). Exceptions raised in the subprocess keep their type
 (an invalid `method` or a `ComputeError` is a `ValueError`), except panics, which become a
 `RuntimeError`. The subprocess's stderr is redirected to a temp file and surfaced in the raised
 `RuntimeError` when the process dies.

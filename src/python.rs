@@ -27,7 +27,7 @@ fn to_matrix(m: Vec<Vec<i32>>, name: &str) -> PyResult<DMatrix<i32>> {
 /// Compute GV or GW invariants
 #[pyfunction]
 #[pyo3(name = "_compute_gvgw")]
-#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, method=None, strata=None, mori_hyperplanes=None, mori_equations=None, cones=None))]
+#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, method=None, strata=None, mori_hyperplanes=None, mori_equations=None, cones=None, fan=None))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
@@ -46,6 +46,7 @@ pub fn compute_gvgw(
     mori_hyperplanes: Option<Vec<Vec<i32>>>,
     mori_equations: Option<Vec<Vec<i32>>>,
     cones: Option<Vec<(Vec<usize>, Vec<Vec<i32>>)>>,
+    fan: Option<Vec<Vec<usize>>>,
 ) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
     CTRLC_HANDLER.call_once(|| {
         ctrlc::set_handler(|| std::process::exit(1)).expect("failed to install ctrl-c handler");
@@ -79,7 +80,7 @@ pub fn compute_gvgw(
             Ok(Stratum { divisors, class })
         })
         .collect::<PyResult<_>>()?;
-    let h11 = grading_vector.len();
+    let h11 = q.ncols();
     // An empty list of vectors has no length to give its matrix, so it gets h11 rows.
     let to_matrix_h11 = |m: Vec<Vec<i32>>, name| {
         if m.is_empty() {
@@ -125,6 +126,7 @@ pub fn compute_gvgw(
         nefpart,
         intnums,
         strata,
+        fan,
         cone_data,
         invariant_kind,
         cy_kind,

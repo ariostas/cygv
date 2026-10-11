@@ -1,0 +1,23 @@
+# An example input for the cygv command line interface in a vex phase, given by its fan.
+#
+#   cygv --file examples/fan.yaml
+#
+# The same computation as examples/vex.yaml, but with the maximal cones of the fan of the
+# ambient toric variety instead of the strata, the generators and the cone data. The strata,
+# the Mori cone and the grading vector are derived from the fan and the charges, and the
+# intersection numbers are checked against the fan's.
+---
+name: vex phase of P(1,1,2,2,2)[8]
+q: [[1, 0, -1, 1, 0, 1], [0, 1, 1, 1, 1, 0]]
+intnums: [[0, 1, 1, 4], [1, 1, 1, 2]]
+max_deg: 10
+# The maximal cones, as indices of the divisors, i.e. of the columns of q.
+fan:
+  - [0, 1, 2, 3]
+  - [0, 1, 2, 4]
+  - [0, 1, 3, 4]
+  - [0, 2, 3, 4]
+  - [1, 2, 3, 5]
+  - [1, 2, 4, 5]
+  - [1, 3, 4, 5]
+  - [2, 3, 4, 5]

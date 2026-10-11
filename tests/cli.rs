@@ -244,3 +244,17 @@ fn test_vex_cone_data() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("stratum"), "{stderr}");
 }
+
+#[test]
+fn test_fan() {
+    // The vex example given by its fan gives the same output as with its strata and cone
+    // data, since the grading vector derived from the fan is the same.
+    let with_fan = run(&["--file", example("fan.yaml").to_str().unwrap()], "");
+    assert!(
+        with_fan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&with_fan.stderr)
+    );
+    let with_cones = run(&["--file", example("vex.yaml").to_str().unwrap()], "");
+    assert_eq!(with_fan.stdout, with_cones.stdout);
+}

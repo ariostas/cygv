@@ -17,6 +17,7 @@ mod hilbert;
 mod hull;
 
 pub use hilbert::{cone_data, hilbert_basis, ConeError};
+pub(crate) use hilbert::{det, kernel_basis, rank};
 pub use hull::{facets, rays, Generators, Inequalities, TooLarge};
 
 use crate::Stratum;

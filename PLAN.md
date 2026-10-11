@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a, 7b and 7d done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": phase 5b replaced `rug` with `malachite` everywhere (6.10). Branch
 `gv-modular-rust` is PR #94 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main`
@@ -767,23 +767,50 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     against 69 MB, 0.76 s. The reference, now on the Mori cone's Hilbert basis instead of
     thousands of generators, `h11_9` deg 10 3.5 s against 1.9 s and `h11_10` deg 8 5.0 s
     against 1.6 s, the same peak; the rest, and modular with supplied cone data, unchanged.
-- [ ] **7c. Phases from a fan** (6.3): derive `strata`, the default Mori rays and grading, and
-  optionally check `kappa`, from the fan's maximal cones and `q`, without normaliz. Port of
-  `cgv_phase.py`, with exact rational linear algebra on small matrices using the big-number
-  crate of 6.10; estimated 400–600 lines with tests. A directly supplied `strata` input stays
-  accepted. The vex path is only fully normaliz-free if 7b succeeds: each stratum adds a $K_T$
-  whose lattice points are still needed.
-  - [ ] Rays as the integer Gale dual of `q`.
-  - [ ] Walls (3-faces shared by two maximal cones) and their classes by Cox–Little–Schenck
-    6.4.4.
-  - [ ] Vex cones: the fan's 2- and 3-faces whose rays share no facet of the hull of the rays
-    (facets from 7a).
-  - [ ] The toric intersection ring for the `kappa` check.
-  - [ ] Rejection of inputs outside the paper's assumptions (a fine fan on the boundary points
-    of a reflexive 4-polytope not interior to facets), e.g. vex 2-cones (MacFadden–Sheridan
-    Prop. 5).
-  - [ ] Tests piece by piece against `cgv_phase.py` (normaliz needed on the development
-    machine only) and end to end against `cgv/tests/refs_vex`.
+- [x] **7c. Phases from a fan** (6.3): derive `strata`, the default Mori rays and grading, and
+  check `kappa`, from the fan's maximal cones and `q`, without normaliz. Port of
+  `cgv_phase.py` in `src/phase.rs` (`phase::Fan`, `Phase`, `FanError`), exact
+  `malachite::Rational` on small systems. A directly supplied `strata` input stays accepted;
+  with 7b the vex path is normaliz-free.
+  - [x] Rays as the integer Gale dual of `q` (`kernel_basis` from 7b, unimodular column
+    operations, so the rays span the lattice they live in).
+  - [x] Walls (every 3-cone, each a face of exactly two maximal cones, which is the
+    completeness check) and their classes by Cox–Little–Schenck 6.4.4. The default Mori cone
+    is given by the extreme rays of the cone of the wall classes (`cone::facets` then
+    `cone::rays`), where `cgv_phase.py` keeps every distinct wall class; same cone.
+  - [x] Vex cones: the fan's 2- and 3-faces whose rays share no facet of the hull of the rays
+    (`cone::facets` of the rays homogenized).
+  - [x] The toric intersection ring for the `kappa` check, recursive by linear equivalence as
+    in `cgv_phase.py`, but compared as trilinear forms on $h^{1,1}$ independent divisors
+    $D_i$ (where the given numbers are integers, $\sum Q Q Q \kappa$) instead of inverting
+    to the $J$ basis; $O((h^{1,1})^4)$ for the contraction.
+  - [x] Rejection of inputs outside the paper's assumptions: dimension four (h11 + 4
+    divisors, charges of rank h11), cones of four distinct independent rays, no repeats,
+    completeness, every ray in a cone, the polytope of the rays reflexive (every facet at
+    lattice distance 1), no ray interior to a facet, no vex 2-cones (MacFadden–Sheridan
+    Prop. 5), regularity through a pointed Mori cone. Not checked: that every boundary point
+    not interior to a facet is a ray (needs the polytope's lattice points), that the cones
+    meet properly. `cgv_phase.py` only checks the dimension, the cones and the vex 2-cones.
+  - [x] Tests piece by piece against `cgv_phase.py` and end to end against
+    `cgv/tests/refs_vex`. `tests/phase.rs`: the Mori cone (same facets), grading vector,
+    strata and `kappa` check on all 20 fans of the references (16 phases, both sides of the
+    pairs; expected values from `cgv_phase.prepare` with normaliz), and a perturbed `kappa`
+    rejected on each; unit tests on $\mathbb{P}^4$ (quintic `kappa`) and the rejections
+    (incomplete, non-fourfold, invalid cones, $\mathbb{P}(1,1,1,1,3)$ not reflexive, a fan
+    of $\mathbb{P}(1,1,1,1,4)$ with the point interior to a facet). End to end, once, by a
+    scratch script through the CLI from `q`, `intnums` and `fan` alone: all 16 references
+    give their stored GV tables, by `auto` with the derived grading and by the reference
+    pipeline (or `auto` above degree 14) with the stored one, and the pairs' FRST sides
+    match their vex sides class by class. Not run in CI, since the references' provenance
+    is still to be confirmed (phase 9); `tests/phase.rs` checks the derived data instead.
+  - [x] Interface (decided with you): an optional `fan` in the dispatch entry points (after
+    `strata`), YAML (`fan`) and Python (`fan=`). It gives the strata (an error if `strata`
+    is given too), defaults the Mori cone when the generators are empty (except without
+    truncation, `MissingGenerators`) and the grading vector when it is empty (Python `None`;
+    the YAML field may be left out, and `io` derives it eagerly since the output needs it),
+    and checks `intnums`; threefold hypersurfaces only. Errors:
+    `ComputeError::InvalidFan(FanError)`, `ComputeError::MissingGradingVector`.
+    `examples/fan.yaml` is `examples/vex.yaml` by its fan and gives the same output.
 - [x] **7d. Saturation for the reference pipeline** (6.11). Done with 7b; `auto` has one
   saturation semantics (6.2).
   - [x] The lattice points of the Mori cone up to `max_deg`, which is exactly the saturated
@@ -1067,7 +1094,7 @@ Layers, from cheapest to most independent:
      default Mori rays and grading, and the `kappa` check from the fan, i.e. the content of
      `cgv_phase.py`, natively and without normaliz. Its only normaliz uses are two small
      convex hulls, which the double description of phase 7a covers. Callers can still supply
-     `strata` directly.
+     `strata` directly. Done (phase 7c).
    - In `modular`, a stratum whose rational class has a denominator divisible by one of the
      primes makes that prime unusable: skip to the next prime instead of aborting as the C
      does. (With ~62-bit primes this essentially never happens, but it must not be fatal.)

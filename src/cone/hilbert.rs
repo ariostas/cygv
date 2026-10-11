@@ -193,7 +193,7 @@ fn cut(
 }
 
 /// The rank of a set of integer vectors.
-fn rank(rows: &[Vec<i64>]) -> usize {
+pub(crate) fn rank(rows: &[Vec<i64>]) -> usize {
     let mut a: Vec<Vec<i128>> = rows
         .iter()
         .map(|r| r.iter().map(|&x| x as i128).collect())
@@ -225,7 +225,7 @@ fn rank(rows: &[Vec<i64>]) -> usize {
 }
 
 /// The determinant of a square integer matrix, by Bareiss's fraction-free elimination.
-fn det(m: &[Vec<i64>]) -> Result<i128, TooLarge> {
+pub(crate) fn det(m: &[Vec<i64>]) -> Result<i128, TooLarge> {
     let n = m.len();
     if n == 0 {
         return Ok(1);
@@ -279,7 +279,7 @@ fn adjugate(m: &[Vec<i64>]) -> Result<Vec<Vec<i128>>, TooLarge> {
 
 /// A basis of the lattice of integer vectors orthogonal to all of `equations`, by unimodular
 /// column operations on the identity.
-fn kernel_basis(equations: &[Vec<i64>], n: usize) -> Result<Vec<Vec<i64>>, TooLarge> {
+pub(crate) fn kernel_basis(equations: &[Vec<i64>], n: usize) -> Result<Vec<Vec<i64>>, TooLarge> {
     let mut cols: Vec<Vec<i64>> = (0..n)
         .map(|i| (0..n).map(|j| (i == j) as i64).collect())
         .collect();

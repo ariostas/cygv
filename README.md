@@ -46,7 +46,28 @@ arXiv:2512.14817), whose curves of negative anticanonical degree need the class 
 they force into the CY, is specified by passing those strata as `strata`, a list of
 `(divisors, class)` pairs: the three toric divisors (indices of the rays) and the class of the
 stratum, whose entries may be `Fraction`s. Strata are only supported for threefold
-hypersurfaces. The computation is exact.
+hypersurfaces. They can instead be derived from the fan of the ambient toric variety, passed as
+`fan`, its maximal cones as lists of four divisors, which must be a fine regular fan on the
+boundary points of a reflexive polytope that are not interior to facets (FRST or vex): then the
+Mori cone (spanned by the classes of the walls) and a grading vector (the sum of its facets) are
+derived too, so `generators` and `grading_vector` can be `None`, and `intnums` is checked against
+the fan's intersection ring. The computation is exact.
+
+```python
+fan = [
+    (0, 1, 2, 3),
+    (0, 1, 2, 4),
+    (0, 1, 3, 4),
+    (0, 2, 3, 4),
+    (1, 2, 3, 5),
+    (1, 2, 4, 5),
+    (1, 3, 4, 5),
+    (2, 3, 4, 5),
+]
+q = [[1, 0, -1, 1, 0, 1], [0, 1, 1, 1, 1, 0]]
+compute_gv(None, None, q, {(0, 1, 1): 4, (1, 1, 1): 2}, max_deg=3, fan=fan)
+# [((0, 1), 640), ((1, -1), 1), ((1, 0), 20), ((0, 2), 10032), ...]
+```
 
 Two implementations of the computation are available, selected with `method`. The `modular` one
 computes modulo word-sized primes and recovers the exact integers by the Chinese remainder theorem,
