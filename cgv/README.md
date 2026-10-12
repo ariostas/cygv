@@ -17,7 +17,21 @@ gvs = compute_gvs(cy, max_deg=24, device="cpu")         # or "gpu", "gpu:1", "au
 gvs = compute_gvs(cy, lightcone=[c1, c2])               # only c1, c2 and the curves feeding into them
 ```
 
-From the shell (input written by `tools/cgv_run.py`'s `write_input`):
+Without a CalabiYau object, give the generators of the cone the curves live on, the GLSM charges `q` (h11 x ndiv,
+CYTools' `curve_basis(as_matrix=True)` layout), the intersection numbers (`[[i, j, k, value], ...]` or
+`{(i, j, k): value}`) and a grading vector positive on the cone (optional with CYTools installed):
+
+```python
+gvs = compute_gvs(dict(mori_rays=G, q=q, intnums=kappa, grading_vector=w), max_deg=24)
+gvs = compute_gvs(dict(mori_rays=F, q=q, intnums=kappa), max_deg=24)   # F: the generators of a face of the Mori cone
+```
+
+`G` may be redundant (any vectors spanning the Mori cone), or replaced by `mori_hyperplanes` (inequalities). A face
+gives exactly the GVs of the curves on it, since a curve on a face only decomposes into curves on that face; this is how
+high h11 is reached (e.g. a 12-dimensional face at h11 = 491: 1.7 s of normaliz, then cgv). The normaliz results are
+cached in `~/.cache/cgv`.
+
+From the shell (input file from `write_input(d, max_deg, "input.txt")`, or `tools/cgv_run.py d.json MAX_DEG --write input.txt`):
 
 ```
 ./cgv     input.txt                # CPU, all cores (-t N: N threads)

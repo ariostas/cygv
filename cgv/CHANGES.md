@@ -72,7 +72,7 @@ separately, as before.
   (and the slow full enumeration it fell back to) is gone. It decided only agreement with cygv, never cgv's
   output, and cost up to 770 s / 79 GB on one region (now 91 s / 1 GB, identical output). `CGV_STRICT_SEMIGROUP`
   and the `cgv: note` about missing Hilbert basis elements are gone with it.
-- **Input file format `cgv 2`** (written by `cgv_run.write_input`): grading, Q, intersection numbers, the K_T
+- **Input file format** (written by `cgv_run.write_input`): grading, Q, intersection numbers, the K_T
   Hilbert bases, then optional `lightcone` and `vex` sections. The original format is no longer read.
 - **Lightcone GVs**: `lightcone=[p, ...]` computes only the backward lightcones of the curves p (the curves C with
   p - C in the Mori cone: exactly the curves whose GVs enter those of p), so the GVs are exact; `max_deg` then
@@ -80,6 +80,14 @@ separately, as before.
   nonnegative integer sums of pts), which dropped curves feeding in from outside and stopped with "CRT did not
   stabilize" unless the cone of pts was a face of the Mori cone. That error now explains its usual cause.
 - **Removed**: `cgv_run.run_cygv` and the `--compare` option (`tests/make_refs.py` calls cygv itself).
+- **Fewer K_T cones; faces through the plain interface** (`cgv_run.cone_data`): only divisors negative somewhere on
+  the cone are put in T, and each distinct cone is written once (K_T = K_M, M the divisors negative on its Hilbert
+  basis). Identical output; e.g. P(1,1,2,2,2)[8] 21 -> 1 cones, the h11 = 10 tests 91-105 -> 55-91. `mori_rays` may
+  span a face of the Mori cone: normaliz then runs in a basis of the face's lattice (a 12-dimensional face at
+  h11 = 491: 123 normaliz runs, 1.7 s; before: ~123k runs in Z^491, a sampled one unfinished after 10 min, and the face's equations were dropped).
+  `grading_vector` defaults to CYTools' `find_grading_vector` and is checked to be positive on the cone; `intnums`
+  may be a dict. The cache files are now `kt2_*.json`.
+- **No format tag**: input files start with `h11 ndiv maxdeg`; a leading `cgv 2` (older files) is still accepted.
 
 ## Behaviour
 - **Vex phases** (new, additive): cgv accepts an optional strata section (one exact curve class per vex 3-cone)

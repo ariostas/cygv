@@ -21,9 +21,12 @@ SRC = os.path.dirname(HERE)
 
 
 def job_size(path):
-    """Rough cost estimate: the input's max degree relative to its smallest generator degree."""
+    """Rough cost estimate: (max degree, file size)."""
     with open(path) as f:
-        h11, ngen, D = (int(x) for x in f.readline().split()[:3])
+        tok = f.read(4096).split()
+    if tok[:1] == ["cgv"]:   # older files start with the tag "cgv 2"
+        tok = tok[2:]
+    h11, ndiv, D = (int(x) for x in tok[:3])
     return D, os.path.getsize(path)
 
 

@@ -27,13 +27,15 @@
  *  - cygv's Li2(q^N) power series are replaced by the multicover sum above,
  *    so each curve C costs one truncated exp(C.alpha).
  *
- * Input (text, whitespace separated), written by tools/cgv_run.py:
- *   cgv 2
- *   h11 ndiv maxdeg
+ * Input (text, whitespace separated), written by tools/cgv_run.py (write_input):
+ *   h11 ndiv maxdeg             (older files start with the tag "cgv 2", skipped)
  *   w[h11]                      grading vector (positive on the Mori cone)
  *   Q[ndiv][h11]                GLSM charges (row r = divisor r)
  *   nint   (i j k val)[nint]    triple intersection numbers
- *   ncones { n k T_1..T_k  hb[n][h11] }   Hilbert basis of each cone K_T, |T| = k in 1..3
+ *   ncones { n k T_1..T_k  hb[n][h11] }   Hilbert basis of each cone K_T, |T| = k in 1..3. Only the union of
+ *                               their lattice points is used (cones may repeat or contain one another), except
+ *                               that a cone labeled by a pair T whose quadratic form vanishes is skipped (see
+ *                               build_candidates). "Mori cone" may also be a face of it (then: the curves on that face).
  *   optional sections, each a keyword then its data:
  *   lightcone  m  p[m][h11]  nf  H[nf][h11]
  *                               keep only the backward lightcones of the points p: the curves C with
@@ -454,11 +456,18 @@ static inline KEY lt_key(u128 H, int e) {
 
 static void read_input(FILE *f) {
 #define RD(x) do { if (fscanf(f, "%d", &(x)) != 1) die("bad input"); } while (0)
-    char tok[64];
+    char tok[64], *e;
     int ver;
-    if (fscanf(f, "%63s", tok) != 1 || strcmp(tok, "cgv") || fscanf(f, "%d", &ver) != 1 || ver != 2)
-        die("input is not in the \"cgv 2\" format: write it with tools/cgv_run.py");
-    RD(h11); RD(ndiv); RD(maxdeg);
+    if (fscanf(f, "%63s", tok) != 1) die("empty input");
+    if (!strcmp(tok, "cgv")) {   /* files from before 2026-10 start with the tag "cgv 2" */
+        if (fscanf(f, "%d", &ver) != 1 || ver != 2) die("unknown input format: write it with tools/cgv_run.py");
+        RD(h11);
+    } else {
+        long v = strtol(tok, &e, 10);
+        if (*e || e == tok || v < 1 || v > INT_MAX) die("bad input: write it with tools/cgv_run.py");
+        h11 = (int)v;
+    }
+    RD(ndiv); RD(maxdeg);
 #ifdef CGV_MAJ
     if (h11 < 1 || h11 > 64 || ndiv > 64) die("h11 or ndiv > 64 not supported");
 #else
