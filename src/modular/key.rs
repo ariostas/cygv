@@ -21,6 +21,10 @@ use core::ops::Add;
 pub trait Key: Copy + Eq + Ord + Default + Add<Output = Self> + Send + Sync + Debug {
     /// A hash of the key, for picking a slot in a table.
     fn hash64(self) -> u64;
+
+    /// The key of `n` times the class. Keys add like the classes, so this is `n` times the
+    /// key; the result is only meaningful when the class fits the layout.
+    fn times(self, n: i64) -> Self;
 }
 
 /// How curve classes are packed into keys.
@@ -156,6 +160,11 @@ impl Key for PackedKey {
         x ^= x >> 31;
         x = x.wrapping_mul(0xD6E8_FEB8_6659_FD93);
         x ^ (x >> 32)
+    }
+
+    #[inline]
+    fn times(self, n: i64) -> Self {
+        Self(self.0.wrapping_mul(n as i128 as u128))
     }
 }
 

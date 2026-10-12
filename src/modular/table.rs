@@ -6,8 +6,6 @@
 //! - [`SparsePoly`] is a finished series: its nonzero terms in order of degree, then key.
 //! - [`DegreeHeap`] hands out slots in order of degree, for the loops that finalize the terms
 //!   of a series degree by degree while adding new ones above.
-//! - [`LevelTable`] holds one degree level of the terms of a single exponential, with the
-//!   value stored next to the key, so that one probe touches both.
 //!
 //! A slot or term carries `width` values rather than one, fixed when the table is made. A
 //! threefold needs one value per term, but an n-fold needs one per reference surface, a
@@ -20,7 +18,7 @@ use std::collections::BinaryHeap;
 use std::sync::Mutex;
 
 /// Marks an unused bucket of a [`SlotMap`].
-const EMPTY: u32 = u32::MAX;
+const EMPTY: u64 = 0;
 
 /// Whether all values are zero, i.e. equal to [`Default`].
 #[inline]
@@ -31,17 +29,17 @@ fn all_zero<V: Default + PartialEq>(vals: &[V]) -> bool {
 /// A hash map from curve classes to slots, each with the class, its degree and `width` values.
 ///
 /// Slots are numbered from zero in order of insertion. Lookups go through an open-addressing
-/// index that keeps a copy of each key next to its slot number, so that a probe does not
-/// have to follow the slot number to compare keys. The index is at most half full.
+/// index of 8-byte buckets, each holding a slot number and a 32-bit tag from the high bits
+/// of the key's hash (the low ones pick the bucket), so that a probe only follows the slot
+/// number to compare keys when the tags match. The index is at most half full.
 ///
 /// Slot numbers are `u32`, which limits a table to about four billion slots. That is far
 /// more than fits in memory in any case: each slot takes at least 36 bytes with packed keys.
 #[derive(Debug, Clone)]
 pub struct SlotMap<K, V> {
     width: usize,
-    /// The index: per bucket a key and its slot, or [`EMPTY`].
-    hkeys: Vec<K>,
-    hslots: Vec<u32>,
+    /// The index: per bucket the tag and one more than the slot, or [`EMPTY`].
+    index: Vec<u64>,
     keys: Vec<K>,
     degs: Vec<u32>,
     /// `width` values per slot.
@@ -62,8 +60,7 @@ impl<K: Key, V: Copy + Default + PartialEq> SlotMap<K, V> {
         let n_buckets = (2 * capacity + 1).max(16).next_power_of_two();
         Self {
             width,
-            hkeys: vec![K::default(); n_buckets],
-            hslots: vec![EMPTY; n_buckets],
+            index: vec![EMPTY; n_buckets],
             keys: Vec::with_capacity(capacity),
             degs: Vec::with_capacity(capacity),
             vals: Vec::with_capacity(capacity * width),
@@ -88,18 +85,23 @@ impl<K: Key, V: Copy + Default + PartialEq> SlotMap<K, V> {
         self.keys.is_empty()
     }
 
-    /// The bucket that holds `key`, with its slot, or else the empty bucket where it would go.
+    /// The bucket that holds `key`, whose hash is `hash`, with its slot, or else the empty
+    /// bucket where it would go.
     #[inline]
-    fn probe(&self, key: K) -> (usize, Option<u32>) {
-        let mask = self.hslots.len() - 1;
-        let mut h = key.hash64() as usize & mask;
+    fn probe(&self, key: K, hash: u64) -> (usize, Option<u32>) {
+        let mask = self.index.len() - 1;
+        let tag = hash >> 32;
+        let mut h = hash as usize & mask;
         loop {
-            let s = self.hslots[h];
-            if s == EMPTY {
+            let e = self.index[h];
+            if e == EMPTY {
                 return (h, None);
             }
-            if self.hkeys[h] == key {
-                return (h, Some(s));
+            if e >> 32 == tag {
+                let s = (e as u32).wrapping_sub(1);
+                if self.keys[s as usize] == key {
+                    return (h, Some(s));
+                }
             }
             h = (h + 1) & mask;
         }
@@ -108,7 +110,7 @@ impl<K: Key, V: Copy + Default + PartialEq> SlotMap<K, V> {
     /// The slot of `key`, if it has one.
     #[inline]
     pub fn get(&self, key: K) -> Option<u32> {
-        self.probe(key).1
+        self.probe(key, key.hash64()).1
     }
 
     /// The slot of `key`, created with zero values if there is none, and whether it was
@@ -117,21 +119,45 @@ impl<K: Key, V: Copy + Default + PartialEq> SlotMap<K, V> {
     /// The degree is only stored when the slot is created.
     #[inline]
     pub fn insert(&mut self, key: K, deg: u32) -> (u32, bool) {
-        let (h, found) = self.probe(key);
+        self.insert_hashed(key, key.hash64(), deg)
+    }
+
+    /// [`SlotMap::insert`] with the hash of the key, [`Key::hash64`], already computed.
+    #[inline]
+    pub fn insert_hashed(&mut self, key: K, hash: u64, deg: u32) -> (u32, bool) {
+        let (h, found) = self.probe(key, hash);
         if let Some(s) = found {
             return (s, false);
         }
         let s = self.keys.len();
-        assert!(s < EMPTY as usize, "too many slots for a slot map");
+        assert!(s < u32::MAX as usize, "too many slots for a slot map");
         self.keys.push(key);
         self.degs.push(deg);
         self.vals.resize(self.vals.len() + self.width, V::default());
-        self.hkeys[h] = key;
-        self.hslots[h] = s as u32;
-        if 2 * self.keys.len() >= self.hslots.len() {
-            self.rehash(2 * self.hslots.len());
+        self.index[h] = (hash >> 32) << 32 | (s as u64 + 1);
+        if 2 * self.keys.len() >= self.index.len() {
+            self.rehash(2 * self.index.len());
         }
         (s as u32, true)
+    }
+
+    /// Asks the processor to fetch the bucket where a key with hash `hash` is probed first
+    /// into the cache, ahead of an insertion a few iterations later. It does nothing on other
+    /// architectures than x86-64.
+    #[inline]
+    pub fn prefetch(&self, hash: u64) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let h = hash as usize & (self.index.len() - 1);
+            let ptr = self.index[h..].as_ptr().cast::<i8>();
+            // SAFETY: a prefetch has no effect on memory, and SSE is part of x86-64.
+            #[allow(unused_unsafe)]
+            unsafe {
+                core::arch::x86_64::_mm_prefetch(ptr, core::arch::x86_64::_MM_HINT_T0);
+            }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = hash;
     }
 
     /// The values of `key`'s slot, created with zero values if there is none.
@@ -143,15 +169,14 @@ impl<K: Key, V: Copy + Default + PartialEq> SlotMap<K, V> {
 
     /// Rebuilds the index with `n_buckets` buckets.
     fn rehash(&mut self, n_buckets: usize) {
-        self.hkeys = vec![K::default(); n_buckets];
-        self.hslots = vec![EMPTY; n_buckets];
+        self.index = vec![EMPTY; n_buckets];
         for (s, &key) in self.keys.iter().enumerate() {
-            let mut h = key.hash64() as usize & (n_buckets - 1);
-            while self.hslots[h] != EMPTY {
+            let hash = key.hash64();
+            let mut h = hash as usize & (n_buckets - 1);
+            while self.index[h] != EMPTY {
                 h = (h + 1) & (n_buckets - 1);
             }
-            self.hkeys[h] = key;
-            self.hslots[h] = s as u32;
+            self.index[h] = (hash >> 32) << 32 | (s as u64 + 1);
         }
     }
 
@@ -194,15 +219,15 @@ impl<K: Key, V: Copy + Default + PartialEq> SlotMap<K, V> {
     /// When the map holds few slots compared with the size of its index, only their buckets
     /// are reset, so that clearing a large but mostly empty map stays cheap.
     pub fn clear(&mut self) {
-        if 8 * self.keys.len() >= self.hslots.len() {
-            self.hslots.fill(EMPTY);
+        if 8 * self.keys.len() >= self.index.len() {
+            self.index.fill(EMPTY);
         } else {
             // Find every bucket before emptying any, so that the probe sequences stay intact.
             let mut buckets = core::mem::take(&mut self.buckets);
             buckets.clear();
-            buckets.extend(self.keys.iter().map(|&key| self.probe(key).0));
+            buckets.extend(self.keys.iter().map(|&key| self.probe(key, key.hash64()).0));
             for &h in &buckets {
-                self.hslots[h] = EMPTY;
+                self.index[h] = EMPTY;
             }
             self.buckets = buckets;
         }
@@ -498,163 +523,6 @@ impl DegreeHeap {
     }
 }
 
-/// The capacity of a [`LevelTable`] when it is first used.
-const LEVEL_MIN_CAPACITY: usize = 256;
-
-/// An open-addressing table of (key, value) entries, for the terms of one degree of an
-/// exponential being built.
-///
-/// Unlike a [`SlotMap`] the entries live in the table itself, so that a probe touches the key
-/// and the value together, and they keep no degree, since all of them have the same one.
-/// Empty entries hold a sentinel key that no curve class packs to
-/// ([`KeyLayout::sentinel`](super::key::KeyLayout::sentinel)). The table remembers which
-/// entries are in use, in order of insertion, so that iterating over and clearing it cost the
-/// number of entries rather than the capacity. Memory is only allocated on first use, and
-/// the table grows when it is three quarters full.
-#[derive(Debug, Clone)]
-pub struct LevelTable<K, V> {
-    entries: Vec<(K, V)>,
-    /// The indices of the entries in use, in order of insertion.
-    used: Vec<u32>,
-    empty: K,
-}
-
-impl<K: Key, V: Copy + Default> LevelTable<K, V> {
-    /// An empty table, with `empty` marking unused entries.
-    pub fn new(empty: K) -> Self {
-        Self {
-            entries: Vec::new(),
-            used: Vec::new(),
-            empty,
-        }
-    }
-
-    /// The number of entries in use.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.used.len()
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.used.is_empty()
-    }
-
-    /// The number of entries allocated.
-    #[inline]
-    pub fn capacity(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// The entry holding `key`, or else the empty entry where it would go.
-    #[inline]
-    fn probe(&self, key: K) -> Result<usize, usize> {
-        let mask = self.entries.len() - 1;
-        let mut h = key.hash64() as usize & mask;
-        loop {
-            let k = self.entries[h].0;
-            if k == key {
-                return Ok(h);
-            }
-            if k == self.empty {
-                return Err(h);
-            }
-            h = (h + 1) & mask;
-        }
-    }
-
-    /// The value of `key`, if it has an entry.
-    #[inline]
-    pub fn get(&self, key: K) -> Option<&V> {
-        if self.entries.is_empty() {
-            return None;
-        }
-        self.probe(key).ok().map(|h| &self.entries[h].1)
-    }
-
-    /// The value of `key`, inserted as zero if it has no entry.
-    #[inline]
-    pub fn get_or_insert(&mut self, key: K) -> &mut V {
-        debug_assert!(key != self.empty, "the sentinel key was inserted");
-        if self.entries.is_empty() {
-            self.entries = vec![(self.empty, V::default()); LEVEL_MIN_CAPACITY];
-        }
-        let h = match self.probe(key) {
-            Ok(h) => h,
-            Err(h) => {
-                let h = if 4 * (self.used.len() + 1) > 3 * self.entries.len() {
-                    self.grow();
-                    self.probe(key).unwrap_err()
-                } else {
-                    h
-                };
-                self.entries[h] = (key, V::default());
-                self.used.push(h as u32);
-                h
-            }
-        };
-        &mut self.entries[h].1
-    }
-
-    /// Doubles the capacity.
-    fn grow(&mut self) {
-        let capacity = 2 * self.entries.len();
-        assert!(capacity <= 1 << 32, "too many entries for a level table");
-        let old = core::mem::replace(
-            &mut self.entries,
-            vec![(self.empty, V::default()); capacity],
-        );
-        for i in self.used.iter_mut() {
-            let entry = old[*i as usize];
-            let mut h = entry.0.hash64() as usize & (capacity - 1);
-            while self.entries[h].0 != self.empty {
-                h = (h + 1) & (capacity - 1);
-            }
-            self.entries[h] = entry;
-            *i = h as u32;
-        }
-    }
-
-    /// Asks the processor to fetch the entry where `key` would be probed first into the cache,
-    /// ahead of a lookup a few iterations later. It does nothing on other architectures than
-    /// x86-64, or before the table has memory.
-    #[inline]
-    pub fn prefetch(&self, key: K) {
-        #[cfg(target_arch = "x86_64")]
-        if !self.entries.is_empty() {
-            let h = key.hash64() as usize & (self.entries.len() - 1);
-            let ptr = self.entries[h..].as_ptr().cast::<i8>();
-            // SAFETY: a prefetch has no effect on memory, and SSE is part of x86-64.
-            #[allow(unused_unsafe)]
-            unsafe {
-                core::arch::x86_64::_mm_prefetch(ptr, core::arch::x86_64::_MM_HINT_T0);
-            }
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        let _ = key;
-    }
-
-    /// The entries in use, in order of insertion.
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (K, V)> + '_ {
-        self.used.iter().map(|&h| self.entries[h as usize])
-    }
-
-    /// Removes all entries, keeping the memory.
-    pub fn clear(&mut self) {
-        for &h in &self.used {
-            self.entries[h as usize].0 = self.empty;
-        }
-        self.used.clear();
-    }
-
-    /// Removes all entries and frees the memory.
-    pub fn release(&mut self) {
-        self.entries = Vec::new();
-        self.used = Vec::new();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -849,46 +717,5 @@ mod tests {
         let mut poly = SparsePoly::new(1);
         poly.push(PackedKey(1), 1, &[1u64]);
         poly.push(PackedKey(0), 1, &[1u64]);
-    }
-
-    #[test]
-    fn test_level_table() {
-        let mut rng = TestRng::new(8);
-        let layout = PackedLayout::new(&[100; 4]).unwrap();
-        let mut table: LevelTable<PackedKey, u64> = LevelTable::new(layout.sentinel());
-        assert_eq!(table.get(PackedKey(0)), None);
-        assert_eq!(table.capacity(), 0);
-        for n in [10, 3000, 200, 0, 5000] {
-            let mut model: HashMap<PackedKey, u64> = HashMap::new();
-            let mut order = Vec::new();
-            for _ in 0..n {
-                let c: Vec<i32> = (0..4).map(|_| rng.range(-12, 12) as i32).collect();
-                let key = layout.pack(&c);
-                let v = rng.next_u64();
-                let entry = table.get_or_insert(key);
-                *entry = entry.wrapping_add(v);
-                let m = model.entry(key).or_insert_with(|| {
-                    order.push(key);
-                    0
-                });
-                *m = m.wrapping_add(v);
-            }
-            assert_eq!(table.len(), model.len());
-            assert!(4 * table.len() <= 3 * table.capacity());
-            let entries: Vec<(PackedKey, u64)> = table.iter().collect();
-            let expected: Vec<(PackedKey, u64)> = order.iter().map(|k| (*k, model[k])).collect();
-            assert_eq!(entries, expected);
-            for (k, v) in &model {
-                assert_eq!(table.get(*k), Some(v));
-            }
-            assert_eq!(table.get(layout.pack(&[50, 50, 50, 50])), None);
-            table.clear();
-            assert!(table.is_empty());
-            assert_eq!(table.get(order.first().copied().unwrap_or_default()), None);
-        }
-        table.release();
-        assert_eq!(table.capacity(), 0);
-        *table.get_or_insert(PackedKey(0)) = 3;
-        assert_eq!(table.iter().collect::<Vec<_>>(), [(PackedKey(0), 3)]);
     }
 }

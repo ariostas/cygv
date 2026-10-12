@@ -1,11 +1,11 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d, 8 done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d, 8, 8b done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": phase 5b replaced `rug` with `malachite` everywhere (6.10). Branch
 `gv-modular-rust` is PR #94 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main`
-(6fe293a, v0.3.0), plus our commits. The PR branch itself (`cgv-cc-cpu`) is untouched. The follow-up PRs #95, #97 and #100
-are covered in section 1.1.
+(6fe293a, v0.3.0), plus our commits. The PR branch itself (`cgv-cc-cpu`) is untouched. The follow-up PRs #95, #97, #100
+and #102 are covered in section 1.1.
 
 Section 6 lists the decisions that need an answer before implementation starts.
 
@@ -35,9 +35,9 @@ Extras in `cgv/` that the PR does not expose through cygv: a certification build
 same pipeline over upward-rounded reals to prove the CRT lift exact), a distributed residue mode,
 a glibc low-memory switch, the GPU stage.
 
-### 1.1 The follow-up PRs: #95, #97, #100
+### 1.1 The follow-up PRs: #95, #97, #100, #102
 
-All three are stacked on #94 (each contains the previous ones; only the last commit or two are
+All four are stacked on #94 (each contains the previous ones; only the last commit or two are
 new). Read from their diffs against our copy of `cgv/`.
 
 - **#95, GPU variant.** Builds `cgv/gpu.cu` (CUDA or HIP) in `build.rs` when `nvcc`/`hipcc` is
@@ -81,6 +81,31 @@ new). Read from their diffs against our copy of `cgv/`.
     target-point trimming discussed under 6.3, and it replaces the old "subset of generators"
     mode, which only worked for faces.
   - New input file format ("cgv 2"), clearer CRT error, progress lines.
+
+- **#102, an optimization pass over the C's extraction, and wide keys** (the last commit,
+  4def228d; the output is unchanged, and our `cgv/` stays the #100 version). Measured here
+  (8 threads unless noted, cone data, identical GVs from all three): h11_8 at degree 20
+  #100 7.5 s, #102 6.0 s, Rust (before phase 8b) 9.8 s; h11_9 3.9 / 3.7 / 4.3 s; h11_10
+  236 / 202 / 244 s; h11_11 4.4–6.5 s for the C, 5.7 s for Rust; h11_8 at 22 27 / 20 / 29 s;
+  one thread, h11_8 at 20: 25 / 17.4 / 28 s. The parts:
+  - *Level tables* (most of the gain: with replay off, #102 takes 19.2 s on the one-thread
+    run): tables store the linear hash $H(k) = kM$ instead of the key, so a scatter's target
+    is one addition; 64-bit level keys in a box of the offsets with the degree-fixed
+    coordinate left out; 8-byte tag+index buckets in the series' point table; a staged flush
+    into it (hash, prefetch, apply); structure-of-arrays slots, or packed key+value records
+    on CPUs with an L2 below 1 MB. Ported in phase 8b.
+  - *Curve-class replay*: the curves of a layer with the same degree and nonzero coordinates
+    share one pattern of (source, $L$ term) → target pairs, built once by hashing and
+    replayed per curve by direct indexing, each target summing its pairs unreduced in blocks
+    of 16 and reducing once; with a memory budget, a run-time cost model and its own task
+    order. About 10% on one thread here, mixed on 8 (better on h11_8, slightly worse on
+    h11_11), up to ~25% more memory. A follow-up (5.3).
+  - *High $h^{1,1}$*: curves in an LLL-reduced basis of the lattice the cone generators span
+    (a face of the Mori cone has fewer coordinates), and 256- or 512-bit keys when 128 are
+    not enough, by rerunning; faces of rank 32–40 at $h^{1,1} = 491$ run to degree 40. Our
+    keys stop at 126 bits in the input coordinates, so those inputs would fall back to the
+    reference. A follow-up (5.3).
+  - GPU kernels, the 3 × 3 build matrix, `CGV_MEM=low` and the other switches: not relevant.
 
 What this changes in the plan: 6.1 (what cone data is), 6.2 (no separate Mori Hilbert basis),
 6.3 (target points decided; phases added), 6.11 (the same features in the reference), phases
@@ -892,6 +917,34 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     `cgv`, give exactly `cgv_maj`'s curves, and every bound is at or below its bound (by up
     to 6 bits; the largest 67/53/40/42 bits against 73/54/44/47).
   - [ ] Optional: the generator-reduction back-port to `Semigroup`.
+- [x] **8b. Level tables after PR #102** (section 1.1), the parts that carry over to our
+  extraction:
+  - `modular::level`: the level tables key the offsets $m$ of an exponential by
+    $H(m) = \varphi(m) M \bmod 2^b$, with $\varphi$ packing the coordinates of a box that holds
+    every sum of $\alpha$ terms up to the maximum degree (`level_box`, each coordinate shifted
+    by its lowest value, the widest coordinate with a nonzero weight left out since the degree
+    gives it) into a `u64` when it fits and a `u128` otherwise (`LevelWord`, `LevelLayout`;
+    `extract` picks one and monomorphizes). The scatter's target is $H(u) + H(v)$, the bucket
+    the top bits of $H$, an entry stores $H$ XORed with the hash of a point just outside the
+    box, so that zero is empty; `OffsetKeys` turns $H$ back into a curve key only for the
+    emitted terms, as $\sum_t d_t \operatorname{key}(e_t)$ from the digits, the dropped
+    coordinate by an exact division done as a multiplication by the inverse of the odd part
+    of its weight (unpacking the coordinates and packing them again cost 68 ns per emitted
+    term, which ate the gain). The extraction needs the grading vector for it.
+  - `SlotMap`: 8-byte buckets (a 32-bit tag from the high bits of the hash and the slot) in
+    place of 20-byte ones (key and slot), and `Shard::fold` hashes a buffer first and
+    prefetches each bucket 8 terms ahead (`insert_hashed`, `prefetch`).
+  - Measured (h11_11 at degree 20, one thread, extraction only): the scatter 8.1 → 6.3 s,
+    finalizing with the emitted terms folded into the series 9.8 → 6.2 s (the prefetch about
+    3 s of that, the tag buckets about 2 s); bucketing by a full mix instead of the top bits
+    changed nothing. End to end (CLI, identical outputs, also certified): h11_8 at 20 one
+    thread 26.4 → 21.3 s, 8 threads 8.6 → 7.5 s; h11_9 5.1 → 4.6 s; h11_11 6.2 → 6.0 s, one
+    thread 19.4 → 15.4 s; peak memory 15–26% lower. One thread is now ahead of the #100 C
+    (25 s) and near #102 without replay (19.2 s).
+  - Not ported: the structure-of-arrays layout, which the C only prefers on CPUs with an L2
+    of 1 MB or more (this machine's is 256 KB, where it picks the packed records we have).
+    Tests: `level` (hashes add and decode, keys from hashes, the box, the table), the
+    extraction round trip in 128 bits too, the existing comparisons and the stress test.
 - [ ] **9. Wrap up.**
   - [ ] Confirm with the PR author that the provenance of `refs_vex` allows shipping it as
     fixtures (5.2).
@@ -907,7 +960,7 @@ Outside the phases:
   `compute_c_2neg` on `main`, independently of this work (section 7). Fixed on this branch by
   phase 4b.
 
-Follow-ups after the main plan, not tracked here: GPU and the other C features (6.8).
+Follow-ups after the main plan: section 5.3, and GPU and the other C features (6.8).
 
 ### 5.1 Phase 7 in detail: cone computations without normaliz
 
@@ -1016,6 +1069,31 @@ Layers, from cheapest to most independent:
 6. *The C oracle*, until phase 9: development-time comparisons through `cgv/tools`, never in
    CI (it needs a C toolchain and normaliz). Same prime sequence, so residues can be compared
    one for one when narrowing a mismatch down.
+
+### 5.3 Follow-ups from PR #102
+
+Not scheduled; each can be done after the wrap-up.
+
+- [ ] **Curves of high $h^{1,1}$ on faces.** Express the curves in an LLL-reduced basis of the
+  lattice the candidates span when it has lower rank than $h^{1,1}$ (the C's `setup_lattice`:
+  the cones, the grading, the curve side of the charges and the lightcone inequalities move
+  to it, and the output goes back), so that a face of the Mori cone of rank 32–40 at
+  $h^{1,1} = 491$ fits the keys. The extraction's `rows` already takes $\alpha$ along other
+  rows than the coordinates. Then keys wider than 128 bits (a second `KeyLayout`, which the
+  tables and stages are already generic over) for what still does not fit. Today such an
+  input falls back to the reference, which cannot finish it. The capability gap that
+  matters most.
+- [ ] **Curve-class replay** (the C's `cb_*`): the curves of a layer with the same degree and
+  nonzero coordinates share one pattern of pairs, built by hashing for the first and
+  replayed by indexing for the others, with sums kept unreduced in blocks of 16 (which needs
+  a dot-product method on `Ring`, `BoundRing` keeping plain fused multiply-adds). About 10%
+  on one thread for the C here and mixed on 8, for up to a quarter more memory and a
+  budget, a cost model and a task order of its own. Measure again after the next item.
+- [ ] **64-bit keys everywhere** when the whole layout fits (h11_8 and h11_9 take 51 and 56
+  bits): a `PackedLayout` over `u64` would halve the keys of the series, the shards and the
+  candidates. Not in the C.
+- [ ] **Structure-of-arrays level tables** on CPUs with a large L2 (the C chooses at run
+  time); needs a machine with one to measure.
 
 ## 6. Decisions needed
 

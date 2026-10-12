@@ -27,6 +27,7 @@ pub mod extraction;
 pub mod field;
 pub mod instanton;
 pub mod key;
+pub mod level;
 pub mod lightcone;
 pub mod multicover;
 pub mod period;
@@ -666,6 +667,7 @@ fn run<T>(
 struct Prepared {
     pool: rayon::ThreadPool,
     max_deg: u32,
+    grading_vector: Vec<i32>,
     layout: PackedLayout,
     cands: Vec<(<PackedLayout as KeyLayout>::Key, u32)>,
     lightcone: Lightcone<<PackedLayout as KeyLayout>::Key>,
@@ -679,6 +681,7 @@ impl Prepared {
     fn run<'a>(&'a self, geometry: &'a Geometry, options: &'a Options) -> Run<'a, PackedLayout> {
         Run {
             layout: &self.layout,
+            grading_vector: &self.grading_vector,
             geometry,
             cands: &self.cands,
             max_deg: self.max_deg,
@@ -726,6 +729,7 @@ fn prepare(
     Ok(Prepared {
         pool,
         max_deg,
+        grading_vector: grading_vector.to_vec(),
         layout,
         cands,
         lightcone,
@@ -809,6 +813,7 @@ fn choose_lanes<L: KeyLayout>(run: &Run<'_, L>, options: &Options) -> Result<usi
 /// What the passes of one run share.
 struct Run<'a, L: KeyLayout> {
     layout: &'a L,
+    grading_vector: &'a [i32],
     geometry: &'a Geometry,
     cands: &'a [(L::Key, u32)],
     max_deg: u32,
@@ -909,6 +914,7 @@ fn pass<R: Ring, L: KeyLayout>(
 ) -> Result<SparsePoly<L::Key, R::Elem>, Error> {
     let Run {
         layout,
+        grading_vector,
         geometry,
         cands,
         max_deg,
@@ -928,7 +934,17 @@ fn pass<R: Ring, L: KeyLayout>(
         None => (&inst.alpha, None),
     };
     let coeffs = extraction::extract(
-        ring, layout, alpha, rows, &inst.inst, inv, max_deg, lightcone, tuning, source,
+        ring,
+        layout,
+        grading_vector,
+        alpha,
+        rows,
+        &inst.inst,
+        inv,
+        max_deg,
+        lightcone,
+        tuning,
+        source,
     )?;
     let mut gv = multicover::multicover(ring, layout, geometry.kind(), &coeffs, inv, max_deg)?;
     // The products of curves in the lightcones reach curves outside them, where the values

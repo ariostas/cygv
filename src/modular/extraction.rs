@@ -16,7 +16,9 @@
 //! $\deg(m)\, f_m = \sum_{u + v = m} \deg(u)\, L_u\, f_v$. The terms of $f$ are therefore
 //! final degree by degree, and those of each degree are kept in a table of their own
 //! ([`LevelTable`]), which stays small enough to be cached while the terms of lower degree
-//! are scattered into it.
+//! are scattered into it. The level tables key the terms by linear hashes of their offsets
+//! $m$ ([`level`](super::level)), so that the hash of $u + v$ is one addition, and only
+//! the terms emitted are decoded into curve classes.
 //!
 //! The curves of each degree are applied in parallel, and the terms they emit are subtracted
 //! from the series through shards with a lock each (see [`extract`]).
@@ -25,9 +27,10 @@
 //! implementations of it, such as a GPU one, can take its place (`PLAN.md`, section 4.1).
 
 use super::field::Ring;
-use super::key::{Key, KeyLayout};
+use super::key::{Key, KeyError, KeyLayout};
+use super::level::{level_box, LevelBox, LevelLayout, LevelTable, LevelWord, OffsetKeys};
 use super::lightcone::Lightcone;
-use super::table::{shard_of, DegreeHeap, LevelTable, SlotMap, SparsePoly};
+use super::table::{shard_of, DegreeHeap, SlotMap, SparsePoly};
 use super::Error;
 use rayon::prelude::*;
 use std::sync::Mutex;
@@ -40,6 +43,9 @@ const PREFETCH: usize = 4;
 
 /// The number of terms a worker buffers for a shard before it subtracts them.
 const FLUSH: usize = 1024;
+
+/// How many terms ahead the subtraction of a buffer prefetches the buckets of their keys.
+const FOLD_PREFETCH: usize = 8;
 
 /// What the curves pass on instead of their coefficients (see [`extract`]): given a curve
 /// and its degree, it writes the values over them.
@@ -67,9 +73,9 @@ impl Default for Tuning {
 }
 
 /// The nonzero terms $\deg(u)\, L_u$ of $L = C \cdot \alpha$ up to some degree, in order of
-/// degree, for the exponential of one curve.
-struct LTerms<K, E> {
-    keys: Vec<K>,
+/// degree, for the exponential of one curve, with the hashes of their offsets.
+struct LTerms<W, E> {
+    hashes: Vec<W>,
     vals: Vec<E>,
     /// The degrees present, each with the range of its terms.
     groups: Vec<(u32, usize, usize)>,
@@ -77,10 +83,10 @@ struct LTerms<K, E> {
     coords: Vec<(usize, E)>,
 }
 
-impl<K: Key, E: Copy + Default + PartialEq> LTerms<K, E> {
+impl<W: LevelWord, E: Copy + Default + PartialEq> LTerms<W, E> {
     fn new() -> Self {
         Self {
-            keys: Vec::new(),
+            hashes: Vec::new(),
             vals: Vec::new(),
             groups: Vec::new(),
             coords: Vec::new(),
@@ -88,12 +94,15 @@ impl<K: Key, E: Copy + Default + PartialEq> LTerms<K, E> {
     }
 
     /// Computes the terms of degree at most `top` for `curve`, with `ints` the images of the
-    /// integers up to `top`, and `alpha` along `rows` if given (see [`extract`]).
-    fn build<R: Ring<Elem = E>>(
+    /// integers up to `top`, `alpha` along `rows` if given (see [`extract`]), and the hashes
+    /// of the offsets of its terms in `hashes`.
+    #[allow(clippy::too_many_arguments)]
+    fn build<R: Ring<Elem = E>, K: Key>(
         &mut self,
         ring: &R,
         curve: &[i32],
         alpha: &SparsePoly<K, E>,
+        hashes: &[W],
         rows: Option<&[Vec<i32>]>,
         ints: &[E],
         top: u32,
@@ -115,10 +124,10 @@ impl<K: Key, E: Copy + Default + PartialEq> LTerms<K, E> {
                     .map(|(r, x)| (r, ring.int(x))),
             ),
         }
-        self.keys.clear();
+        self.hashes.clear();
         self.vals.clear();
         self.groups.clear();
-        for u in 0..alpha.len_upto(top) {
+        for (u, &hash) in hashes.iter().enumerate().take(alpha.len_upto(top)) {
             let al = alpha.values(u);
             let mut v = E::default();
             for &(a, c) in &self.coords {
@@ -132,30 +141,30 @@ impl<K: Key, E: Copy + Default + PartialEq> LTerms<K, E> {
                 Some(g) if g.0 == deg => g.2 += 1,
                 _ => self
                     .groups
-                    .push((deg, self.keys.len(), self.keys.len() + 1)),
+                    .push((deg, self.hashes.len(), self.hashes.len() + 1)),
             }
-            self.keys.push(alpha.keys()[u]);
+            self.hashes.push(hash);
             self.vals.push(ring.mul(v, ints[deg as usize]));
         }
     }
 
     /// Adds $\deg(u)\, L_u\, f_v$ to the entry of $u + v$ in `target` for every source
-    /// $(v, f_v)$ and every term $u$ of group `q`.
+    /// $(v, f_v)$ and every term $u$ of group `q`, the offsets given by their hashes.
     fn scatter<R: Ring<Elem = E>>(
         &self,
         ring: &R,
         q: usize,
-        sources: &[(K, E)],
-        target: &mut LevelTable<K, E>,
+        sources: &[(W, E)],
+        target: &mut LevelTable<W, E>,
     ) {
         let (_, j0, j1) = self.groups[q];
-        let (keys, vals) = (&self.keys[j0..j1], &self.vals[j0..j1]);
-        for &(kb, fb) in sources {
-            for (j, (&ku, &lu)) in keys.iter().zip(vals).enumerate() {
-                if let Some(&kp) = keys.get(j + PREFETCH) {
-                    target.prefetch(kb + kp);
+        let (hashes, vals) = (&self.hashes[j0..j1], &self.vals[j0..j1]);
+        for &(hb, fb) in sources {
+            for (j, (&hu, &lu)) in hashes.iter().zip(vals).enumerate() {
+                if let Some(&hp) = hashes.get(j + PREFETCH) {
+                    target.prefetch(hb.wadd(hp));
                 }
-                ring.fma(target.get_or_insert(kb + ku), lu, fb);
+                ring.fma(target.get_or_insert(hb.wadd(hu)), lu, fb);
             }
         }
     }
@@ -163,14 +172,14 @@ impl<K: Key, E: Copy + Default + PartialEq> LTerms<K, E> {
 
 /// Collects the final terms $f_m$ of degree `e` of an exponential from `level`, where they
 /// sit multiplied by `e` (unless `e` is zero), as the nonzero sources for the levels above,
-/// and calls `emit(m, f_m)` for each one of positive degree.
-fn finalize<R: Ring, K: Key>(
+/// and calls `emit(h, f_m)` for each one of positive degree, with `h` the hash of $m$.
+fn finalize<R: Ring, W: LevelWord>(
     ring: &R,
-    level: &LevelTable<K, R::Elem>,
+    level: &LevelTable<W, R::Elem>,
     e: u32,
     inv: &[R::Elem],
-    sources: &mut Vec<(K, R::Elem)>,
-    mut emit: impl FnMut(K, R::Elem),
+    sources: &mut Vec<(W, R::Elem)>,
+    mut emit: impl FnMut(W, R::Elem),
 ) {
     sources.clear();
     for (key, val) in level.iter() {
@@ -190,41 +199,42 @@ fn finalize<R: Ring, K: Key>(
 }
 
 /// The working space for the exponentials, kept from one curve to the next.
-struct ExpWorkspace<K, E> {
+struct ExpWorkspace<W, E> {
     /// The terms of each degree, from zero to the maximum degree.
-    levels: Vec<LevelTable<K, E>>,
-    l: LTerms<K, E>,
+    levels: Vec<LevelTable<W, E>>,
+    l: LTerms<W, E>,
     /// The nonzero terms of the current degree.
-    sources: Vec<(K, E)>,
+    sources: Vec<(W, E)>,
 }
 
-impl<K: Key, E: Copy + Default + PartialEq> ExpWorkspace<K, E> {
-    fn new(sentinel: K, max_deg: u32) -> Self {
+impl<W: LevelWord, E: Copy + Default + PartialEq> ExpWorkspace<W, E> {
+    fn new(marker: W, max_deg: u32) -> Self {
         Self {
-            levels: (0..=max_deg).map(|_| LevelTable::new(sentinel)).collect(),
+            levels: (0..=max_deg).map(|_| LevelTable::new(marker)).collect(),
             l: LTerms::new(),
             sources: Vec::new(),
         }
     }
 
-    /// Calls `emit(m, deg(m), f_m)` for every nonzero term of positive degree at most `top`
-    /// of $f = \exp(C \cdot \alpha)$, in order of degree.
+    /// Calls `emit(h, deg(m), f_m)` for every nonzero term of positive degree at most `top`
+    /// of $f = \exp(C \cdot \alpha)$, in order of degree, with `h` the hash of $m$.
     ///
     /// `ints` and `inv` hold the images of the integers and their inverses up to `top`.
     #[allow(clippy::too_many_arguments)]
-    fn exp<R: Ring<Elem = E>>(
+    fn exp<R: Ring<Elem = E>, K: Key>(
         &mut self,
         ring: &R,
         curve: &[i32],
         alpha: &SparsePoly<K, E>,
+        hashes: &[W],
         rows: Option<&[Vec<i32>]>,
         ints: &[E],
         inv: &[E],
         top: u32,
-        mut emit: impl FnMut(K, u32, E),
+        mut emit: impl FnMut(W, u32, E),
     ) {
-        self.l.build(ring, curve, alpha, rows, ints, top);
-        *self.levels[0].get_or_insert(K::default()) = ring.one();
+        self.l.build(ring, curve, alpha, hashes, rows, ints, top);
+        *self.levels[0].get_or_insert(W::default()) = ring.one();
         for e in 0..=top {
             let level = &mut self.levels[e as usize];
             if level.is_empty() {
@@ -256,10 +266,21 @@ struct Shard<K, E> {
 
 impl<K: Key, E: Copy + Default + PartialEq> Shard<K, E> {
     /// Subtracts the terms of `out` and empties it.
+    ///
+    /// The keys are hashed first, so that the bucket of each one can be prefetched a few
+    /// terms ahead of its insertion.
     fn fold<R: Ring<Elem = E>>(&mut self, ring: &R, out: &mut OutBuf<K, E>) {
         let width = self.map.width();
+        out.hashes.clear();
+        out.hashes.extend(out.keys.iter().map(|k| k.hash64()));
+        for &h in out.hashes.iter().take(FOLD_PREFETCH) {
+            self.map.prefetch(h);
+        }
         for (i, (&key, &deg)) in out.keys.iter().zip(&out.degs).enumerate() {
-            let (t, created) = self.map.insert(key, deg);
+            if let Some(&h) = out.hashes.get(i + FOLD_PREFETCH) {
+                self.map.prefetch(h);
+            }
+            let (t, created) = self.map.insert_hashed(key, out.hashes[i], deg);
             if created {
                 self.heap.push(deg, t);
             }
@@ -277,6 +298,8 @@ struct OutBuf<K, E> {
     keys: Vec<K>,
     degs: Vec<u32>,
     vals: Vec<E>,
+    /// Space for the hashes of the keys, when they are subtracted.
+    hashes: Vec<u64>,
 }
 
 impl<K, E> OutBuf<K, E> {
@@ -285,6 +308,7 @@ impl<K, E> OutBuf<K, E> {
             keys: Vec::new(),
             degs: Vec::new(),
             vals: Vec::new(),
+            hashes: Vec::new(),
         }
     }
 
@@ -317,9 +341,16 @@ fn emit<R: Ring, K: Key>(
     }
 }
 
+/// The result of an extraction.
+type Extracted<K, E> = Result<SparsePoly<K, E>, Error>;
+
+/// The workers of an extraction, one per thread, each behind a lock that only its thread
+/// takes.
+type Workers<W, K, E> = [Mutex<Worker<W, K, E>>];
+
 /// What a worker thread keeps from one curve to the next.
-struct Worker<K, E> {
-    ws: ExpWorkspace<K, E>,
+struct Worker<W, K, E> {
+    ws: ExpWorkspace<W, E>,
     curve: Vec<i32>,
     /// One buffer per shard.
     out: Vec<OutBuf<K, E>>,
@@ -327,24 +358,29 @@ struct Worker<K, E> {
 
 /// A curve whose exponential is built together with those of the other curves of its layer,
 /// one degree at a time, so that the scatters into the levels of every curve run in parallel.
-struct SyncCurve<K, E> {
+struct SyncCurve<W, K, E> {
     key: K,
     deg: u32,
     /// The highest degree of its exponential.
     top: u32,
-    l: LTerms<K, E>,
+    l: LTerms<W, E>,
     /// The terms of each degree up to `top`, each locked by the one scatter that writes it.
-    levels: Vec<Mutex<LevelTable<K, E>>>,
-    sources: Vec<(K, E)>,
+    levels: Vec<Mutex<LevelTable<W, E>>>,
+    sources: Vec<(W, E)>,
     /// One buffer per shard.
     out: Vec<OutBuf<K, E>>,
 }
 
 /// What the curves of a layer share while they are applied.
-struct LayerCtx<'a, R: Ring, L: KeyLayout> {
+struct LayerCtx<'a, R: Ring, L: KeyLayout, W> {
     ring: &'a R,
     layout: &'a L,
+    level: &'a LevelLayout<W>,
+    /// The keys of the offsets, from their hashes.
+    keys: &'a OffsetKeys<W, L::Key>,
     alpha: &'a SparsePoly<L::Key, R::Elem>,
+    /// The hashes of the offsets of the terms of `alpha`.
+    hashes: &'a [W],
     rows: Option<&'a [Vec<i32>]>,
     ints: &'a [R::Elem],
     inv: &'a [R::Elem],
@@ -356,13 +392,13 @@ struct LayerCtx<'a, R: Ring, L: KeyLayout> {
     width: usize,
 }
 
-impl<R: Ring, L: KeyLayout> LayerCtx<'_, R, L> {
+impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
     fn n_c(&self, i: usize) -> &[R::Elem] {
         &self.vals[i * self.width..(i + 1) * self.width]
     }
 
     /// Applies each curve on one thread, with the workers indexed by the threads.
-    fn apply_by_curve(&self, workers: &[Mutex<Worker<L::Key, R::Elem>>]) {
+    fn apply_by_curve(&self, workers: &Workers<W, L::Key, R::Elem>) {
         let apply = |i: usize| {
             let (kc, dc) = self.curves[i];
             let n_c = self.n_c(i);
@@ -374,11 +410,15 @@ impl<R: Ring, L: KeyLayout> LayerCtx<'_, R, L> {
                 self.ring,
                 curve,
                 self.alpha,
+                self.hashes,
                 self.rows,
                 self.ints,
                 self.inv,
                 self.max_deg - dc,
-                |m, e, f| emit(self.ring, self.shards, out, kc + m, dc + e, n_c, f),
+                |h, e, f| {
+                    let m = self.keys.key(h, e);
+                    emit(self.ring, self.shards, out, kc + m, dc + e, n_c, f)
+                },
             );
         };
         if workers.len() == 1 {
@@ -391,10 +431,10 @@ impl<R: Ring, L: KeyLayout> LayerCtx<'_, R, L> {
     /// Applies the curves level-synchronously: for each degree, every curve finalizes its
     /// terms of that degree, and then the scatters of every curve into each of its higher
     /// levels run as separate tasks, the largest first.
-    fn apply_by_level(&self) -> Vec<SyncCurve<L::Key, R::Elem>> {
+    fn apply_by_level(&self) -> Vec<SyncCurve<W, L::Key, R::Elem>> {
         let ring = self.ring;
-        let sentinel = self.layout.sentinel();
-        let mut curves: Vec<SyncCurve<L::Key, R::Elem>> = self
+        let marker = self.level.marker();
+        let mut curves: Vec<SyncCurve<W, L::Key, R::Elem>> = self
             .curves
             .par_iter()
             .map(|&(key, deg)| {
@@ -402,11 +442,19 @@ impl<R: Ring, L: KeyLayout> LayerCtx<'_, R, L> {
                 let mut curve = vec![0; self.layout.dim()];
                 self.layout.unpack(key, &mut curve);
                 let mut l = LTerms::new();
-                l.build(ring, &curve, self.alpha, self.rows, self.ints, top);
+                l.build(
+                    ring,
+                    &curve,
+                    self.alpha,
+                    self.hashes,
+                    self.rows,
+                    self.ints,
+                    top,
+                );
                 let levels: Vec<_> = (0..=top)
-                    .map(|_| Mutex::new(LevelTable::new(sentinel)))
+                    .map(|_| Mutex::new(LevelTable::new(marker)))
                     .collect();
-                *levels[0].lock().unwrap().get_or_insert(L::Key::default()) = ring.one();
+                *levels[0].lock().unwrap().get_or_insert(W::default()) = ring.one();
                 SyncCurve {
                     key,
                     deg,
@@ -433,11 +481,12 @@ impl<R: Ring, L: KeyLayout> LayerCtx<'_, R, L> {
                 let n_c = self.n_c(i);
                 let (kc, dc) = (c.key, c.deg);
                 let out = &mut c.out;
-                finalize(ring, level, e, self.inv, &mut c.sources, |m, f| {
+                finalize(ring, level, e, self.inv, &mut c.sources, |h, f| {
+                    let m = self.keys.key(h, e);
                     emit(ring, self.shards, out, kc + m, dc + e, n_c, f)
                 });
                 // This level is done.
-                *level = LevelTable::new(sentinel);
+                *level = LevelTable::new(marker);
             });
             tasks.clear();
             for (i, c) in curves.iter().enumerate() {
@@ -464,8 +513,8 @@ impl<R: Ring, L: KeyLayout> LayerCtx<'_, R, L> {
 }
 
 /// Extracts the coefficients $n_C$ of the instanton series `inst` in the basis of the
-/// $q^C$, at every curve class of degree at most `max_deg`, as a series with as many values
-/// per term as `inst`.
+/// $q^C$, at every curve class of degree at most `max_deg` under `grading`, as a series with
+/// as many values per term as `inst`.
 ///
 /// `alpha` holds the $\alpha_a$, one value per coordinate of `layout`, and must have no
 /// constant term. With `rows`, it instead holds $\beta$ along those rows $M_r$, one value per
@@ -490,10 +539,14 @@ impl<R: Ring, L: KeyLayout> LayerCtx<'_, R, L> {
 /// threads emit can be subtracted under one lock per shard: each thread buffers them per
 /// shard and subtracts a buffer when it is full, and the shards take the remaining buffers in
 /// parallel at the end of the layer.
+///
+/// The level tables pack the offsets into 64 bits when the box of [`level_box`] fits, and
+/// into 128 bits otherwise, which always fits when the curve classes fit `layout`.
 #[allow(clippy::too_many_arguments)]
 pub fn extract<R: Ring, L: KeyLayout>(
     ring: &R,
     layout: &L,
+    grading: &[i32],
     alpha: &SparsePoly<L::Key, R::Elem>,
     rows: Option<&[Vec<i32>]>,
     inst: &SparsePoly<L::Key, R::Elem>,
@@ -502,10 +555,11 @@ pub fn extract<R: Ring, L: KeyLayout>(
     lightcone: &Lightcone<L::Key>,
     tuning: &Tuning,
     source: Option<Source<'_, R::Elem>>,
-) -> Result<SparsePoly<L::Key, R::Elem>, Error> {
+) -> Extracted<L::Key, R::Elem> {
     let h11 = layout.dim();
     let n_alpha = rows.map_or(h11, |r| r.len());
     if alpha.width() != n_alpha
+        || grading.len() != h11
         || rows.is_some_and(|r| r.iter().any(|row| row.len() != h11))
         || inv.len() <= max_deg as usize
     {
@@ -515,6 +569,105 @@ pub fn extract<R: Ring, L: KeyLayout>(
         alpha.degs().first().is_none_or(|&d| d > 0),
         "alpha has a constant term"
     );
+    extract_in::<R, L, u64>(
+        ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
+    )
+    .or_else(|| {
+        extract_in::<R, L, u128>(
+            ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
+        )
+    })
+    .unwrap_or_else(|| {
+        let n_terms = alpha.len_upto(max_deg);
+        Err(Error::Key(KeyError::TooWide {
+            bits: offset_box(layout, grading, alpha, n_terms, max_deg)
+                .1
+                .bits(),
+            max_bits: u128::BITS - 1,
+        }))
+    })
+}
+
+/// The coordinates of the terms of `alpha` up to the `n_terms`-th, one after the other, and
+/// the box of their sums up to `max_deg`.
+fn offset_box<L: KeyLayout, E: Copy + Default + PartialEq>(
+    layout: &L,
+    grading: &[i32],
+    alpha: &SparsePoly<L::Key, E>,
+    n_terms: usize,
+    max_deg: u32,
+) -> (Vec<i32>, LevelBox) {
+    let h11 = layout.dim();
+    let mut terms = vec![0; n_terms * h11];
+    for (u, t) in terms.chunks_exact_mut(h11.max(1)).enumerate() {
+        layout.unpack(alpha.keys()[u], t);
+    }
+    let level_box = level_box(
+        (0..n_terms).map(|u| (&terms[u * h11..(u + 1) * h11], alpha.degs()[u])),
+        grading,
+        max_deg,
+    );
+    (terms, level_box)
+}
+
+/// [`extract`] with the offsets packed into `W`, or `None` if they do not fit.
+#[allow(clippy::too_many_arguments)]
+fn extract_in<R: Ring, L: KeyLayout, W: LevelWord>(
+    ring: &R,
+    layout: &L,
+    grading: &[i32],
+    alpha: &SparsePoly<L::Key, R::Elem>,
+    rows: Option<&[Vec<i32>]>,
+    inst: &SparsePoly<L::Key, R::Elem>,
+    inv: &[R::Elem],
+    max_deg: u32,
+    lightcone: &Lightcone<L::Key>,
+    tuning: &Tuning,
+    source: Option<Source<'_, R::Elem>>,
+) -> Option<Extracted<L::Key, R::Elem>> {
+    let h11 = layout.dim();
+    let n_terms = alpha.len_upto(max_deg);
+    let (terms, level_box) = offset_box(layout, grading, alpha, n_terms, max_deg);
+    let level = LevelLayout::<W>::new(&level_box, grading)?;
+    let hashes: Vec<W> = terms
+        .chunks_exact(h11.max(1))
+        .take(n_terms)
+        .map(|t| level.hash(t))
+        .collect();
+    // A coordinate that is always zero has no room for a one, and needs no unit.
+    let units: Vec<L::Key> = (0..h11)
+        .map(|t| {
+            let mut e = vec![0; h11];
+            e[t] = 1;
+            layout.try_pack(&e).unwrap_or_default()
+        })
+        .collect();
+    let keys = level.offset_keys(&units);
+    Some(extract_with(
+        ring, layout, &level, &keys, &hashes, alpha, rows, inst, inv, max_deg, lightcone, tuning,
+        source,
+    ))
+}
+
+/// [`extract`] with the level tables of `level`, and `hashes` the hashes of the offsets of
+/// the terms of `alpha` up to `max_deg`.
+#[allow(clippy::too_many_arguments)]
+fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
+    ring: &R,
+    layout: &L,
+    level: &LevelLayout<W>,
+    keys: &OffsetKeys<W, L::Key>,
+    hashes: &[W],
+    alpha: &SparsePoly<L::Key, R::Elem>,
+    rows: Option<&[Vec<i32>]>,
+    inst: &SparsePoly<L::Key, R::Elem>,
+    inv: &[R::Elem],
+    max_deg: u32,
+    lightcone: &Lightcone<L::Key>,
+    tuning: &Tuning,
+    source: Option<Source<'_, R::Elem>>,
+) -> Extracted<L::Key, R::Elem> {
+    let h11 = layout.dim();
     let width = inst.width();
     let ints: Vec<R::Elem> = (0..=max_deg).map(|n| ring.int(n as i64)).collect();
     let threads = rayon::current_num_threads();
@@ -535,10 +688,10 @@ pub fn extract<R: Ring, L: KeyLayout>(
         shard.map.values_mut(s).copy_from_slice(inst.values(i));
         shard.heap.push(inst.degs()[i], s);
     }
-    let mut workers: Vec<Mutex<Worker<L::Key, R::Elem>>> = (0..threads)
+    let mut workers: Box<Workers<W, L::Key, R::Elem>> = (0..threads)
         .map(|_| {
             Mutex::new(Worker {
-                ws: ExpWorkspace::new(layout.sentinel(), max_deg),
+                ws: ExpWorkspace::new(level.marker(), max_deg),
                 curve: vec![0; h11],
                 out: (0..n_shards).map(|_| OutBuf::new()).collect(),
             })
@@ -592,7 +745,10 @@ pub fn extract<R: Ring, L: KeyLayout>(
         let ctx = LayerCtx {
             ring,
             layout,
+            level,
+            keys,
             alpha,
+            hashes,
             rows,
             ints: &ints,
             inv,
@@ -749,6 +905,7 @@ mod tests {
             let got = extract(
                 &lf,
                 &layout,
+                &[1, 1],
                 &alpha,
                 None,
                 &inst,
@@ -766,12 +923,34 @@ mod tests {
                 n.iter().map(|(c, v)| (layout.pack(c), v.clone())).collect();
             assert_eq!(got, expected, "width {width}");
 
+            // The same with the offsets in 128 bits.
+            let wide = extract_in::<_, _, u128>(
+                &lf,
+                &layout,
+                &[1, 1],
+                &alpha,
+                None,
+                &inst,
+                &inv,
+                max_deg,
+                &Lightcone::All,
+                &Tuning::default(),
+                None,
+            )
+            .unwrap()
+            .unwrap();
+            let wide: HashMap<PackedKey, Vec<E>> = (0..wide.len())
+                .map(|i| (wide.keys()[i], wide.values(i).to_vec()))
+                .collect();
+            assert_eq!(wide, expected, "width {width}, 128 bits");
+
             // A source that gives each curve its own coefficient changes nothing, and one that
             // gives zero leaves the series as it was.
             let with = |source: Source<'_, E>| {
                 let got = extract(
                     &lf,
                     &layout,
+                    &[1, 1],
                     &alpha,
                     None,
                     &inst,
@@ -813,6 +992,7 @@ mod tests {
                 let got = extract(
                     &lf,
                     &layout,
+                    &[1, 1],
                     a,
                     r,
                     &inst,
@@ -846,6 +1026,7 @@ mod tests {
             extract(
                 &lf,
                 &layout,
+                &[1, 1],
                 &empty,
                 None,
                 &inst,
@@ -861,6 +1042,7 @@ mod tests {
             extract(
                 &lf,
                 &layout,
+                &[1, 1],
                 &SparsePoly::new(3),
                 None,
                 &inst,
@@ -875,6 +1057,7 @@ mod tests {
         assert!(extract(
             &lf,
             &layout,
+            &[1, 1],
             &empty,
             None,
             &inst,

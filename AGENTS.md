@@ -134,8 +134,13 @@ primes as a context), `bound` (`BoundRing`, the other `Ring`: upward-rounded non
 bounds for the certifier of `PLAN.md` phase 8, an `f64` mantissa with an `i64` exponent moved
 up by `next_up` after each operation, subtraction being addition), `key` (curve classes packed
 into fixed-size keys that add like the classes, with a layout sized per run from coordinate
-bounds) and `table` (open-addressing tables and sparse series over those keys, each entry
-holding a run-time number of values). A *pass* (`pass`, generic over the `Ring`) runs the
+bounds), `table` (open-addressing tables and sparse series over those keys, each entry
+holding a run-time number of values; the index of a `SlotMap` has 8-byte buckets of a tag
+and a slot) and `level` (the extraction's level tables, `PLAN.md` phase 8b, after the C of
+PR #102: they key the offsets of an exponential by the linear hash $H = \varphi(m) M$, with
+$\varphi$ packing a box of the offsets, less the coordinate the degree fixes, into a `u64`
+when it fits and a `u128` otherwise, so that a scatter's target is one addition, and
+`OffsetKeys` turns a hash back into a key only for the emitted terms). A *pass* (`pass`, generic over the `Ring`) runs the
 stages modulo `NL` primes: `candidates` (from a `CandidateSource`: either
 the sums of the Hilbert basis elements of each $K_T$ of the cone data, skipping cones contained
 in another and two-divisor cones whose form $Q_s K^{(k)} Q_u$ vanishes, as the C does, or the
@@ -151,7 +156,9 @@ a curve on a stratum adds $U_0\,(w \cdot d_S)$, the reference's $c_0^{-1}$ `vex[
 contracted with the grading; the strata reach `Geometry` through `with_strata`), `instanton` (sparse
 products and reciprocal, $\alpha$, and the instanton series $I$), `extraction` (the
 coefficients of $I$ in the basis $z^C \exp(C\cdot\alpha)$, curve by curve in order of degree,
-each exponential built by the Euler recurrence in per-degree tables) and `multicover` (the GV
+each exponential built by the Euler recurrence in per-degree level tables, the emitted terms
+subtracted through shards whose buffers are hashed first and prefetched while they are
+folded in) and `multicover` (the GV
 invariants from those, by gcd of the coordinates; exponent 3 and a division by the degree for
 threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats passes with the
 next primes until `crt::Residues` gives a stable lift (the lift from all but the last
