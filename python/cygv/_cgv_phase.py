@@ -231,7 +231,8 @@ def _primitive(v):
     return [x // g for x in iv]
 
 
-def prepare(cones, q, kappa, mori_rays=None, grading=None, lightcone=None, check_kappa=True):
+def prepare(cones, q, kappa, mori_rays=None, grading=None, lightcone=None, check_kappa=False):
+    """check_kappa: optional sanity check of kappa against the fan (recomputed in plain Python; slow at large h11)."""
     fan = Fan(cones, q)
     kappa = {tuple(sorted(int(x) for x in k[:3])): int(k[3]) for k in kappa} if not isinstance(kappa, dict) else \
             {tuple(sorted(int(x) for x in k)): int(v) for k, v in kappa.items()}
@@ -284,7 +285,7 @@ def run(d, max_deg, threads=None, binary=None, extra=()):
 
 
 def compute_gv(cones, q, kappa, max_deg=None, mori_rays=None, grading=None, lightcone=None, threads=None,
-               check_kappa=True, binary=None, extra=()):
+               check_kappa=False, binary=None, extra=()):
     d = prepare(cones, q, kappa, mori_rays, grading, lightcone, check_kappa)
     return run(d, max_deg, threads, binary=binary, extra=extra)[0]
 
