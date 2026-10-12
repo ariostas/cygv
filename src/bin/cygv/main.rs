@@ -75,8 +75,8 @@ pipeline can run.
 min_points cannot be combined with max_deg or target_points. max_deg can be
 combined with target_points, and then lowers their largest degree, which is the
 maximum degree otherwise. When none of them is given, the generators are taken
-to be the complete list of curve classes to use, which must then include the
-origin.";
+to be the complete list of curve classes to use (the origin is added if it is
+missing).";
 
 /// Compute GV and GW invariants of the CY manifolds specified in the input.
 #[derive(Parser, Debug)]

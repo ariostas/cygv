@@ -423,13 +423,28 @@ impl Input {
     /// curve classes of equal degree are computed is not deterministic.
     pub fn compute(&self) -> Result<Vec<InvariantResult>, ComputeError> {
         let mut results = self.compute_unsorted()?;
-        results.sort_unstable_by(|a, b| {
-            let (curve_a, curve_b) = (&a.0 .0, &b.0 .0);
-            self.degree(curve_a)
-                .cmp(&self.degree(curve_b))
-                .then_with(|| curve_a.as_slice().cmp(curve_b.as_slice()))
-                .then_with(|| a.0 .1.cmp(&b.0 .1))
+        // The degrees are computed once rather than at every comparison, and the results are
+        // permuted in place.
+        let degrees: Vec<i64> = results.iter().map(|r| self.degree(&r.0 .0)).collect();
+        let mut order: Vec<usize> = (0..results.len()).collect();
+        order.sort_unstable_by(|&a, &b| {
+            let (ra, rb) = (&results[a], &results[b]);
+            degrees[a]
+                .cmp(&degrees[b])
+                .then_with(|| ra.0 .0.as_slice().cmp(rb.0 .0.as_slice()))
+                .then_with(|| ra.0 .1.cmp(&rb.0 .1))
         });
+        // Position i takes the result at order[i], following each cycle of the permutation.
+        for start in 0..order.len() {
+            let mut i = start;
+            while order[i] != start {
+                let j = order[i];
+                results.swap(i, j);
+                order[i] = i;
+                i = j;
+            }
+            order[i] = i;
+        }
         Ok(results)
     }
 

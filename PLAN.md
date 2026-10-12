@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d, 8, 8b, 8c done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d, 8, 8b, 8c, 8d done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": phase 5b replaced `rug` with `malachite` everywhere (6.10). Branch
 `gv-modular-rust` is PR #94 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main`
@@ -982,6 +982,32 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     YAML input and Python; `h11_9_plike` against the reference; the 128-bit level tables
     forced in `test_threads`; the bounds identical at 1, 2, 3 and 8 threads in both
     extraction modes.
+- [x] **8d. Profiling against the C of #102** (with `perf`, on the 4-core Haswell of the development machine;
+  only changes that should help on any processor):
+  - Counters, `h11_8` at degree 20 on one thread: the C ran 68G instructions at IPC 1.15,
+    ours 123G at 1.71, with fewer cache misses, so the gap was instructions, not memory.
+    `LevelTable::get_or_insert` was not inlined into the scatter (20% of the time on its
+    own): the lookup is now inlined and the insertion, which allocates and grows, is a cold
+    function, as in the C (`lt_find_h` off the hot path of `scatter_ks`). 123G → 110G
+    instructions, 23.7 → 19.8 s, the same as the C that day.
+  - At 8 threads both spend 1.87× the CPU time of one thread, but the C kept 5.6 cores busy
+    on average and we 4.8: the layers of the extraction run at 7.8 busy threads except the
+    first three (few large curves, below `sync_min_terms`; lowering it changed nothing
+    measurable), and about 0.7 s after the extraction ran on one thread. Of that, the CRT
+    lift and the stability check now run in parallel, and the CLI's sort computes each
+    degree once instead of at every comparison (0.26 → 0.12 s), and permutes in place.
+    `shard_of` scales by a multiplication instead of a 64-bit division.
+  - Tried and dropped: shifting the digits into the key in `OffsetKeys::key` instead of
+    multiplying (a variable 128-bit shift costs as much), and `-C target-cpu=native` (the C
+    builds with `-march=native`; a few percent at most).
+  - Result (best of two, identical outputs, the C / before / after): `h11_8` at 20 one
+    thread 17.0 / 20.7 / 18.1 s, 8 threads 5.7 / 7.3 / 6.2 s; `h11_9` 3.5 / 4.4 / 3.8 s;
+    `h11_11` one thread 11.4 / 14.9 / 13.3 s, 8 threads 4.6 / 6.0 / 5.5 s; `h11_8` at 22
+    24.4 / 29.2 / 27.5 s. Timings drift by 10–15% on this laptop processor, so instruction
+    counts were the guide. What is left is mostly the curve-class replay of 5.3 (40% of the
+    C's instructions run in `cb_run`, and its scatter and replay together take 50G against
+    our scatter's 58G) and our per-curve finalize and emit (26G against the C's 7G in
+    `apply_curve`, mostly decoding hashes into 128-bit keys).
 - [ ] **9. Wrap up.**
   - [ ] Confirm with the PR author that the provenance of `refs_vex` allows shipping it as
     fixtures (5.2).
@@ -1132,7 +1158,16 @@ Not scheduled; each can be done after the wrap-up. First those from PR #102:
   rows than the coordinates. Then keys wider than 128 bits (a second `KeyLayout`, which the
   tables and stages are already generic over) for what still does not fit. Today such an
   input falls back to the reference, which cannot finish it. The capability gap that
-  matters most.
+  matters most. It also needs fewer cones: `cone::cone_data` gives a $K_T$ for every $T$ of
+  one or two divisors, about 123k at $h^{1,1} = 491$, and the candidates' containment skip
+  is quadratic in their number. #102's `ed93fb4` (2026-10-12) puts only the divisors
+  negative on some extreme ray in $T$ ($K_T = K_{T \cap N}$ otherwise, as cutting by the
+  others changes nothing), 123 cones on a 12-dimensional face there; in the tree that means
+  never leaving out (or cutting by) a row nonnegative on the Mori cone's basis, emitting one
+  cone when no row is negative, and keeping a stratum's label when its other divisors are
+  never negative, so that the vanishing-form skip of the pair does not drop it. On the bench
+  models it would save nothing measurable (13 of 15 divisors are negative somewhere on
+  `h11_11`; `cone_data` takes under 0.3 s).
 - [ ] **Curve-class replay** (the C's `cb_*`): the curves of a layer with the same degree and
   nonzero coordinates share one pattern of pairs, built by hashing for the first and
   replayed by indexing for the others, with sums kept unreduced in blocks of 16 (which needs
@@ -1144,6 +1179,13 @@ Not scheduled; each can be done after the wrap-up. First those from PR #102:
   candidates. Not in the C.
 - [ ] **Structure-of-arrays level tables** on CPUs with a large L2 (the C chooses at run
   time); needs a machine with one to measure.
+
+- [ ] **A default grading vector without a fan**, as #102's `2f60687` does without CYTools:
+  the primitive sum of the Mori cone's facet normals (from the cone data or
+  `cone::facets` of the generators), which is positive on the cone because it is pointed.
+  `Fan::mori_cone` already uses that rule; without a fan an empty grading vector is
+  `ComputeError::MissingGradingVector` today, although the Python wrapper accepts `None`
+  with cone data.
 
 Other follow-ups, not from #102:
 

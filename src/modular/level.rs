@@ -422,28 +422,49 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
     }
 
     /// The value of hash `h`, inserted as zero if it has no entry.
-    #[inline]
+    ///
+    /// The lookup is inlined into the scatter, and the insertion, much rarer, is not.
+    #[inline(always)]
     pub fn get_or_insert(&mut self, h: W) -> &mut V {
         debug_assert!(h != self.marker, "the marker was inserted");
         if self.entries.is_empty() {
-            self.entries = vec![(W::default(), V::default()); LEVEL_MIN_CAPACITY];
-            self.log2 = LEVEL_MIN_CAPACITY.trailing_zeros();
+            return self.insert(h, None);
         }
-        let i = match self.probe(h) {
-            Ok(i) => i,
-            Err(i) => {
-                let i = if 4 * (self.used.len() + 1) > 3 * self.entries.len() {
-                    self.grow();
-                    self.probe(h).unwrap_err()
-                } else {
-                    i
-                };
-                self.entries[i] = (h.xor(self.marker), V::default());
-                self.used.push(i as u32);
-                i
+        let x = h.xor(self.marker);
+        let mask = self.entries.len() - 1;
+        let mut i = h.top(self.log2);
+        loop {
+            let k = self.entries[i].0;
+            if k == x {
+                return &mut self.entries[i].1;
             }
+            if k == W::default() {
+                return self.insert(h, Some(i));
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    /// Inserts hash `h` as zero at the empty entry `at` where its probe ended, or allocates
+    /// the table first if there is none, growing it if it is too full.
+    #[cold]
+    #[inline(never)]
+    fn insert(&mut self, h: W, at: Option<usize>) -> &mut V {
+        let at = match at {
+            None => {
+                self.entries = vec![(W::default(), V::default()); LEVEL_MIN_CAPACITY];
+                self.log2 = LEVEL_MIN_CAPACITY.trailing_zeros();
+                self.probe(h).unwrap_err()
+            }
+            Some(_) if 4 * (self.used.len() + 1) > 3 * self.entries.len() => {
+                self.grow();
+                self.probe(h).unwrap_err()
+            }
+            Some(i) => i,
         };
-        &mut self.entries[i].1
+        self.entries[at] = (h.xor(self.marker), V::default());
+        self.used.push(at as u32);
+        &mut self.entries[at].1
     }
 
     /// Doubles the capacity.

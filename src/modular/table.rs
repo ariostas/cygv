@@ -427,12 +427,13 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
 }
 
 /// The shard of a key among `n_shards`, from the high bits of its hash, since tables index by
-/// the low ones. The tags of a [`SlotMap`] overlap these bits, so with a power of two of
+/// the low ones; at most $2^{32}$ shards. The tags of a [`SlotMap`] overlap these bits, so with a power of two of
 /// shards a few bits of the tags are the same throughout a shard, which only makes their
 /// collisions a little more likely.
 #[inline]
 pub fn shard_of<K: Key>(key: K, n_shards: usize) -> usize {
-    ((key.hash64() >> 40) % n_shards as u64) as usize
+    // The bits from 32 on, scaled to the shards by a multiplication rather than a division.
+    (((key.hash64() >> 32) * n_shards as u64) >> 32) as usize
 }
 
 /// A [`SlotMap`] split into shards by key, each behind its own lock, which several threads

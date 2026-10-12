@@ -19,6 +19,7 @@ use super::field::{LaneField, Lanes};
 use super::key::Key;
 use super::table::{SlotMap, SparsePoly};
 use malachite::Integer;
+use rayon::prelude::*;
 
 /// $a b \bmod p$
 #[inline]
@@ -196,34 +197,44 @@ impl<K: Key> Residues<K> {
             return false;
         }
         let lift = Lift::new(&self.primes);
-        let mut digits = vec![0; n - check];
-        (0..self.curves.len() * self.width).all(|i| {
-            lift.digits(|j| self.columns[j][i], &mut digits);
-            (n - check..n).all(|j| lift.residue(&digits, self.primes[j]) == self.columns[j][i])
-        })
+        (0..self.curves.len() * self.width)
+            .into_par_iter()
+            .map_init(
+                || vec![0; n - check],
+                |digits, i| {
+                    lift.digits(|j| self.columns[j][i], digits);
+                    (n - check..n)
+                        .all(|j| lift.residue(digits, self.primes[j]) == self.columns[j][i])
+                },
+            )
+            .all(|agrees| agrees)
     }
 
     /// The lifts from all primes, as (curve, degree, `width` integers) in increasing order
     /// of degree and then key, leaving out the curves where all of them are zero.
     pub fn lift(&self) -> Vec<(K, u32, Vec<Integer>)> {
         let lift = Lift::new(&self.primes);
-        let mut digits = vec![0; self.primes.len()];
         let mut order: Vec<u32> = (0..self.curves.len() as u32).collect();
-        order.sort_unstable_by_key(|&s| (self.curves.deg(s), self.curves.key(s)));
-        order
-            .into_iter()
-            .filter_map(|s| {
-                let at = s as usize * self.width;
-                let values: Vec<Integer> = (at..at + self.width)
-                    .map(|i| {
-                        lift.digits(|j| self.columns[j][i], &mut digits);
-                        lift.integer(&digits)
-                    })
-                    .collect();
-                (values.iter().any(|v| *v != 0))
-                    .then(|| (self.curves.key(s), self.curves.deg(s), values))
-            })
-            .collect()
+        order.par_sort_unstable_by_key(|&s| (self.curves.deg(s), self.curves.key(s)));
+        // Collected in place, one entry per curve, and then filtered in place.
+        let lifted: Vec<Option<(K, u32, Vec<Integer>)>> = order
+            .into_par_iter()
+            .map_init(
+                || vec![0; self.primes.len()],
+                |digits, s| {
+                    let at = s as usize * self.width;
+                    let values: Vec<Integer> = (at..at + self.width)
+                        .map(|i| {
+                            lift.digits(|j| self.columns[j][i], digits);
+                            lift.integer(digits)
+                        })
+                        .collect();
+                    (values.iter().any(|v| *v != 0))
+                        .then(|| (self.curves.key(s), self.curves.deg(s), values))
+                },
+            )
+            .collect();
+        lifted.into_iter().flatten().collect()
     }
 }
 
