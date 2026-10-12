@@ -234,7 +234,9 @@ def _cgv_fan_gvs(
             ],
         )
     except FileNotFoundError as e:
-        msg = "compute_gv_fan needs normaliz (e.g. conda install -c conda-forge normaliz)"
+        msg = (
+            "compute_gv_fan needs normaliz (e.g. conda install -c conda-forge normaliz)"
+        )
         raise RuntimeError(msg) from e
     gpu = _cgv_gpu_executable()
     gpu_bin, hip = gpu if gpu is not None else (None, False)
