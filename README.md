@@ -80,15 +80,16 @@ need the nearest supported architecture when building and an override when runni
 RX 6700 XT (gfx1031): `CGV_HIP_ARCH=gfx1030` when installing, `HSA_OVERRIDE_GFX_VERSION=10.3.0`
 when running.
 
-#### Any phase, including vex fans
+#### Any fan, including vex fans
 
-`compute_gv_phase(cones, q, intnums, max_deg)` (and `compute_gw_phase`) computes the invariants in a given phase of the
-ambient toric variety, given its fan (maximal cones as column indices of `q`): an FRST or a vex fan, where curves of
+`compute_gv_fan(cones, q, intnums, max_deg)` (and `compute_gw_fan`) computes the invariants for a given fan of the
+ambient toric variety (maximal cones as column indices of `q`): an FRST or a vex fan, where curves of
 negative anticanonical degree exist and are handled with a pole-free prescription. Optional: `mori_rays` (vectors
 spanning the Mori cone; default its wall curves), `grading_vector`, `device` as above, and `lightcone`: curve classes
 whose backward lightcones alone are computed (the classes C with p - C in the Mori cone, exactly those feeding into p;
 `max_deg` is then optional). It needs
-[normaliz](https://github.com/Normaliz/Normaliz) and uses cgv; see `cgv/README.md`, "Any phase".
+[normaliz](https://github.com/Normaliz/Normaliz) and uses cgv; see `cgv/README.md`, "Any fan". (`compute_gv_phase` and `compute_gw_phase` are deprecated
+aliases.)
 
 ## Command line interface
 

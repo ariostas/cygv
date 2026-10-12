@@ -134,26 +134,21 @@ def cone_data(d):
     if os.path.exists(path):
         with open(path) as f:
             return json.load(f)
-    t0 = time.time()
     ext, hyp, eq = _cone(d)
     facets, rays = np.vstack([hyp, eq, -eq]), ext.tolist()
     neg = [r for r in range(ndiv) if (ext @ Q[r] < 0).any()]
     nset = set(neg)
-    calls = 1
     L = None
     if len(eq):   # a face (lower dimension): work in a basis L of the lattice it spans (much faster normaliz runs)
         hb_cone = _nz(n, {"cone": ext.tolist()}, hilbert_basis=True)[0]
-        calls += 1
         L, piv = _lattice_basis(hb_cone.tolist())  # the Hilbert basis generates span cap Z^n
         Q = np.array([[sum(int(a) * int(b) for a, b in zip(q, l)) for l in L] for q in Q.tolist()], dtype=np.int64)
         ext = np.array([_coords(L, piv, x) for x in ext.tolist()], dtype=np.int64)
         n = len(L)
         _, _, hyp, eq = _nz(n, {"cone": ext.tolist()})
-        calls += 1
     if not neg:   # nothing is ever negative: the lattice points of the cone itself
         B = _nz(n, {"inequalities": hyp.tolist(), "equations": eq.tolist()}, hilbert_basis=True)[0]
         groups = {(): ((0,), B)}
-        calls += 1
     else:
         hb = {}       # E = T cap neg -> (Hilbert basis of K_E, its negative set M)
         groups = {}   # M -> (label T, Hilbert basis)
@@ -164,7 +159,6 @@ def cone_data(d):
             if E not in hb:
                 ineq = np.vstack([hyp, Q[[r for r in neg if r not in E]]])
                 B = _nz(n, {"inequalities": ineq.tolist(), "equations": eq.tolist()}, hilbert_basis=True)[0]
-                calls += 1
                 hb[E] = (B, tuple(r for r in E if (B @ Q[r] < 0).any()))
             B, M = hb[E]
             if not M:
@@ -174,21 +168,24 @@ def cone_data(d):
     lift = (lambda B: B.tolist()) if L is None else (lambda B: (B.astype(object) @ np.array(L, dtype=object)).tolist())
     out = dict(cones=[lift(B) for _, B in groups.values()], tsets=[list(T) for T, _ in groups.values()],
                rays=rays, facets=facets.tolist())
-    sys.stderr.write(f"cgv_run: {len(out['cones'])} cones K_T ({len(neg)} of {ndiv} divisors negative somewhere on the "
-                     f"cone), {calls} normaliz runs, {time.time() - t0:.1f}s\n")
     os.makedirs(CACHE, exist_ok=True)
     with open(path, "w") as f:
         json.dump(out, f)
     return out
 
 
-def default_grading(rays):
-    """A small integer grading vector positive on the cone spanned by rays (CYTools' Cone.find_grading_vector)."""
+def default_grading(cd):
+    """A small integer grading vector positive on the cone of cone_data cd: CYTools' Cone.find_grading_vector if
+    CYTools is installed, else the sum of the cone's facet normals divided by their gcd (an interior point of the
+    dual cone: zero only on the intersection of all facets, which is the origin of a pointed cone)."""
     try:
         from cytools import Cone
     except ImportError:
-        raise ValueError("no grading_vector given, and CYTools (which would choose one) is not installed") from None
-    return [int(x) for x in Cone(rays=rays).find_grading_vector()]
+        # cd["facets"] = facets, equations, -equations: the equations cancel in the sum
+        w = np.array(cd["facets"], dtype=object).sum(0)
+        g = np.gcd.reduce(np.abs(w).astype(np.int64))
+        return [int(x) // int(g) for x in w]
+    return [int(x) for x in Cone(rays=cd["rays"]).find_grading_vector()]
 
 
 def write_input(d, max_deg, path):
@@ -200,7 +197,7 @@ def write_input(d, max_deg, path):
       q                GLSM charges, h11 rows x ndiv columns (CYTools' curve_basis(as_matrix=True) layout)
       intnums          triple intersection numbers in the same basis: [[i, j, k, value], ...] (each unordered
                        triple once) or {(i, j, k): value}
-      grading_vector   integer vector positive on the cone; default: default_grading(the cone's extreme rays)
+      grading_vector   integer vector positive on the cone; default: see default_grading
       lightcone        optional: points p; only the curves C with p - C in the cone (whose GVs are then exact)
       strata, vex_cones   optional, vex phases (written by cgv_phase.py)
 
@@ -214,7 +211,7 @@ def write_input(d, max_deg, path):
     cd = cone_data(d)
     w = d.get("grading_vector")
     if w is None:
-        w = default_grading(cd["rays"])
+        w = default_grading(cd)
     w = [int(x) for x in w]
     if len(w) != h11:
         raise ValueError(f"grading_vector has {len(w)} entries, q has {h11} rows")

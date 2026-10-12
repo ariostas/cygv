@@ -141,17 +141,17 @@ def _phase_ref(name: str) -> dict[str, Any]:
     return ref
 
 
-def test_phase_frst_and_vex() -> None:
-    """compute_gv_phase in FRST and vex phases (cgv/tests/refs_vex), GV and GW."""
-    from cygv import compute_gv_phase, compute_gw_phase  # noqa: PLC0415
+def test_fan_frst_and_vex() -> None:
+    """compute_gv_fan for FRST and vex fans (cgv/tests/refs_vex), GV and GW."""
+    from cygv import compute_gv_fan, compute_gw_fan  # noqa: PLC0415
 
     for name in ["liam_h2_fan0", "liam_h2_fan1", "liam_h3_fan4", "liam_h3_fan9"]:
         r = _phase_ref(name)
         kappa = {(i, j, k): v for i, j, k, v in r["kappa"]}
         kw: dict[str, Any] = {"grading_vector": r["grading"]}
-        gv = dict(compute_gv_phase(r["cones"], r["q"], kappa, r["max_deg"], **kw))
+        gv = dict(compute_gv_fan(r["cones"], r["q"], kappa, r["max_deg"], **kw))
         assert gv == {tuple(k): v for k, v in r["gvs"]}, name
-        gw = dict(compute_gw_phase(r["cones"], r["q"], kappa, r["max_deg"], **kw))
+        gw = dict(compute_gw_fan(r["cones"], r["q"], kappa, r["max_deg"], **kw))
         assert all(isinstance(x, Fraction) for x in gw.values())
         primitive = [c for c in gv if gcd(*c) == 1]
         assert primitive, name
@@ -164,7 +164,7 @@ def test_phase_vex_equals_frst_of_another_polytope() -> None:
     """A vex phase and an FRST of a different polytope with the same CY give the same GVs."""
     import numpy as np  # noqa: PLC0415
 
-    from cygv import compute_gv_phase  # noqa: PLC0415
+    from cygv import compute_gv_fan  # noqa: PLC0415
 
     r = _phase_ref("pair_h4_1")
     T = np.array(r["T"])
@@ -175,7 +175,7 @@ def test_phase_vex_equals_frst_of_another_polytope() -> None:
         s = r[side]
         kappa = {(i, j, k): v for i, j, k, v in s["kappa"]}
         sides[side] = dict(
-            compute_gv_phase(
+            compute_gv_fan(
                 s["cones"], s["q"], kappa, r["max_deg"], grading_vector=w.tolist()
             )
         )
@@ -187,10 +187,10 @@ def test_phase_vex_equals_frst_of_another_polytope() -> None:
 
 
 def test_phase_lightcone() -> None:
-    """compute_gv_phase(lightcone=...) equals the full computation on the backward lightcones."""
+    """compute_gv_fan(lightcone=...) equals the full computation on the backward lightcones."""
     import numpy as np  # noqa: PLC0415
 
-    from cygv import _cgv_phase, _cgv_run, compute_gv_phase  # noqa: PLC0415
+    from cygv import _cgv_phase, _cgv_run, compute_gv_fan  # noqa: PLC0415
 
     r = _phase_ref("liam_h3_fan4")
     kappa = {(i, j, k): v for i, j, k, v in r["kappa"]}
@@ -199,7 +199,7 @@ def test_phase_lightcone() -> None:
     by_degree = sorted(full, key=lambda c: (int(w @ c), c))
     pts = [by_degree[-1], by_degree[len(by_degree) // 2]]
     got = dict(
-        compute_gv_phase(
+        compute_gv_fan(
             r["cones"], r["q"], kappa, grading_vector=r["grading"], lightcone=pts
         )
     )
@@ -213,3 +213,17 @@ def test_phase_lightcone() -> None:
     }
     assert got == want
     assert 0 < len(got) < len(full)
+
+
+def test_phase_names_are_deprecated_aliases() -> None:
+    """compute_gv_phase / compute_gw_phase still work, with a DeprecationWarning."""
+    from cygv import compute_gv_phase, compute_gw_phase  # noqa: PLC0415
+
+    r = _phase_ref("liam_h2_fan1")
+    kappa = {(i, j, k): v for i, j, k, v in r["kappa"]}
+    args = (r["cones"], r["q"], kappa, r["max_deg"])
+    with pytest.warns(DeprecationWarning):
+        gv = dict(compute_gv_phase(*args, grading_vector=r["grading"]))
+    assert gv == {tuple(k): v for k, v in r["gvs"]}
+    with pytest.warns(DeprecationWarning):
+        compute_gw_phase(*args, grading_vector=r["grading"])

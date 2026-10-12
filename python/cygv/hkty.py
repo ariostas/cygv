@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import warnings
 from collections.abc import Sized
 from fractions import Fraction
 from multiprocessing import Pipe, Process
@@ -197,7 +198,7 @@ def _cgv_gvs(
     return gvs
 
 
-def _cgv_phase_gvs(
+def _cgv_fan_gvs(
     cones: ArrayLike,
     q: ArrayLike,
     intnums: dict[tuple[int, int, int], int],
@@ -207,7 +208,7 @@ def _cgv_phase_gvs(
     lightcone: ArrayLike | None,
     device: str,
 ) -> tuple[dict[tuple[int, ...], int], list[int]]:
-    """GV invariants in the phase given by a fan, with the bundled cgv program, through the same
+    """GV invariants for a given fan, with the bundled cgv program, through the same
     code as its standalone Python interface (cgv/tools/cgv_phase.py). Returns (GVs, grading)."""
     from cygv import _cgv_phase, _cgv_run  # noqa: PLC0415
     from cygv.cygv import _cgv_executable, _cgv_gpu_executable  # noqa: PLC0415
@@ -233,7 +234,7 @@ def _cgv_phase_gvs(
             ],
         )
     except FileNotFoundError as e:
-        msg = "compute_gv_phase needs normaliz (e.g. conda install -c conda-forge normaliz)"
+        msg = "compute_gv_fan needs normaliz (e.g. conda install -c conda-forge normaliz)"
         raise RuntimeError(msg) from e
     gpu = _cgv_gpu_executable()
     gpu_bin, hip = gpu if gpu is not None else (None, False)
@@ -253,7 +254,7 @@ def _cgv_phase_gvs(
     return gvs, grading
 
 
-def compute_gv_phase(
+def compute_gv_fan(
     cones: ArrayLike,
     q: ArrayLike,
     intnums: dict[tuple[int, int, int], int],
@@ -263,7 +264,7 @@ def compute_gv_phase(
     lightcone: ArrayLike | None = None,
     device: str = "auto",
 ) -> list[Any]:
-    """GV invariants of a CY threefold hypersurface in a given phase of the ambient toric variety:
+    """GV invariants of a CY threefold hypersurface for a given fan of the ambient toric variety:
     an FRST or a vex fan (a fine regular fan that does not refine the face fan). Uses cgv.
 
     cones: maximal cones of the fan, as tuples of column indices of q. q, intnums: as for compute_gv.
@@ -272,14 +273,14 @@ def compute_gv_phase(
     lightcone: curve classes p; only their backward lightcones are computed, the classes C with p - C in
     the Mori cone (exactly the classes whose GVs enter those of p), so the GVs are exact. max_deg is then
     optional (default: the largest degree of the p); otherwise it is required.
-    The result is in the same format as compute_gv's. Needs normaliz. See cgv/README.md, "Any phase"."""
-    gvs, _ = _cgv_phase_gvs(
+    The result is in the same format as compute_gv's. Needs normaliz. See cgv/README.md, "Any fan"."""
+    gvs, _ = _cgv_fan_gvs(
         cones, q, intnums, max_deg, mori_rays, grading_vector, lightcone, device
     )
     return list(gvs.items())
 
 
-def compute_gw_phase(
+def compute_gw_fan(
     cones: ArrayLike,
     q: ArrayLike,
     intnums: dict[tuple[int, int, int], int],
@@ -289,10 +290,10 @@ def compute_gw_phase(
     device: str = "auto",
     prec: int | None = None,
 ) -> list[Any]:
-    """Genus-0 GW invariants in a given phase (see compute_gv_phase), from its GV invariants."""
+    """Genus-0 GW invariants for a given fan (see compute_gv_fan), from its GV invariants."""
     if prec is not None:
         mp.mp.prec = prec
-    gvs, grading = _cgv_phase_gvs(
+    gvs, grading = _cgv_fan_gvs(
         cones, q, intnums, max_deg, mori_rays, grading_vector, None, device
     )
     gws = _gw_from_gv(gvs, grading, max_deg)
@@ -300,6 +301,22 @@ def compute_gw_phase(
         (b, (x if prec is None else mp.mpf(x.numerator) / x.denominator))
         for b, x in gws.items()
     ]
+
+
+def compute_gv_phase(*args: Any, **kwargs: Any) -> list[Any]:
+    """Deprecated name of compute_gv_fan."""
+    warnings.warn(
+        "compute_gv_phase is renamed compute_gv_fan", DeprecationWarning, stacklevel=2
+    )
+    return compute_gv_fan(*args, **kwargs)
+
+
+def compute_gw_phase(*args: Any, **kwargs: Any) -> list[Any]:
+    """Deprecated name of compute_gw_fan."""
+    warnings.warn(
+        "compute_gw_phase is renamed compute_gw_fan", DeprecationWarning, stacklevel=2
+    )
+    return compute_gw_fan(*args, **kwargs)
 
 
 def _gw_from_gv(

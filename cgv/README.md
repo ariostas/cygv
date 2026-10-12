@@ -70,9 +70,9 @@ Low on memory? Two levers, which stack:
   the system as soon as it is freed (`CGV_LOW_MEM_MB` sets the size; no such effect on macOS). `CGV_CB=0` turns off
   only the class replay.
 
-## Any phase: FRSTs and vex fans
+## Any fan: FRSTs and vex fans
 
-`tools/cgv_phase.py` runs cgv in a given phase of the ambient toric variety, including *vex* phases: fine regular
+`tools/cgv_phase.py` runs cgv for a given fan of the ambient toric variety, including *vex* fans: fine regular
 fans on the polytope's boundary points (not interior to facets) that do not refine its face fan (MacFadden–Sheridan,
 [arXiv:2512.14817](https://arxiv.org/abs/2512.14817)). There, curves of negative anticanonical degree exist and
 HKTY's coefficient has a pole; it is removed exactly by the class of the stratum those curves force into the CY

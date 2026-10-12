@@ -85,8 +85,11 @@ separately, as before.
   basis). Identical output; e.g. P(1,1,2,2,2)[8] 21 -> 1 cones, the h11 = 10 tests 91-105 -> 55-91. `mori_rays` may
   span a face of the Mori cone: normaliz then runs in a basis of the face's lattice (a 12-dimensional face at
   h11 = 491: 123 normaliz runs, 1.7 s; before: ~123k runs in Z^491, a sampled one unfinished after 10 min, and the face's equations were dropped).
-  `grading_vector` defaults to CYTools' `find_grading_vector` and is checked to be positive on the cone; `intnums`
-  may be a dict. The cache files are now `kt2_*.json`.
+  `grading_vector` defaults to CYTools' `find_grading_vector` (without CYTools: the primitive sum of the cone's
+  facet normals) and is checked to be positive on the cone; `intnums` may be a dict. The cache files are now
+  `kt2_*.json`; the old `~/.cache/cgv/kt_*.json` are no longer read and can be deleted.
+- **`compute_gv_fan` / `compute_gw_fan`** (cygv's Python API) are the new names of `compute_gv_phase` /
+  `compute_gw_phase` (the invariants for a given fan); the old names remain as deprecated aliases.
 - **No format tag**: input files start with `h11 ndiv maxdeg`; a leading `cgv 2` (older files) is still accepted.
 
 ## Behaviour
