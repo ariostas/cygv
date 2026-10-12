@@ -27,7 +27,7 @@ fn to_matrix(m: Vec<Vec<i32>>, name: &str) -> PyResult<DMatrix<i32>> {
 /// Compute GV or GW invariants
 #[pyfunction]
 #[pyo3(name = "_compute_gvgw")]
-#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, method=None, strata=None, mori_hyperplanes=None, mori_equations=None, cones=None, fan=None))]
+#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, method=None, strata=None, mori_hyperplanes=None, mori_equations=None, cones=None, fan=None, certify=false))]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_gvgw(
     generators: Vec<Vec<i32>>,
@@ -47,6 +47,7 @@ pub fn compute_gvgw(
     mori_equations: Option<Vec<Vec<i32>>>,
     cones: Option<Vec<(Vec<usize>, Vec<Vec<i32>>)>>,
     fan: Option<Vec<Vec<usize>>>,
+    certify: bool,
 ) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
     CTRLC_HANDLER.call_once(|| {
         ctrlc::set_handler(|| std::process::exit(1)).expect("failed to install ctrl-c handler");
@@ -135,6 +136,7 @@ pub fn compute_gvgw(
         target_points,
         n_threads,
         method,
+        certify,
     )
     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 

@@ -163,6 +163,17 @@ max_deg: 6
     assert_eq!(outputs[1], outputs[0]);
     assert_eq!(outputs[2], outputs[0]);
 
+    // Certified, as the flag or in the input, the results are the same.
+    let certified = run(&["--certify"], &input);
+    assert!(certified.status.success());
+    assert_eq!(String::from_utf8(certified.stdout).unwrap(), outputs[0]);
+    let certified = run(
+        &[],
+        &input.replace("max_deg: 6\n", "max_deg: 6\ncertify: true\n"),
+    );
+    assert!(certified.status.success());
+    assert_eq!(String::from_utf8(certified.stdout).unwrap(), outputs[0]);
+
     // The modular method needs max_deg, whether it is asked for in the input or with
     // the flag, which overrides the input.
     let input = quintic.replace("max_deg: 6", "min_points: 4");
@@ -257,4 +268,13 @@ fn test_fan() {
     );
     let with_cones = run(&["--file", example("vex.yaml").to_str().unwrap()], "");
     assert_eq!(with_fan.stdout, with_cones.stdout);
+
+    // A vex phase cannot be certified.
+    let certified = run(
+        &["--certify", "--file", example("fan.yaml").to_str().unwrap()],
+        "",
+    );
+    assert!(!certified.status.success());
+    let stderr = String::from_utf8(certified.stderr).unwrap();
+    assert!(stderr.contains("vex phase"), "{stderr}");
 }

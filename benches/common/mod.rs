@@ -418,6 +418,7 @@ impl Scenario {
                 cone_data,
                 threads,
                 method,
+                false,
             )
             .unwrap()
             .len(),
@@ -435,6 +436,7 @@ impl Scenario {
                 cone_data,
                 threads,
                 method,
+                false,
             )
             .unwrap()
             .len(),
@@ -452,6 +454,7 @@ impl Scenario {
                 cone_data,
                 threads,
                 method,
+                false,
             )
             .unwrap()
             .len(),
@@ -469,6 +472,7 @@ impl Scenario {
                 cone_data,
                 threads,
                 method,
+                false,
             )
             .unwrap()
             .len(),

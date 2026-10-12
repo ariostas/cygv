@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d, 8 done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": phase 5b replaced `rug` with `malachite` everywhere (6.10). Branch
 `gv-modular-rust` is PR #94 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main`
@@ -657,7 +657,7 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     49 s; release 159 s against 163 s, since `malachite` is large and the release profile is
     one LTO unit; the CLI binary grows from 3.0 to 4.5 MB.
 
-- [ ] **7a. Double description (committed, not a prototype).** Can start any time. Support
+- [x] **7a. Double description (committed, not a prototype).** Can start any time. Support
   hyperplanes from spanning vectors, in any dimension, with exact integers. Needed regardless
   of how 7b turns out: it gives the Mori cone's facets (target points, `mori_rays` input, the
   default grading) and the hull facets that phase 7c needs.
@@ -835,9 +835,62 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     optional for the reference too (YAML, CLI, Python), except for such an untruncated
     request. `tests/cones.rs::test_saturation`: without the Hilbert basis element of GV 20,
     both methods now give the full result, with or without cone data.
-- [ ] **8. Certifier** (6.5).
-  - [ ] The majorant run, fed with the candidate GVs, behind its own switch.
-  - [ ] Tests against `cgv_maj` on the benchmark geometries.
+- [x] **8. Certifier** (6.5).
+  - [x] The number type (decided with you): `modular::bound`, a `Bound` of an `f64` mantissa
+    in $[1, 2)$ and an `i64` exponent, each operation rounded to nearest and moved up by one
+    ulp (`next_up`), as the ring `BoundRing` (subtraction is addition, negation the
+    identity, `inverses` inverting each integer by itself since the default would invert a
+    bound). Rust cannot set the rounding mode the way the C does (`FE_UPWARD` in every
+    worker, `-frounding-math`), so the rounding is explicit. Compared by a scratch
+    prototype running the real stages (`pass`, made generic over `Ring` for it) over each
+    type, against the exact GVs:
+    - The type does not change the bounds: `f64` and the extended type agree to $10^{-14}$
+      relative. What decides their slack is the algorithm (below).
+    - `f64` + `next_up` fails on range, first in the factorial table, from $171!$: the
+      quintic from degree 35 (26 of 60 bounds infinite at degree 60), P11222 at degree 50;
+      the bounds themselves pass $2^{1024}$ only near the quintic's degree 100. The bench
+      geometries at their degrees only reach $32!$ and bounds of $2^{115}$.
+    - Speed, a chain of fused multiply-adds: one lane mod $p$ 2.4 ns, `f64` + `next_up`
+      5.1 ns, the extended type 9.6 ns, malachite's `Float` rounded up at 64 bits 83 ns
+      (and not `Copy`, which `Ring::Elem` needs). In the pipeline the extended type costs
+      10–30% over `f64` at $h^{1,1} = 8$–$11$ (twice on the fourfold), 16 bytes a value like
+      two lanes.
+    - Without the candidates fed in, the bounds overshoot $\lvert GV\rvert$ by $2^{14}$–$2^{27}$
+      at the median and up to $2^{81}$ on the bench geometries (h11_8 at degree 16 would ask
+      for 2 primes instead of 1), up to $2^{591}$ on the quintic at degree 100 (27 primes
+      instead of 18). And the majorant pass took 5–15 times a two-prime modular pass at
+      $h^{1,1} = 8$–$11$ (about the same on small models), presumably because nothing cancels:
+      a candidate GV of zero should restore the sparsity.
+  - [x] The majorant run, fed with the candidate GVs, behind its own switch (interface
+    decided with you): `modular::Options::certify`, and `certify` as the last argument of
+    every dispatch entry point, in YAML (`certify: true`), on the command line (`--certify`)
+    and in Python (`certify=True`). `lifted` bounds the lift (`bounds`, `primes_needed`) and
+    adds passes until every bound is below half the product of the primes, so a certified run
+    only returns proven results; vex phases are `Error::CertifyStrata`. `modular::bound_gv`
+    gives the bounds themselves. The pieces:
+    - `extract` takes a `source` that replaces what each curve passes on (its bound stays its
+      result): the candidates' $\deg(C) \sum_{n \mid C} \lvert\mathrm{GV}_{C/n}\rvert / n^3$
+      ($n^2$, no degree, for n-folds), as the C's `cand_I`. On the bench geometries this took
+      the median slack from $2^{14}$–$2^{27}$ to $2^5$–$2^{10}$ and the worst from $2^{58}$–$2^{81}$
+      to $2^{28}$–$2^{37}$; the quintic at degree 100 from 27 primes to 20 (18 for the GVs).
+    - Exponentials along the charge rows (the C's `CGV_MAJ` $\alpha$ along `NA = ndiv + 1`
+      rows, here every anticanonical row and every divisor): `period` gives $c_1$ along the
+      rows when asked, `instanton` $\beta = c_1 / c_0$ along them, and `extract` takes `rows`,
+      with the curve's coefficients $Q_r \cdot C$, so that each term is bounded by itself and
+      vanishes with $Q_r \cdot C$. Without it the extraction left nonzero bounds at sums of
+      candidates where the exact values cancel (2.5 times the points on h11_9 at degree 16,
+      and 2–3 times the time); $\alpha$ in the $h^{1,1}$ basis is kept for $I$, where it is
+      tighter than the C's $\lvert\alpha_a\rvert \le \sum_r \lvert\beta_r\rvert \lvert Q_{ra}\rvert$.
+    - Cost: the bounds took 0.44–0.52 s at the bench degrees ($h^{1,1} = 8$–$11$, cone data,
+      8 threads) against 0.29–0.45 s for `compute_gv`, i.e. certifying about doubles a run.
+    Tests: `bound` unit tests against exact rationals; the extraction with a `source` and
+    with `rows`; $c_1$ along the rows against $c_1$; bounds at least $\lvert GV\rvert$ on the
+    quintic, P11222, h11_9 and the fourfold (`test_bounds*`); `test_certify` (same results,
+    `primes_needed`, passes that continue); vex phases refused; YAML, CLI and Python.
+  - [x] Tests against `cgv_maj` on the benchmark geometries, once, by a scratch script (not in
+    CI, it needs the C build): h11_8/9/10/11 at degrees 16/16/12/16, fed the candidates of
+    `cgv`, give exactly `cgv_maj`'s curves, and every bound is at or below its bound (by up
+    to 6 bits; the largest 67/53/40/42 bits against 73/54/44/47).
   - [ ] Optional: the generator-reduction back-port to `Semigroup`.
 - [ ] **9. Wrap up.**
   - [ ] Confirm with the PR author that the provenance of `refs_vex` allows shipping it as
@@ -1187,7 +1240,8 @@ Layers, from cheapest to most independent:
    override in the extraction, negation in the coefficient trait); those are designed in from
    phases 2–3 so phase 8 does not force a refactor. It rejects `strata`, as the C's does.
 
-   To investigate when we get there: which number type provides the rigorous upward rounding.
+   Decided in phase 8: `modular::bound`, an `f64` mantissa with an `i64` exponent rounded up
+   by `next_up`. What was open: which number type provides the rigorous upward rounding.
    The C uses `long double` with the hardware rounding mode. `rug::Float` has directed rounding
    but `rug` is gone (6.10), so the certifier needs another route: a pure-Rust type with
    directed rounding (`malachite`'s `Float`, behind its `floats` feature, has rounding modes),

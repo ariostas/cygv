@@ -20,6 +20,7 @@
 //! [`Options::threads`]); the extraction, which dominates, applies the curves of each degree
 //! in parallel (see [`extraction::extract`]).
 
+pub mod bound;
 pub mod candidates;
 pub mod crt;
 pub mod extraction;
@@ -35,14 +36,15 @@ pub mod table;
 mod reference_tests;
 
 use crate::{check_strata, CYKind, Stratum, NON_INTEGER_CAUSES};
+use bound::{Bound, BoundRing};
 pub use candidates::CandidateSource;
 use core::fmt;
 use crt::Residues;
-use field::{LaneField, Lanes};
-use key::{KeyError, KeyLayout, PackedLayout};
+use field::{LaneField, Ring};
+use key::{KeyError, KeyLayout, PackedKey, PackedLayout};
 use lightcone::Lightcone;
 use malachite::base::num::logic::traits::SignificantBits;
-use malachite::{Integer, Rational};
+use malachite::{Integer, Natural, Rational};
 use nalgebra::{DMatrix, DVector};
 use std::collections::{HashMap, HashSet};
 use table::SparsePoly;
@@ -68,8 +70,12 @@ pub enum Error {
     /// The strata do not fit the geometry: it is not a threefold hypersurface, or their
     /// divisors are not three distinct ones, or their classes are out of range.
     InvalidStrata,
-    /// The lift of the residues did not stabilize within the allowed number of passes.
+    /// The lift of the residues did not stabilize within the allowed number of passes, or,
+    /// when certifying, did not take enough primes for the bounds.
     NotStable,
+    /// Certification was asked for in a vex phase, which the bounds do not cover yet (nor
+    /// those of the C program).
+    CertifyStrata,
 }
 
 impl fmt::Display for Error {
@@ -89,6 +95,7 @@ impl fmt::Display for Error {
             ),
             Self::NotInvertible => write!(f, "a value is not invertible modulo one of the primes"),
             Self::InvalidOptions => write!(f, "the options are out of range"),
+            Self::CertifyStrata => write!(f, "the invariants of a vex phase cannot be certified"),
             Self::InvalidStrata => write!(
                 f,
                 "the strata must be on three distinct divisors of a threefold hypersurface"
@@ -429,6 +436,10 @@ pub struct Options {
     pub threads: Option<usize>,
     /// How the extraction parallelizes.
     pub extraction: extraction::Tuning,
+    /// Whether to prove the lift right (`PLAN.md` phase 8): the invariants are bounded by
+    /// [`bound_gv`], and more primes are taken until every bound is below half their product,
+    /// so that, by induction on degree, every invariant is the one its residues determine.
+    pub certify: bool,
 }
 
 impl Default for Options {
@@ -440,6 +451,7 @@ impl Default for Options {
             max_passes: 8,
             threads: None,
             extraction: extraction::Tuning::default(),
+            certify: false,
         }
     }
 }
@@ -510,6 +522,98 @@ pub fn compute_gw(
     )
 }
 
+/// Upper bounds on the absolute values of the GV invariants of [`compute_gv`], for the
+/// certifier (`PLAN.md` phase 8), in increasing order of degree and then key, leaving out the
+/// curves where they all vanish.
+///
+/// The stages run once more, over [`BoundRing`], and every curve passes on to those of higher
+/// degree the values its `candidates` imply ($n_C = \deg(C) \sum_{n \mid C}
+/// \mathrm{GV}_{C/n} / n^3$ for a threefold, without the degree and with $n^2$ for an n-fold)
+/// rather than its own bounds, as the C program's majorant build does, so that the bounds do
+/// not compound. A curve's bound therefore holds if the candidates of lower degree are right.
+/// Taking the candidates from a lift modulo $M$, every one of them is then right, by induction
+/// on degree, if every bound is below $M / 2$.
+pub fn bound_gv(
+    source: CandidateSource<'_>,
+    grading_vector: &[i32],
+    max_deg: u32,
+    targets: &[&[i32]],
+    geometry: &Geometry,
+    options: &Options,
+    candidates: &[CurveInvariants],
+) -> Result<Vec<CurveInvariants<Bound>>, Error> {
+    if !geometry.strata().is_empty() {
+        return Err(Error::CertifyStrata);
+    }
+    let prep = prepare(source, grading_vector, max_deg, targets, geometry, options)?;
+    if prep.cands.first().is_none_or(|&(_, deg)| deg != 0) {
+        return Ok(Vec::new());
+    }
+    let layout = &prep.layout;
+    let known: HashMap<_, Vec<Bound>> = candidates
+        .iter()
+        .filter(|c| layout.fits(&c.curve))
+        .map(|c| {
+            let vals = c.values.iter().map(Bound::from_integer).collect();
+            (layout.pack(&c.curve), vals)
+        })
+        .collect();
+    let run = prep.run(geometry, options);
+    let bounds = prep.pool.install(|| bounds(&run, &known))?;
+    let mut curve = vec![0; layout.dim()];
+    Ok((0..bounds.len())
+        .map(|i| {
+            layout.unpack(bounds.keys()[i], &mut curve);
+            CurveInvariants {
+                curve: curve.clone(),
+                degree: bounds.degs()[i],
+                values: bounds.values(i).to_vec(),
+            }
+        })
+        .collect())
+}
+
+/// The majorant pass of [`bound_gv`], with the candidates as bounds on their absolute values.
+fn bounds(
+    run: &Run<'_, PackedLayout>,
+    candidates: &HashMap<PackedKey, Vec<Bound>>,
+) -> Result<SparsePoly<PackedKey, Bound>, Error> {
+    if !run.geometry.strata().is_empty() {
+        return Err(Error::CertifyStrata);
+    }
+    let ring = BoundRing;
+    let layout = run.layout;
+    let threefold = run.geometry.kind().is_threefold();
+    let exponent = if threefold { 3 } else { 2 };
+    // A curve of positive degree has at most its degree as the gcd of its coordinates.
+    let inv_pow: Vec<Bound> = (0..=run.max_deg as i64)
+        .map(|n| match n {
+            0 => Bound::default(),
+            _ => ring.inv(ring.int(n.pow(exponent))).unwrap(),
+        })
+        .collect();
+    let implied = |curve: &[i32], deg: u32, vals: &mut [Bound]| {
+        vals.fill(Bound::default());
+        let g = multicover::gcd(curve);
+        let mut cn = vec![0; curve.len()];
+        for n in (1..=g).filter(|n| g.is_multiple_of(*n)) {
+            for (y, &x) in cn.iter_mut().zip(curve) {
+                *y = x / n as i32;
+            }
+            if let Some(gv) = candidates.get(&layout.pack(&cn)) {
+                for (v, &x) in vals.iter_mut().zip(gv) {
+                    ring.fma(v, x, inv_pow[n as usize]);
+                }
+            }
+        }
+        if threefold {
+            let d = ring.int(deg as i64);
+            vals.iter_mut().for_each(|v| *v = ring.mul(*v, d));
+        }
+    };
+    pass(&ring, run, Some(&implied))
+}
+
 /// Computes the GV invariants as [`compute_gv`] describes, and hands them to `finish` with the
 /// maximum degree, lowered to the largest degree of the targets if there are any, and a test
 /// of whether a curve class of at most that degree is in their backward lightcones.
@@ -522,6 +626,77 @@ fn run<T>(
     options: &Options,
     finish: impl FnOnce(Vec<CurveInvariants>, u32, &dyn Fn(&[i32]) -> bool) -> T,
 ) -> Result<T, Error> {
+    let prep = prepare(source, grading_vector, max_deg, targets, geometry, options)?;
+    let in_lightcone = |c: &[i32]| prep.in_lightcone(c);
+    // Without zero, which is the only class of degree zero, nothing is below the targets.
+    if prep.cands.first().is_none_or(|&(_, deg)| deg != 0) {
+        return Ok(finish(Vec::new(), prep.max_deg, &in_lightcone));
+    }
+    let run = prep.run(geometry, options);
+    let gv = prep.pool.install(|| {
+        let lanes = match options.lanes {
+            Some(lanes) => lanes,
+            None => choose_lanes(&run, options)?,
+        };
+        let residues = match lanes {
+            2 => lifted::<2>(&run, options),
+            3 => lifted::<3>(&run, options),
+            _ => lifted::<4>(&run, options),
+        }?;
+        let mut curve = vec![0; prep.layout.dim()];
+        Ok::<_, Error>(
+            residues
+                .into_iter()
+                .map(|(key, degree, values)| {
+                    prep.layout.unpack(key, &mut curve);
+                    CurveInvariants {
+                        curve: curve.clone(),
+                        degree,
+                        values,
+                    }
+                })
+                .collect(),
+        )
+    })?;
+    Ok(finish(gv, prep.max_deg, &in_lightcone))
+}
+
+/// What a run computes before its passes: the thread pool, the maximum degree (lowered to
+/// the targets'), the key layout, and the candidates with their lightcones.
+struct Prepared {
+    pool: rayon::ThreadPool,
+    max_deg: u32,
+    layout: PackedLayout,
+    cands: Vec<(<PackedLayout as KeyLayout>::Key, u32)>,
+    lightcone: Lightcone<<PackedLayout as KeyLayout>::Key>,
+}
+
+impl Prepared {
+    fn in_lightcone(&self, c: &[i32]) -> bool {
+        self.layout.fits(c) && self.lightcone.contains(self.layout.pack(c), c)
+    }
+
+    fn run<'a>(&'a self, geometry: &'a Geometry, options: &'a Options) -> Run<'a, PackedLayout> {
+        Run {
+            layout: &self.layout,
+            geometry,
+            cands: &self.cands,
+            max_deg: self.max_deg,
+            lightcone: &self.lightcone,
+            tuning: &options.extraction,
+        }
+    }
+}
+
+/// Checks the options and computes what [`run`] and [`bound_gv`] need before their passes.
+fn prepare(
+    source: CandidateSource<'_>,
+    grading_vector: &[i32],
+    max_deg: u32,
+    targets: &[&[i32]],
+    geometry: &Geometry,
+    options: &Options,
+) -> Result<Prepared, Error> {
     if options.check_primes == 0
         || options.lanes.is_some_and(|l| !(2..=4).contains(&l))
         || options.threads == Some(0)
@@ -548,46 +723,13 @@ fn run<T>(
         points: cands,
         lightcone,
     } = pool.install(|| source.candidates(&layout, grading_vector, max_deg, targets, geometry))?;
-    let in_lightcone = |c: &[i32]| layout.fits(c) && lightcone.contains(layout.pack(c), c);
-    // Without zero, which is the only class of degree zero, nothing is below the targets.
-    if cands.first().is_none_or(|&(_, deg)| deg != 0) {
-        return Ok(finish(Vec::new(), max_deg, &in_lightcone));
-    }
-    let run = Run {
-        layout: &layout,
-        geometry,
-        cands: &cands,
+    Ok(Prepared {
+        pool,
         max_deg,
-        lightcone: &lightcone,
-        tuning: &options.extraction,
-    };
-    let gv = pool.install(|| {
-        let lanes = match options.lanes {
-            Some(lanes) => lanes,
-            None => choose_lanes(&run, options)?,
-        };
-        let residues = match lanes {
-            2 => passes::<2, _>(&run, options),
-            3 => passes::<3, _>(&run, options),
-            _ => passes::<4, _>(&run, options),
-        }?;
-        let mut curve = vec![0; layout.dim()];
-        Ok::<_, Error>(
-            residues
-                .lift()
-                .into_iter()
-                .map(|(key, degree, values)| {
-                    layout.unpack(key, &mut curve);
-                    CurveInvariants {
-                        curve: curve.clone(),
-                        degree,
-                        values,
-                    }
-                })
-                .collect(),
-        )
-    })?;
-    Ok(finish(gv, max_deg, &in_lightcone))
+        layout,
+        cands,
+        lightcone,
+    })
 }
 
 /// The number of primes per pass for a run whose options leave it open, chosen the way the C
@@ -616,7 +758,8 @@ fn choose_lanes<L: KeyLayout>(run: &Run<'_, L>, options: &Options) -> Result<usi
         min_primes: 0,
         ..options.clone()
     };
-    let residues = passes::<2, _>(&probe, &probe_options)?;
+    let width = run.geometry.n_forms();
+    let residues = passes::<2, _>(&probe, &probe_options, Residues::new(width), 0)?;
     // The largest number of bits of an invariant of each degree, i.e. floor(log2 |GV|).
     let mut bits: Vec<Option<f64>> = vec![None; probe_deg as usize + 1];
     for (_, deg, values) in residues.lift() {
@@ -673,30 +816,97 @@ struct Run<'a, L: KeyLayout> {
     tuning: &'a extraction::Tuning,
 }
 
-/// Runs passes over `NL` primes each, taken in order from [`field::primes`], until the lift
-/// is stable.
+/// Adds passes over `NL` primes each to `residues`, taking the primes that follow theirs in
+/// [`field::primes`], until there are at least `min_primes` and the lift is stable, within
+/// `options.max_passes` passes in all.
 fn passes<const NL: usize, L: KeyLayout>(
     run: &Run<'_, L>,
     options: &Options,
+    mut residues: Residues<L::Key>,
+    min_primes: usize,
 ) -> Result<Residues<L::Key>, Error> {
-    let mut residues = Residues::new(run.geometry.n_forms());
-    let mut primes = field::primes();
-    for _ in 0..options.max_passes {
+    let mut primes = field::primes().skip(residues.primes().len());
+    while residues.primes().len() < options.max_passes * NL {
         let ring = LaneField::<NL>::new(core::array::from_fn(|_| primes.next().unwrap()));
-        residues.add_pass(&ring, &pass(&ring, run)?);
-        if residues.primes().len() >= options.min_primes && residues.is_stable(options.check_primes)
-        {
+        residues.add_pass(&ring, &pass(&ring, run, None)?);
+        if residues.primes().len() >= min_primes && residues.is_stable(options.check_primes) {
             return Ok(residues);
         }
     }
     Err(Error::NotStable)
 }
 
-/// The GV invariants modulo the primes of `ring`.
-fn pass<const NL: usize, L: KeyLayout>(
-    ring: &LaneField<NL>,
+/// The lift of [`passes`] over `NL` primes each, certified if `options` ask for it: then the
+/// invariants are bounded, and passes added until the primes are enough for the bounds.
+fn lifted<const NL: usize>(
+    run: &Run<'_, PackedLayout>,
+    options: &Options,
+) -> Result<Vec<(PackedKey, u32, Vec<Integer>)>, Error> {
+    let width = run.geometry.n_forms();
+    let mut residues = passes::<NL, _>(run, options, Residues::new(width), options.min_primes)?;
+    loop {
+        let lift = residues.lift();
+        if !options.certify {
+            return Ok(lift);
+        }
+        match primes_needed(run, &lift, residues.primes())? {
+            None => return Ok(lift),
+            Some(n) => residues = passes::<NL, _>(run, options, residues, n)?,
+        }
+    }
+}
+
+/// `None` if the bounds of [`bounds`] on the invariants of `lift`, from `primes`, are all
+/// below half the product of the primes, and the number of primes they need otherwise.
+fn primes_needed(
+    run: &Run<'_, PackedLayout>,
+    lift: &[(PackedKey, u32, Vec<Integer>)],
+    primes: &[u64],
+) -> Result<Option<usize>, Error> {
+    let candidates: HashMap<PackedKey, Vec<Bound>> = lift
+        .iter()
+        .map(|(key, _, values)| (*key, values.iter().map(Bound::from_integer).collect()))
+        .collect();
+    let bounds = bounds(run, &candidates)?;
+    let modulus: Natural = primes.iter().map(|&p| Natural::from(p)).product();
+    let half = Rational::from(&modulus) / Rational::from(2u32);
+    // Far below the threshold the logarithms decide; near it, the exact values.
+    let log_half = modulus.significant_bits() as f64 - 2.0;
+    let mut worst: Option<Bound> = None;
+    for i in 0..bounds.len() {
+        for &b in bounds.values(i) {
+            if b.log2() < log_half || b.to_rational() < half {
+                continue;
+            }
+            if worst.is_none_or(|w| w.to_rational() < b.to_rational()) {
+                worst = Some(b);
+            }
+        }
+    }
+    let Some(worst) = worst else {
+        return Ok(None);
+    };
+    let twice = worst.to_rational() * Rational::from(2u32);
+    let mut product = Natural::from(1u32);
+    Ok(Some(
+        field::primes()
+            .position(|p| {
+                product *= Natural::from(p);
+                twice < product
+            })
+            .expect("the primes go on")
+            + 1,
+    ))
+}
+
+/// The GV invariants in `ring`, modulo its primes, or, with a `source` for the extraction,
+/// bounds on them: the certifier's majorant run, which also takes the exponentials of the
+/// extraction along the rows of the charges (see [`extraction::extract`]).
+fn pass<R: Ring, L: KeyLayout>(
+    ring: &R,
     run: &Run<'_, L>,
-) -> Result<SparsePoly<L::Key, Lanes<NL>>, Error> {
+    source: Option<extraction::Source<'_, R::Elem>>,
+) -> Result<SparsePoly<L::Key, R::Elem>, Error> {
     let Run {
         layout,
         geometry,
@@ -705,18 +915,20 @@ fn pass<const NL: usize, L: KeyLayout>(
         lightcone,
         tuning,
     } = *run;
-    let pd = period::period(ring, layout, geometry, cands, max_deg)?;
+    let majorant = source.is_some();
+    let pd = period::period(ring, layout, geometry, cands, max_deg, majorant)?;
     let inst = instanton::instanton(ring, geometry, &pd, max_deg)?;
     let inv = &pd.tables.inv;
+    let rows: Vec<Vec<i32>> = (0..geometry.n_anticanonical())
+        .map(|j| geometry.q0(j).to_vec())
+        .chain((0..geometry.n_divisors()).map(|r| geometry.q(r).to_vec()))
+        .collect();
+    let (alpha, rows) = match &inst.beta {
+        Some(beta) => (beta, Some(rows.as_slice())),
+        None => (&inst.alpha, None),
+    };
     let coeffs = extraction::extract(
-        ring,
-        layout,
-        &inst.alpha,
-        &inst.inst,
-        inv,
-        max_deg,
-        lightcone,
-        tuning,
+        ring, layout, alpha, rows, &inst.inst, inv, max_deg, lightcone, tuning, source,
     )?;
     let mut gv = multicover::multicover(ring, layout, geometry.kind(), &coeffs, inv, max_deg)?;
     // The products of curves in the lightcones reach curves outside them, where the values
@@ -878,6 +1090,159 @@ mod tests {
         assert_eq!(
             Geometry::new(CYKind::Nfold, 0, vec![], vec![], vec![]),
             Err(Error::DimensionMismatch)
+        );
+    }
+
+    /// Checks that [`bound_gv`], fed the invariants of [`compute_gv`], bounds each of them,
+    /// and returns the largest number of bits by which a bound exceeds its invariant.
+    fn check_bounds(
+        name: &str,
+        geometry: &Geometry,
+        w: &[i32],
+        gens: &DMatrix<i32>,
+        max_deg: u32,
+    ) -> f64 {
+        let gens: Vec<&[i32]> = gens.as_slice().chunks(w.len()).collect();
+        let source = || CandidateSource::Generators(&gens);
+        let options = Options::default();
+        let gv = compute_gv(source(), w, max_deg, &[], geometry, &options).unwrap();
+        let bounds = bound_gv(source(), w, max_deg, &[], geometry, &options, &gv).unwrap();
+        let bounds: HashMap<&[i32], &[Bound]> = bounds
+            .iter()
+            .map(|b| (b.curve.as_slice(), b.values.as_slice()))
+            .collect();
+        assert!(!gv.is_empty(), "{name}");
+        let mut slack: f64 = 0.0;
+        for inv in &gv {
+            let b = bounds[inv.curve.as_slice()];
+            for (v, bound) in inv.values.iter().zip(b) {
+                let exact = Rational::from(v.unsigned_abs_ref());
+                assert!(bound.to_rational() >= exact, "{name}: {:?}", inv.curve);
+                if *v != 0 {
+                    let bits = Bound::from_integer(v).log2();
+                    slack = slack.max(bound.log2() - bits);
+                }
+            }
+        }
+        slack
+    }
+
+    #[test]
+    fn test_bounds() {
+        let quintic = quintic();
+        let slack = check_bounds(
+            "quintic",
+            &quintic,
+            &[1],
+            &DMatrix::from_element(1, 1, 1),
+            40,
+        );
+        // Without the candidates fed in, the bounds were 2^192 above.
+        assert!(slack < 64.0, "quintic: {slack}");
+        let q = DMatrix::from_row_slice(6, 2, &[0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, -2]);
+        let intnums = HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]);
+        let p11222 = Geometry::from_toric(&q, &[], &intnums, CYKind::Threefold, &[1, 1]).unwrap();
+        check_bounds("P11222", &p11222, &[1, 1], &DMatrix::identity(2, 2), 20);
+    }
+
+    /// A realistic threefold, and the fourfold of the examples, an n-fold with fourteen
+    /// components.
+    #[test]
+    #[cfg(feature = "cli")]
+    fn test_bounds_realistic() {
+        for (name, yaml, max_deg) in [
+            ("h11_9", include_str!("../benches/data/h11_9.yaml"), 7),
+            ("fourfold", include_str!("../examples/fourfold.yaml"), 8),
+        ] {
+            let input = crate::io::Input::load_all(yaml).unwrap().remove(0);
+            let w: Vec<i32> = input.grading_vector.iter().copied().collect();
+            let geometry =
+                Geometry::from_toric(&input.q, &input.nefpart, &input.intnums, input.cy_kind, &w)
+                    .unwrap();
+            check_bounds(name, &geometry, &w, &input.generators, max_deg);
+        }
+    }
+
+    fn quintic() -> Geometry {
+        Geometry::from_toric(
+            &DMatrix::from_element(5, 1, 1),
+            &[],
+            &HashMap::from([((0, 0, 0), 5)]),
+            CYKind::Threefold,
+            &[1],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_certify() {
+        let geometry = quintic();
+        let gens: [&[i32]; 1] = [&[1]];
+        let source = || CandidateSource::Generators(&gens);
+        let run = |max_deg, certify| {
+            let options = Options {
+                lanes: Some(2),
+                certify,
+                ..Options::default()
+            };
+            compute_gv(source(), &[1], max_deg, &[], &geometry, &options)
+        };
+        for max_deg in [20, 40] {
+            assert_eq!(run(max_deg, true), run(max_deg, false), "degree {max_deg}");
+        }
+
+        // At degree 20 the largest invariant has 206 bits and its bound 230, which four primes
+        // cover, but not three.
+        let options = Options::default();
+        let prep = prepare(source(), &[1], 20, &[], &geometry, &options).unwrap();
+        let run = prep.run(&geometry, &options);
+        let residues = passes::<2, _>(&run, &options, Residues::new(1), 0).unwrap();
+        assert_eq!(residues.primes().len(), 6);
+        let lift = residues.lift();
+        assert_eq!(primes_needed(&run, &lift, residues.primes()), Ok(None));
+        assert_eq!(
+            primes_needed(&run, &lift, &residues.primes()[..4]),
+            Ok(None)
+        );
+        assert_eq!(
+            primes_needed(&run, &lift, &residues.primes()[..3]),
+            Ok(Some(4))
+        );
+        // More passes continue with the next primes and keep the lift.
+        let primes = residues.primes().to_vec();
+        let more = passes::<2, _>(&run, &options, residues, 9).unwrap();
+        assert_eq!(more.primes().len(), 10);
+        assert_eq!(more.primes()[..6], primes[..]);
+        assert_eq!(more.lift(), lift);
+    }
+
+    #[test]
+    fn test_certify_strata() {
+        let q = DMatrix::from_row_slice(6, 2, &[1, 0, 0, 1, -1, 1, 1, 1, 0, 1, 1, 0]);
+        let intnums = HashMap::from([((0, 1, 1), 4), ((1, 1, 1), 2)]);
+        let w = [2, 1];
+        let strata = [Stratum {
+            divisors: [1, 2, 4],
+            class: vec![(1, 1), (-1, 1)],
+        }];
+        let geometry = Geometry::from_toric(&q, &[], &intnums, CYKind::Threefold, &w)
+            .unwrap()
+            .with_strata(&strata, &w)
+            .unwrap();
+        let gens: [&[i32]; 2] = [&[0, 1], &[1, -1]];
+        let options = Options {
+            certify: true,
+            ..Options::default()
+        };
+        let source = CandidateSource::Generators(&gens);
+        assert_eq!(
+            compute_gv(source, &w, 5, &[], &geometry, &options),
+            Err(Error::CertifyStrata)
+        );
+        let source = CandidateSource::Generators(&gens);
+        assert_eq!(
+            bound_gv(source, &w, 5, &[], &geometry, &options, &[]),
+            Err(Error::CertifyStrata)
         );
     }
 }

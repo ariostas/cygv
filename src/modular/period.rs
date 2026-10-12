@@ -89,6 +89,10 @@ pub struct PeriodData<K, E> {
     pub c1: SparsePoly<K, E>,
     /// $S_2^{(k)}$, one value per bilinear form.
     pub s2: SparsePoly<K, E>,
+    /// If asked for, $c_1$ along the rows of the charges, the anticanonical ones and then those
+    /// of the divisors, so that $c_{1,a} = \sum_j Q^0_{ja} c_{1,j} + \sum_r Q_{ra} c_{1,r}$
+    /// (see [`period`]).
+    pub c1_rows: Option<SparsePoly<K, E>>,
     /// The tables used, which the later stages share. They cover every degree up to the
     /// maximum degree.
     pub tables: Tables<E>,
@@ -204,7 +208,8 @@ impl<'a, R: Ring> Evaluator<'a, R> {
     }
 
     /// Computes $c_0$, $c_{1,a}$ and $S_2^{(k)}$ at the curve class `c` into `c0`, `c1` and
-    /// `s2`, which must have one, $h^{1,1}$ and $M$ entries.
+    /// `s2`, which must have one, $h^{1,1}$ and $M$ entries, and $c_1$ along the rows into
+    /// `c1_rows` unless it is empty.
     fn point(
         &self,
         c: &[i32],
@@ -212,6 +217,7 @@ impl<'a, R: Ring> Evaluator<'a, R> {
         c0: &mut R::Elem,
         c1: &mut [R::Elem],
         s2: &mut [R::Elem],
+        c1_rows: &mut [R::Elem],
     ) -> Result<(), Error> {
         let ring = self.ring;
         let t = self.tables;
@@ -221,6 +227,7 @@ impl<'a, R: Ring> Evaluator<'a, R> {
         *c0 = zero;
         c1.fill(zero);
         s2.fill(zero);
+        c1_rows.fill(zero);
 
         let mut neg = [0usize; 3];
         let mut nneg = 0;
@@ -301,11 +308,21 @@ impl<'a, R: Ring> Evaluator<'a, R> {
         let a = &sc.a;
         let q = |r: usize, a: usize| self.q[r * h11 + a];
 
+        let n0 = sc.dq0.len();
         match nneg {
             0 => {
                 *c0 = fact;
                 for (c1a, &aa) in c1.iter_mut().zip(a) {
                     *c1a = ring.mul(fact, aa);
+                }
+                if !c1_rows.is_empty() {
+                    for (v, &d) in c1_rows.iter_mut().zip(&sc.dq0) {
+                        *v = ring.mul(fact, t.h1[d as usize]);
+                    }
+                    for (v, &d) in c1_rows[n0..].iter_mut().zip(&sc.dq) {
+                        let n = if d < 0 { -d - 1 } else { d };
+                        *v = ring.neg(ring.mul(fact, t.h1[n as usize]));
+                    }
                 }
                 self.contract(s2, |x, y| {
                     let mut v = ring.mul(a[x], a[y]);
@@ -335,6 +352,9 @@ impl<'a, R: Ring> Evaluator<'a, R> {
                 for (x, c1a) in c1.iter_mut().enumerate() {
                     *c1a = ring.mul(fs, q(s, x));
                 }
+                if !c1_rows.is_empty() {
+                    c1_rows[n0 + s] = fs;
+                }
                 self.contract(s2, |x, y| {
                     ring.add(ring.mul(a[x], q(s, y)), ring.mul(a[y], q(s, x)))
                 });
@@ -363,12 +383,19 @@ impl<'a, R: Ring> Evaluator<'a, R> {
 
 /// Computes the fundamental period data at the candidates, which come with their degrees in
 /// increasing order of degree and then key, as [`candidates`](super::candidates) gives them.
+///
+/// With `rows`, $c_1$ is also given along the rows of the charges: in $c_{1,a} = c_0 A_a$,
+/// $A_a = \sum_j H_{Q^0_j \cdot C}\, Q^0_{ja} - \sum_r H_{n_r} Q_{ra}$ is split into its terms, and
+/// with one negative intersection, $Q_s \cdot C < 0$, only row $s$ is nonzero. Exactly, that
+/// is the same series; for the majorant run it is what keeps the exponents of the extraction
+/// tight (see [`extract`](super::extraction::extract)).
 pub fn period<R: Ring, L: KeyLayout>(
     ring: &R,
     layout: &L,
     geometry: &Geometry,
     candidates: &[(L::Key, u32)],
     max_deg: u32,
+    rows: bool,
 ) -> Result<PeriodData<L::Key, R::Elem>, Error> {
     let h11 = geometry.h11();
     if layout.dim() != h11 {
@@ -403,6 +430,11 @@ pub fn period<R: Ring, L: KeyLayout>(
 
     let eval = Evaluator::new(ring, geometry, &tables)?;
     let m = geometry.n_forms();
+    let na = if rows {
+        geometry.n_anticanonical() + geometry.n_divisors()
+    } else {
+        0
+    };
     // Each chunk of candidates gives the terms of a range of keys, in order.
     let parts = candidates
         .par_chunks(chunk)
@@ -412,12 +444,14 @@ pub fn period<R: Ring, L: KeyLayout>(
             let mut c0 = SparsePoly::new(1);
             let mut c1 = SparsePoly::new(h11);
             let mut s2 = SparsePoly::new(m);
+            let mut c1r = SparsePoly::new(na);
             let mut v0 = R::Elem::default();
             let mut v1 = vec![R::Elem::default(); h11];
             let mut v2 = vec![R::Elem::default(); m];
+            let mut vr = vec![R::Elem::default(); na];
             for &(key, deg) in cands {
                 layout.unpack(key, &mut c);
-                eval.point(&c, &mut sc, &mut v0, &mut v1, &mut v2)?;
+                eval.point(&c, &mut sc, &mut v0, &mut v1, &mut v2, &mut vr)?;
                 if !ring.is_zero(v0) {
                     c0.push(key, deg, &[v0]);
                 }
@@ -427,19 +461,30 @@ pub fn period<R: Ring, L: KeyLayout>(
                 if v2.iter().any(|&x| !ring.is_zero(x)) {
                     s2.push(key, deg, &v2);
                 }
+                if vr.iter().any(|&x| !ring.is_zero(x)) {
+                    c1r.push(key, deg, &vr);
+                }
             }
-            Ok((c0, c1, s2))
+            Ok((c0, c1, s2, c1r))
         })
         .collect::<Result<Vec<_>, Error>>()?;
     let mut c0 = SparsePoly::new(1);
     let mut c1 = SparsePoly::new(h11);
     let mut s2 = SparsePoly::new(m);
-    for (p0, p1, p2) in parts {
+    let mut c1_rows = SparsePoly::new(na);
+    for (p0, p1, p2, pr) in parts {
         c0.append(p0);
         c1.append(p1);
         s2.append(p2);
+        c1_rows.append(pr);
     }
-    Ok(PeriodData { c0, c1, s2, tables })
+    Ok(PeriodData {
+        c0,
+        c1,
+        s2,
+        c1_rows: rows.then_some(c1_rows),
+        tables,
+    })
 }
 
 #[cfg(test)]
@@ -501,13 +546,67 @@ mod tests {
         // C . Q0 = -1 with no negative intersection.
         let g = Geometry::new(CYKind::Threefold, 1, vec![1], vec![-1], vec![1]).unwrap();
         assert_eq!(
-            period(&lf, &layout, &g, &cands, 2).unwrap_err(),
+            period(&lf, &layout, &g, &cands, 2, false).unwrap_err(),
             Error::NegativeAnticanonicalDegree
         );
         // With two negative intersections the curve contributes nothing.
         let g = Geometry::new(CYKind::Threefold, 1, vec![-1, -1], vec![-2], vec![1]).unwrap();
-        let pd = period(&lf, &layout, &g, &cands, 2).unwrap();
+        let pd = period(&lf, &layout, &g, &cands, 2, false).unwrap();
         assert_eq!(pd.c0.len(), 1);
         assert!(pd.c1.is_empty() && pd.s2.is_empty());
+    }
+
+    /// $c_1$ along the rows of the charges gives $c_1$ back, on the toy threefold.
+    #[test]
+    fn test_c1_rows() {
+        use crate::modular::candidates::candidates_by_enumeration;
+        use crate::modular::key::PackedLayout;
+        use nalgebra::DMatrix;
+        use std::collections::HashMap;
+        let q = DMatrix::from_column_slice(6, 2, &[1, 1, 1, 0, 1, 2, 0, 0, -1, 1, 1, -1]);
+        let intnums = HashMap::from([
+            ((0, 0, 0), 2),
+            ((1, 0, 0), 1),
+            ((0, 1, 1), -1),
+            ((1, 1, 1), 5),
+        ]);
+        let w = [3, -1];
+        let g = Geometry::from_toric(&q, &[], &intnums, CYKind::Threefold, &w).unwrap();
+        let layout = PackedLayout::new(&[20, 20]).unwrap();
+        let gens: [&[i32]; 2] = [&[0, -1], &[1, 2]];
+        let cands = candidates_by_enumeration(&layout, gens, &w, 8, &g).unwrap();
+        let lf = LaneField::new([primes().next().unwrap()]);
+        assert!(period(&lf, &layout, &g, &cands, 8, false)
+            .unwrap()
+            .c1_rows
+            .is_none());
+        let pd = period(&lf, &layout, &g, &cands, 8, true).unwrap();
+        let rows = pd.c1_rows.as_ref().unwrap();
+        assert_eq!(rows.width(), g.n_anticanonical() + g.n_divisors());
+        let terms = |p: &SparsePoly<_, _>| -> HashMap<_, Vec<_>> {
+            (0..p.len())
+                .map(|i| (p.keys()[i], p.values(i).to_vec()))
+                .collect()
+        };
+        let (c1, rows) = (terms(&pd.c1), terms(rows));
+        assert!(!c1.is_empty());
+        let m: Vec<&[i32]> = (0..g.n_anticanonical())
+            .map(|j| g.q0(j))
+            .chain((0..g.n_divisors()).map(|r| g.q(r)))
+            .collect();
+        for (key, row_vals) in &rows {
+            let expected: Vec<_> = (0..2)
+                .map(|a| {
+                    let mut v = Default::default();
+                    for (row, &x) in m.iter().zip(row_vals) {
+                        lf.fma(&mut v, lf.int(row[a] as i64), x);
+                    }
+                    v
+                })
+                .collect();
+            let got = c1.get(key).cloned().unwrap_or(vec![Default::default(); 2]);
+            assert_eq!(got, expected);
+        }
+        assert!(c1.keys().all(|k| rows.contains_key(k)));
     }
 }

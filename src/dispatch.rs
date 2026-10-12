@@ -24,6 +24,10 @@
 //! these defaults, since it takes a double description in dimension $h^{1,1}$. The
 //! intersection numbers and a grading vector that is given are checked against the fan.
 //!
+//! With `certify`, the results of the modular pipeline are proven exact (see
+//! [`modular::Options::certify`]); the reference pipeline is exact anyway. Vex phases cannot
+//! be certified yet.
+//!
 //! The reference pipeline still panics on invalid input, while the errors of the modular one
 //! are returned.
 
@@ -161,6 +165,7 @@ fn compute(
     target_points: Option<DMatrix<i32>>,
     n_threads: Option<u32>,
     method: Method,
+    certify: bool,
 ) -> Result<Results, ComputeError> {
     // From the fan: the strata, and, when needed, the Mori cone, which is expensive at large
     // h11: for a default grading vector, or as the cone without cone data or generators.
@@ -273,6 +278,7 @@ fn compute(
             max_deg,
             target_points.as_ref(),
             n_threads,
+            certify,
         );
         match res {
             Err(ComputeError::Modular(modular::Error::Key(
@@ -337,8 +343,9 @@ fn max_degree(targets: &[&[i32]], grading_vector: &[i32]) -> Option<u32> {
         .max()
 }
 
-/// Runs the modular pipeline with its default options and `n_threads` threads, with the
-/// candidates from the cone data. One of `max_deg` and `target_points` must be given.
+/// Runs the modular pipeline with its default options, `n_threads` threads and certified if
+/// `certify`, with the candidates from the cone data. One of `max_deg` and `target_points`
+/// must be given.
 #[allow(clippy::too_many_arguments)]
 fn run_modular(
     grading_vector: &RowDVector<i32>,
@@ -352,6 +359,7 @@ fn run_modular(
     max_deg: Option<u32>,
     target_points: Option<&DMatrix<i32>>,
     n_threads: Option<u32>,
+    certify: bool,
 ) -> Result<Results, ComputeError> {
     let grading_vector = grading_vector.as_slice();
     let targets: Vec<&[i32]> = target_points.map_or_else(Vec::new, |t| columns(t).collect());
@@ -363,6 +371,7 @@ fn run_modular(
     let options = Options {
         // Zero threads means one, as for the reference.
         threads: n_threads.map(|n| n.max(1) as usize),
+        certify,
         ..Options::default()
     };
     Ok(match invariant_kind {
@@ -441,6 +450,7 @@ pub fn compute_gvgw_strings(
     target_points: Option<DMatrix<i32>>,
     n_threads: Option<u32>,
     method: Method,
+    certify: bool,
 ) -> Result<Vec<Labeled<String>>, ComputeError> {
     let res = compute(
         generators,
@@ -458,6 +468,7 @@ pub fn compute_gvgw_strings(
         target_points,
         n_threads,
         method,
+        certify,
     )?;
     Ok(match res {
         Results::Reference(r) => r
@@ -498,6 +509,7 @@ pub fn compute_gv_rat_threefold(
     cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
+    certify: bool,
 ) -> Result<Vec<(DVector<i32>, Integer)>, ComputeError> {
     let res = compute(
         generators,
@@ -515,6 +527,7 @@ pub fn compute_gv_rat_threefold(
         target_points,
         n_threads,
         method,
+        certify,
     )?;
     Ok(res
         .into_gv()
@@ -538,6 +551,7 @@ pub fn compute_gw_rat_threefold(
     cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
+    certify: bool,
 ) -> Result<Vec<(DVector<i32>, Rational)>, ComputeError> {
     let res = compute(
         generators,
@@ -555,6 +569,7 @@ pub fn compute_gw_rat_threefold(
         target_points,
         n_threads,
         method,
+        certify,
     )?;
     Ok(res
         .into_gw()
@@ -578,6 +593,7 @@ pub fn compute_gv_rat_nfold(
     cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
+    certify: bool,
 ) -> Result<Vec<Labeled<Integer>>, ComputeError> {
     let res = compute(
         generators,
@@ -595,6 +611,7 @@ pub fn compute_gv_rat_nfold(
         target_points,
         n_threads,
         method,
+        certify,
     )?;
     Ok(res.into_gv())
 }
@@ -614,6 +631,7 @@ pub fn compute_gw_rat_nfold(
     cone_data: Option<ConeData>,
     n_threads: Option<u32>,
     method: Method,
+    certify: bool,
 ) -> Result<Vec<Labeled<Rational>>, ComputeError> {
     let res = compute(
         generators,
@@ -631,6 +649,7 @@ pub fn compute_gw_rat_nfold(
         target_points,
         n_threads,
         method,
+        certify,
     )?;
     Ok(res.into_gw())
 }

@@ -190,6 +190,7 @@ def test_methods() -> None:
     assert expected[:2] == [((1,), 2875), ((2,), 609250)]
     for method in (None, "auto", "modular", "Modular"):
         assert sorted(compute_gv(*args, max_deg=5, method=method)) == expected
+    assert sorted(compute_gv(*args, max_deg=5, certify=True)) == expected
     expected = sorted(compute_gw(*args, max_deg=5, method="reference"))
     assert expected[1] == ((2,), Fraction(609250 * 8 + 2875, 8))
     assert sorted(compute_gw(*args, max_deg=5, method="modular")) == expected
@@ -276,6 +277,8 @@ def test_vex_phase() -> None:
         compute_gv(None, None, q, intnums, max_deg=4, fan=fan, strata=strata)
     with pytest.raises(ValueError, match="intersection ring"):
         compute_gv(None, None, q, {(0, 1, 1): 4, (1, 1, 1): 3}, max_deg=4, fan=fan)
+    with pytest.raises(ValueError, match="vex phase"):
+        compute_gv(None, None, q, intnums, max_deg=4, fan=fan, certify=True)
 
 
 def test_cone_data() -> None:

@@ -33,6 +33,9 @@
 //! # uses the modular one, which is much faster, whenever max_deg or target_points
 //! # is given.
 //! method: auto
+//! # Whether to prove the results of the modular pipeline exact, taking more primes if
+//! # needed (not in vex phases). Defaults to false.
+//! certify: false
 //! ```
 //!
 //! A vex phase of the ambient toric variety also needs its strata (see [`Stratum`]), each
@@ -102,7 +105,7 @@ use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
 /// The fields that are accepted in an input document.
-const INPUT_FIELDS: [&str; 18] = [
+const INPUT_FIELDS: [&str; 19] = [
     "name",
     "generators",
     "grading_vector",
@@ -116,6 +119,7 @@ const INPUT_FIELDS: [&str; 18] = [
     "is_threefold",
     "n_threads",
     "method",
+    "certify",
     "strata",
     "fan",
     "mori_hyperplanes",
@@ -163,6 +167,9 @@ pub struct Input {
     pub n_threads: Option<u32>,
     /// Which pipeline to use.
     pub method: Method,
+    /// Whether to prove the results of the modular pipeline exact (see
+    /// [`crate::modular::Options::certify`]).
+    pub certify: bool,
 }
 
 /// A computed invariant, consisting of a curve class, a reference surface index that
@@ -285,6 +292,12 @@ impl Input {
         let n_threads = get_field(hash, "n_threads")
             .map(|y| as_u32(y, "n_threads"))
             .transpose()?;
+        let certify = match get_field(hash, "certify") {
+            None => false,
+            Some(y) => y
+                .as_bool()
+                .ok_or_else(|| IoError::invalid_field("certify", "expected a boolean"))?,
+        };
         let method = match get_field(hash, "method") {
             None => Method::default(),
             Some(y) => y.as_str().and_then(Method::from_name).ok_or_else(|| {
@@ -408,6 +421,7 @@ impl Input {
             target_points,
             n_threads,
             method,
+            certify,
         })
     }
 
@@ -456,6 +470,7 @@ impl Input {
             self.target_points.clone(),
             self.n_threads,
             self.method,
+            self.certify,
         )
     }
 
@@ -1183,6 +1198,17 @@ cones:
             load_one(&format!("{THREEFOLD}method: modular\n")),
             Err(IoError::InvalidField { field, reason })
                 if field == "method" && reason.contains("min_points")
+        ));
+    }
+
+    #[test]
+    fn test_parse_certify() {
+        let base = THREEFOLD.replace("min_points: 20\n", "max_deg: 5\n");
+        assert!(!load_one(&base).unwrap().certify);
+        assert!(load_one(&format!("{base}certify: true\n")).unwrap().certify);
+        assert!(matches!(
+            load_one(&format!("{base}certify: 1\n")),
+            Err(IoError::InvalidField { field, .. }) if field == "certify"
         ));
     }
 

@@ -33,6 +33,9 @@ pub struct InstantonData<K, E> {
     pub alpha: SparsePoly<K, E>,
     /// $I^{(k)}$, one value per bilinear form.
     pub inst: SparsePoly<K, E>,
+    /// $\beta = c_1 / c_0$ along the rows of the charges, if the period has $c_1$ along them,
+    /// so that $\alpha_a = \sum_j Q^0_{ja} \beta_j + \sum_r Q_{ra} \beta_r$.
+    pub beta: Option<SparsePoly<K, E>>,
 }
 
 /// Splits the indices `0..n` into at most `n_chunks` consecutive ranges of similar total
@@ -194,6 +197,10 @@ pub fn instanton<R: Ring, K: Key>(
     let c0_inv = recip(ring, &period.c0, max_deg, &mut acc)?;
     drop(acc);
     let alpha = mul_scalar(ring, &c0_inv, &period.c1, max_deg);
+    let beta = period
+        .c1_rows
+        .as_ref()
+        .map(|c1| mul_scalar(ring, &c0_inv, c1, max_deg));
 
     let acc = ShardedMap::new(m, n_shards(), period.s2.len() + alpha.len());
     mul_scalar_into(ring, &c0_inv, &period.s2, max_deg, &acc);
@@ -263,7 +270,7 @@ pub fn instanton<R: Ring, K: Key>(
         |out, v| add_into(ring, out, v),
     );
     let inst = acc.take();
-    Ok(InstantonData { alpha, inst })
+    Ok(InstantonData { alpha, inst, beta })
 }
 
 #[cfg(test)]

@@ -1157,6 +1157,7 @@ fn gv_from_fan(
         None,
         None,
         method,
+        false,
     )?;
     Ok(res
         .into_iter()
@@ -1224,6 +1225,7 @@ fn test_compute_from_fan() {
         None,
         None,
         Method::Auto,
+        false,
     );
     assert_eq!(
         negative,
@@ -1246,6 +1248,7 @@ fn test_compute_from_fan() {
         None,
         None,
         Method::Auto,
+        false,
     );
     assert_eq!(
         nfold,
@@ -1265,6 +1268,7 @@ fn test_compute_from_fan() {
         None,
         None,
         Method::Auto,
+        false,
     );
     assert_eq!(without, Err(ComputeError::MissingGradingVector));
 }

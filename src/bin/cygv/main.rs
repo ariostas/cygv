@@ -44,10 +44,18 @@ The optional fields are the following.
                  mappings with the three divisors of a stratum and its class,
                  e.g. {divisors: [1, 2, 4], class: [1, \"-1/2\"]}. Only for
                  threefold hypersurfaces.
+  fan            The maximal cones of the fan of the ambient toric variety, as
+                 lists of indices of the divisors. The strata are derived from
+                 it, and so are the grading vector and the Mori cone when they
+                 are left out. Only for threefold hypersurfaces.
   method         Which pipeline to use: auto, modular or reference. It defaults
                  to auto. The modular pipeline is much faster, but does not
                  support min_points; auto uses it when it can, and the reference
                  pipeline otherwise.
+  certify        Whether to prove the results of the modular pipeline exact: it
+                 bounds every invariant, and takes more primes until the bounds
+                 are below half their product. It defaults to false, and is not
+                 supported in vex phases. The reference pipeline is exact anyway.
 
 The modular pipeline is much faster with cone data, which programs such as
 Normaliz compute (see examples/cones.yaml, and examples/vex.yaml for a vex
@@ -86,6 +94,9 @@ struct Args {
     /// Pipeline to use. It overrides the value given in the input
     #[arg(short, long, value_parser = parse_method)]
     method: Option<Method>,
+    /// Prove the results exact, for every input
+    #[arg(long)]
+    certify: bool,
 }
 
 /// Parse the name of a method.
@@ -136,6 +147,7 @@ fn run(args: &Args) -> Result<(), Box<dyn Error>> {
         if let Some(method) = args.method {
             input.method = method;
         }
+        input.certify |= args.certify;
     }
 
     let mut writer = open_output(args.output.as_ref())?;

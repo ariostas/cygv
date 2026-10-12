@@ -47,6 +47,7 @@ fn test_threefold() {
         None,
         None,
         Method::Reference,
+        false,
     )
     .unwrap();
     compute_gw_rat_threefold(
@@ -63,6 +64,7 @@ fn test_threefold() {
         None,
         None,
         Method::Reference,
+        false,
     )
     .unwrap();
 }
@@ -189,6 +191,7 @@ fn test_fourfold() {
         None,
         None,
         Method::Reference,
+        false,
     )
     .unwrap();
     compute_gw_rat_nfold(
@@ -205,6 +208,7 @@ fn test_fourfold() {
         None,
         None,
         Method::Reference,
+        false,
     )
     .unwrap();
 
@@ -224,6 +228,7 @@ fn test_fourfold() {
             None,
             None,
             method,
+            false,
         )
         .unwrap();
         res.sort_unstable_by(|a, b| (a.0 .0.as_slice(), a.0 .1).cmp(&(b.0 .0.as_slice(), b.0 .1)));
@@ -244,6 +249,7 @@ fn test_fourfold() {
             None,
             None,
             method,
+            false,
         )
         .unwrap();
         res.sort_unstable_by(|a, b| (a.0 .0.as_slice(), a.0 .1).cmp(&(b.0 .0.as_slice(), b.0 .1)));
@@ -280,6 +286,7 @@ fn test_methods() {
             None,
             None,
             method,
+            false,
         )
         .map(|mut res| {
             res.sort_unstable_by(|a, b| a.0.as_slice().cmp(b.0.as_slice()));
@@ -301,6 +308,7 @@ fn test_methods() {
             None,
             None,
             method,
+            false,
         )
         .unwrap();
         res.sort_unstable_by(|a, b| a.0.as_slice().cmp(b.0.as_slice()));

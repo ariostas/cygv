@@ -145,7 +145,7 @@ fn check(case: &Case) {
         &geometry,
     )
     .unwrap();
-    let pd = period(&lf, &layout, &geometry, &cands, case.max_deg).unwrap();
+    let pd = period(&lf, &layout, &geometry, &cands, case.max_deg, false).unwrap();
     let inst = instanton(&lf, &geometry, &pd, case.max_deg).unwrap();
 
     // The candidates are the elements with at most two negative intersections, and those on
@@ -279,6 +279,7 @@ fn check_gw(case: &Case) {
             None,
             None,
             method,
+            false,
         )
         .unwrap();
         res.into_iter()
@@ -608,6 +609,7 @@ fn strings(
         targets.cloned(),
         None,
         method,
+        false,
     )
     .unwrap()
     .into_iter()
@@ -851,6 +853,7 @@ fn check_vex_cones(case: &Case) {
             targets,
             None,
             method,
+            false,
         )
         .unwrap()
         .into_iter()

@@ -26,7 +26,7 @@ use malachite::{Integer, Rational};
 use std::collections::HashMap;
 
 /// The greatest common divisor of the absolute values of the coordinates.
-fn gcd(c: &[i32]) -> u32 {
+pub(crate) fn gcd(c: &[i32]) -> u32 {
     c.iter().fold(0u32, |mut a, &x| {
         let mut b = x.unsigned_abs();
         while b != 0 {

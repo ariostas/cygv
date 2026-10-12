@@ -130,10 +130,13 @@ second at $h^{1,1} = 491$, so the dispatch only calls it for a default it needs.
 tuned. It computes modulo word-sized primes and lifts the results with the CRT, and shares no
 code with `reference`. Its primitives are `field` (Montgomery arithmetic,
 `Lanes<NL>` residues, and the `Ring` trait the stages are written against, which takes the
-primes as a context), `key` (curve classes packed into fixed-size keys that add like the
-classes, with a layout sized per run from coordinate bounds) and `table` (open-addressing
-tables and sparse series over those keys, each entry holding a run-time number of values).
-A *pass* runs the stages modulo `NL` primes: `candidates` (from a `CandidateSource`: either
+primes as a context), `bound` (`BoundRing`, the other `Ring`: upward-rounded nonnegative
+bounds for the certifier of `PLAN.md` phase 8, an `f64` mantissa with an `i64` exponent moved
+up by `next_up` after each operation, subtraction being addition), `key` (curve classes packed
+into fixed-size keys that add like the classes, with a layout sized per run from coordinate
+bounds) and `table` (open-addressing tables and sparse series over those keys, each entry
+holding a run-time number of values). A *pass* (`pass`, generic over the `Ring`) runs the
+stages modulo `NL` primes: `candidates` (from a `CandidateSource`: either
 the sums of the Hilbert basis elements of each $K_T$ of the cone data, skipping cones contained
 in another and two-divisor cones whose form $Q_s K^{(k)} Q_u$ vanishes, as the C does, or the
 whole semigroup of the generators up to `max_deg`, enumerated in order of degree and filtered
@@ -154,8 +157,17 @@ threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats pa
 next primes until `crt::Residues` gives a stable lift (the lift from all but the last
 `check_primes` primes must agree with those), with `Options` for the lane count (2 to 4 primes
 per pass; by default `choose_lanes` predicts it from a probe run at 3/4 of the degree, as the
-C's driver does), a minimum number of primes, the thread count and the extraction's tuning;
-big integers (`malachite::Integer`) are only built by `crt`, for the final values.
+C's driver does), a minimum number of primes, the thread count, the extraction's tuning and
+`certify`; big integers (`malachite::Integer`) are only built by `crt`, for the final values.
+With `certify` (the certifier, `PLAN.md` phase 8, after the C's `cgv_maj` and `certify.py`),
+`lifted` runs `bounds` on the lift and `primes_needed` compares every bound with half the
+product of the primes, adding passes until it is below: `bounds` is a `pass` over `BoundRing`
+whose extraction `source` makes every curve pass on what the candidates imply,
+$\deg(C) \sum_{n \mid C} \lvert\mathrm{GV}_{C/n}\rvert / n^3$ ($n^2$ and no degree for n-folds), instead of
+its own bound, and whose exponentials go along the rows of the charges ($c_1$ along the rows
+from `period`, $\beta$ from `instanton`, `rows` in `extract`), so a term vanishes with
+$Q_r \cdot C$; the result matches `cgv_maj`'s curve set and is at or below its bounds. Vex
+phases are refused (`Error::CertifyStrata`), as by the C. `bound_gv` exposes the bounds.
 `compute_gw` derives the GW invariants from the lifted GV invariants
 (`multicover::gw_from_gv`, in `malachite::Rational`), since they are not integers. Both truncate by
 `max_deg` and optionally by target points: `lightcone` holds the union of their backward
@@ -230,7 +242,9 @@ indices differently (the first index is a reference surface in the n-fold case).
   no cone data, and its grading vector is used when `grading_vector` is empty
   (`ComputeError::MissingGradingVector` without a fan), the Mori cone being computed only
   for those; the intersection numbers and a given grading vector are checked against it,
-  and its errors are `ComputeError::InvalidFan`.
+  and its errors are `ComputeError::InvalidFan`. `certify` (the last argument, YAML
+  `certify`, `--certify`, Python `certify=`) sets `modular::Options::certify`; the reference
+  is exact anyway.
   `run_hkty<T>` is generic over the coefficient type, which is only ever `reference::Rational`
   (`src/reference/rational.rs`) today, and takes the `InvariantKind` and `CYKind` enums at runtime. Adding an option means touching
   all of the dispatch sites. The computation is always exact: floating-point arithmetic (the old
@@ -321,7 +335,7 @@ parsed on the Python side into `int` or `fractions.Fraction` depending on `find_
 `is_threefold` from the shape of `q` and the nef partition, and run the Rust call in a
 `multiprocessing.Process` so Ctrl-C interrupts the computation without killing the interpreter
 (the Rust side installs a ctrlc handler that calls `exit(1)`). They take `method` (a name, or
-`None` for the Rust default) and `n_threads`, and `generators` and `grading_vector` may be
+`None` for the Rust default), `n_threads` and `certify`, and `generators` and `grading_vector` may be
 `None` (with cone data or a `fan`; `None` becomes an empty list). Exceptions raised in the subprocess keep their type
 (an invalid `method` or a `ComputeError` is a `ValueError`), except panics, which become a
 `RuntimeError`. The subprocess's stderr is redirected to a temp file and surfaced in the raised

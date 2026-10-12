@@ -35,6 +35,7 @@ def _compute_gvgw_subprocess(
     mori_equations: list[Any] | None = None,
     cones: list[Any] | None = None,
     fan: list[Any] | None = None,
+    certify: bool = False,
 ) -> None:
     with stderr_path.open("wb") as f:
         os.dup2(f.fileno(), 2)
@@ -58,6 +59,7 @@ def _compute_gvgw_subprocess(
                 mori_equations,
                 cones,
                 fan,
+                certify,
             )
         )
     # Errors that the Rust side reports, such as invalid input, keep their type.
@@ -91,6 +93,7 @@ def _wrapped_compute_gvgw(
     mori_equations: list[Any] | None = None,
     cones: list[Any] | None = None,
     fan: list[Any] | None = None,
+    certify: bool = False,
 ) -> Any:
     parent_conn, child_conn = Pipe(duplex=False)
     with tempfile.NamedTemporaryFile(delete=False) as f:
@@ -117,6 +120,7 @@ def _wrapped_compute_gvgw(
             mori_equations,
             cones,
             fan,
+            certify,
         ),
     )
     process.start()
@@ -233,6 +237,7 @@ def compute_gv(
     mori_equations: ArrayLike | None = None,
     cones: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
     fan: Iterable[ArrayLike] | None = None,
+    certify: bool = False,
 ) -> list[Any]:
     generators = _regularize_vectors(generators, "generators") or []
     grading_vector = np.array(
@@ -259,6 +264,7 @@ def compute_gv(
         _regularize_vectors(mori_equations, "mori_equations"),
         _regularize_cones(cones),
         _regularize_fan(fan),
+        certify,
     )
     if is_threefold:
         res = [(tuple(v), int(gv)) for ((v, _), gv) in res_tmp]
@@ -283,6 +289,7 @@ def compute_gw(
     mori_equations: ArrayLike | None = None,
     cones: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
     fan: Iterable[ArrayLike] | None = None,
+    certify: bool = False,
 ) -> list[Any]:
     generators = _regularize_vectors(generators, "generators") or []
     grading_vector = np.array(
@@ -309,6 +316,7 @@ def compute_gw(
         _regularize_vectors(mori_equations, "mori_equations"),
         _regularize_cones(cones),
         _regularize_fan(fan),
+        certify,
     )
     if is_threefold:
         res = [(tuple(v), Fraction(gw)) for ((v, _), gw) in res_tmp]

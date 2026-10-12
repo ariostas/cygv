@@ -76,6 +76,12 @@ implementation of the HKTY procedure with exact rational arithmetic, and support
 default, `auto`, uses the modular one whenever it can. `n_threads` sets the number of threads,
 which defaults to one per core.
 
+The modular implementation accepts its result once one more prime agrees with it, which makes a
+wrong result vanishingly unlikely but does not rule it out. With `certify=True` it proves the
+result instead: it bounds every invariant from above, by running the computation once more over
+upward-rounded reals, and takes more primes until every bound is below half their product, which
+costs about as much as the computation itself. Vex phases cannot be certified yet.
+
 The curve classes are all the lattice points of the Mori cone that the generators span, even when
 the generators miss some (as a sample of lattice points can), except when none of `max_deg`,
 `min_points` and `target_points` is given, where the generators are used as given. The modular
@@ -155,7 +161,8 @@ results:
 ```
 
 Run `cygv --help` for the full list of input fields and options, such as `method` (which can also
-be set for every document with `--method`), and see the `examples` directory for complete inputs.
+be set for every document with `--method`) and `certify` (`--certify`), and see the `examples`
+directory for complete inputs.
 
 ## License
 

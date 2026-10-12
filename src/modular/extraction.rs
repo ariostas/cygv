@@ -41,6 +41,10 @@ const PREFETCH: usize = 4;
 /// The number of terms a worker buffers for a shard before it subtracts them.
 const FLUSH: usize = 1024;
 
+/// What the curves pass on instead of their coefficients (see [`extract`]): given a curve
+/// and its degree, it writes the values over them.
+pub type Source<'a, E> = &'a dyn Fn(&[i32], u32, &mut [E]);
+
 /// When the extraction applies a layer level-synchronously rather than curve by curve (see
 /// [`extract`]). The defaults were tuned on a machine with four cores and hyperthreading.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,23 +88,33 @@ impl<K: Key, E: Copy + Default + PartialEq> LTerms<K, E> {
     }
 
     /// Computes the terms of degree at most `top` for `curve`, with `ints` the images of the
-    /// integers up to `top`.
+    /// integers up to `top`, and `alpha` along `rows` if given (see [`extract`]).
     fn build<R: Ring<Elem = E>>(
         &mut self,
         ring: &R,
         curve: &[i32],
         alpha: &SparsePoly<K, E>,
+        rows: Option<&[Vec<i32>]>,
         ints: &[E],
         top: u32,
     ) {
         self.coords.clear();
-        self.coords.extend(
-            curve
-                .iter()
-                .enumerate()
-                .filter(|&(_, &c)| c != 0)
-                .map(|(a, &c)| (a, ring.int(c as i64))),
-        );
+        match rows {
+            None => self.coords.extend(
+                curve
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &c)| c != 0)
+                    .map(|(a, &c)| (a, ring.int(c as i64))),
+            ),
+            Some(rows) => self.coords.extend(
+                rows.iter()
+                    .map(|row| super::dot(curve, row))
+                    .enumerate()
+                    .filter(|&(_, x)| x != 0)
+                    .map(|(r, x)| (r, ring.int(x))),
+            ),
+        }
         self.keys.clear();
         self.vals.clear();
         self.groups.clear();
@@ -203,12 +217,13 @@ impl<K: Key, E: Copy + Default + PartialEq> ExpWorkspace<K, E> {
         ring: &R,
         curve: &[i32],
         alpha: &SparsePoly<K, E>,
+        rows: Option<&[Vec<i32>]>,
         ints: &[E],
         inv: &[E],
         top: u32,
         mut emit: impl FnMut(K, u32, E),
     ) {
-        self.l.build(ring, curve, alpha, ints, top);
+        self.l.build(ring, curve, alpha, rows, ints, top);
         *self.levels[0].get_or_insert(K::default()) = ring.one();
         for e in 0..=top {
             let level = &mut self.levels[e as usize];
@@ -330,6 +345,7 @@ struct LayerCtx<'a, R: Ring, L: KeyLayout> {
     ring: &'a R,
     layout: &'a L,
     alpha: &'a SparsePoly<L::Key, R::Elem>,
+    rows: Option<&'a [Vec<i32>]>,
     ints: &'a [R::Elem],
     inv: &'a [R::Elem],
     max_deg: u32,
@@ -358,6 +374,7 @@ impl<R: Ring, L: KeyLayout> LayerCtx<'_, R, L> {
                 self.ring,
                 curve,
                 self.alpha,
+                self.rows,
                 self.ints,
                 self.inv,
                 self.max_deg - dc,
@@ -385,7 +402,7 @@ impl<R: Ring, L: KeyLayout> LayerCtx<'_, R, L> {
                 let mut curve = vec![0; self.layout.dim()];
                 self.layout.unpack(key, &mut curve);
                 let mut l = LTerms::new();
-                l.build(ring, &curve, self.alpha, self.ints, top);
+                l.build(ring, &curve, self.alpha, self.rows, self.ints, top);
                 let levels: Vec<_> = (0..=top)
                     .map(|_| Mutex::new(LevelTable::new(sentinel)))
                     .collect();
@@ -451,8 +468,17 @@ impl<R: Ring, L: KeyLayout> LayerCtx<'_, R, L> {
 /// per term as `inst`.
 ///
 /// `alpha` holds the $\alpha_a$, one value per coordinate of `layout`, and must have no
-/// constant term; `inv` holds the inverses of the integers up to `max_deg` at least. Only the
+/// constant term. With `rows`, it instead holds $\beta$ along those rows $M_r$, one value per
+/// row, with $\alpha_a = \sum_r M_{ra} \beta_r$, so that $C \cdot \alpha = \sum_r (M_r \cdot C)
+/// \beta_r$: the same exactly, but for the majorant run each term $(M_r \cdot C) \beta_r$ is
+/// bounded by itself, and vanishes with $M_r \cdot C$, rather than through
+/// $\sum_a \lvert C_a\rvert \lvert\alpha_a\rvert$; `inv` holds the inverses of the integers up to `max_deg` at least. Only the
 /// curves in `lightcone` are subtracted, so the coefficients are only right in there.
+///
+/// With `source`, each curve's $n_C$ is still what the result holds, but what is subtracted
+/// is $q^C$ times the values `source` writes over it, given the curve and its degree. The
+/// certifier's majorant run passes the values the candidate invariants imply, so that the
+/// bounds do not compound from degree to degree.
 ///
 /// It runs on the threads of the current rayon pool. Every term of $\exp(C \cdot \alpha)$
 /// but the first has at least the lowest degree $\delta$ in the support of $\alpha$, so the
@@ -469,14 +495,20 @@ pub fn extract<R: Ring, L: KeyLayout>(
     ring: &R,
     layout: &L,
     alpha: &SparsePoly<L::Key, R::Elem>,
+    rows: Option<&[Vec<i32>]>,
     inst: &SparsePoly<L::Key, R::Elem>,
     inv: &[R::Elem],
     max_deg: u32,
     lightcone: &Lightcone<L::Key>,
     tuning: &Tuning,
+    source: Option<Source<'_, R::Elem>>,
 ) -> Result<SparsePoly<L::Key, R::Elem>, Error> {
     let h11 = layout.dim();
-    if alpha.width() != h11 || inv.len() <= max_deg as usize {
+    let n_alpha = rows.map_or(h11, |r| r.len());
+    if alpha.width() != n_alpha
+        || rows.is_some_and(|r| r.iter().any(|row| row.len() != h11))
+        || inv.len() <= max_deg as usize
+    {
         return Err(Error::DimensionMismatch);
     }
     assert!(
@@ -540,8 +572,17 @@ pub fn extract<R: Ring, L: KeyLayout>(
                 if !lightcone.contains(kc, &curve) {
                     continue;
                 }
-                layer.push((kc, dc));
+                let start = layer_vals.len();
                 layer_vals.extend_from_slice(n_c);
+                if let Some(source) = source {
+                    let vals = &mut layer_vals[start..];
+                    source(&curve, dc, vals);
+                    if vals.iter().all(|&x| ring.is_zero(x)) {
+                        layer_vals.truncate(start);
+                        continue;
+                    }
+                }
+                layer.push((kc, dc));
             }
         }
         if layer.is_empty() {
@@ -552,6 +593,7 @@ pub fn extract<R: Ring, L: KeyLayout>(
             ring,
             layout,
             alpha,
+            rows,
             ints: &ints,
             inv,
             max_deg,
@@ -708,11 +750,13 @@ mod tests {
                 &lf,
                 &layout,
                 &alpha,
+                None,
                 &inst,
                 &inv,
                 max_deg,
                 &Lightcone::All,
                 &Tuning::default(),
+                None,
             )
             .unwrap();
             let got: HashMap<PackedKey, Vec<E>> = (0..got.len())
@@ -721,6 +765,73 @@ mod tests {
             let expected: HashMap<PackedKey, Vec<E>> =
                 n.iter().map(|(c, v)| (layout.pack(c), v.clone())).collect();
             assert_eq!(got, expected, "width {width}");
+
+            // A source that gives each curve its own coefficient changes nothing, and one that
+            // gives zero leaves the series as it was.
+            let with = |source: Source<'_, E>| {
+                let got = extract(
+                    &lf,
+                    &layout,
+                    &alpha,
+                    None,
+                    &inst,
+                    &inv,
+                    max_deg,
+                    &Lightcone::All,
+                    &Tuning::default(),
+                    Some(source),
+                )
+                .unwrap();
+                (0..got.len())
+                    .map(|i| (got.keys()[i], got.values(i).to_vec()))
+                    .collect::<HashMap<PackedKey, Vec<E>>>()
+            };
+            let own = |c: &[i32], _: u32, v: &mut [E]| v.copy_from_slice(&n[&[c[0], c[1]]]);
+            assert_eq!(with(&own), expected, "width {width}");
+            let unchanged: HashMap<PackedKey, Vec<E>> = (0..inst.len())
+                .map(|i| (inst.keys()[i], inst.values(i).to_vec()))
+                .collect();
+            let zero = |_: &[i32], _: u32, v: &mut [E]| v.fill(E::default());
+            assert_eq!(with(&zero), unchanged, "width {width}");
+
+            // The same along rows: beta on three rows, and alpha_a = sum_r M_ra beta_r.
+            let rows = vec![vec![1, 0], vec![2, -1], vec![0, 3]];
+            let mut beta_map = SlotMap::new(3, 16);
+            let mut alpha_map = SlotMap::new(2, 16);
+            for u in 0..alpha.len() {
+                let (k, d) = (alpha.keys()[u], alpha.degs()[u]);
+                let b: Vec<E> = (0..3).map(|_| lf.int(rng.range(-5, 5))).collect();
+                beta_map.get_or_insert(k, d).copy_from_slice(&b);
+                for (a, v) in alpha_map.get_or_insert(k, d).iter_mut().enumerate() {
+                    for (row, &x) in rows.iter().zip(&b) {
+                        lf.fma(v, lf.int(row[a] as i64), x);
+                    }
+                }
+            }
+            let (beta, alpha_m) = (beta_map.take(), alpha_map.take());
+            let run = |a: &SparsePoly<PackedKey, E>, r: Option<&[Vec<i32>]>| {
+                let got = extract(
+                    &lf,
+                    &layout,
+                    a,
+                    r,
+                    &inst,
+                    &inv,
+                    max_deg,
+                    &Lightcone::All,
+                    &Tuning::default(),
+                    None,
+                )
+                .unwrap();
+                (0..got.len())
+                    .map(|i| (got.keys()[i], got.values(i).to_vec()))
+                    .collect::<HashMap<PackedKey, Vec<E>>>()
+            };
+            assert_eq!(
+                run(&beta, Some(&rows)),
+                run(&alpha_m, None),
+                "width {width}"
+            );
         }
     }
 
@@ -736,11 +847,13 @@ mod tests {
                 &lf,
                 &layout,
                 &empty,
+                None,
                 &inst,
                 &inv,
                 5,
                 &Lightcone::All,
-                &Tuning::default()
+                &Tuning::default(),
+                None,
             ),
             Err(Error::DimensionMismatch)
         );
@@ -749,11 +862,13 @@ mod tests {
                 &lf,
                 &layout,
                 &SparsePoly::new(3),
+                None,
                 &inst,
                 &inv,
                 4,
                 &Lightcone::All,
-                &Tuning::default()
+                &Tuning::default(),
+                None,
             ),
             Err(Error::DimensionMismatch)
         );
@@ -761,11 +876,13 @@ mod tests {
             &lf,
             &layout,
             &empty,
+            None,
             &inst,
             &inv,
             4,
             &Lightcone::All,
-            &Tuning::default()
+            &Tuning::default(),
+            None,
         )
         .unwrap()
         .is_empty());
