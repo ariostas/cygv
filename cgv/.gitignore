@@ -1,0 +1,10 @@
+# build products
+*.o
+/cgv
+/cgv_gpu
+/cgv_hip
+/cgv_maj
+/.cflags
+/.nvflags
+/.hipflags
+**/__pycache__/
