@@ -44,6 +44,7 @@ fn test_stress() {
     let by_level = Tuning {
         sync_max_curves: usize::MAX,
         sync_min_terms: 0,
+        ..Tuning::default()
     };
     for (name, input, max_deg, cones) in cases {
         let one = Options {

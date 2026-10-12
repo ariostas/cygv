@@ -115,6 +115,75 @@ pub(crate) fn check_strata(
     Ok(())
 }
 
+/// Checks that the nef partition, unless it is empty (a hypersurface), splits the
+/// `n_divisors` toric divisors, i.e. the rows of the charges, into nonempty parts, which
+/// makes its anticanonical rows sum to the anticanonical class, returning what is wrong
+/// otherwise.
+pub(crate) fn check_nefpart(
+    nefpart: &[nalgebra::DVector<i32>],
+    n_divisors: usize,
+) -> Result<(), &'static str> {
+    if nefpart.is_empty() {
+        return Ok(());
+    }
+    let mut seen = vec![false; n_divisors];
+    for part in nefpart {
+        if part.is_empty() {
+            return Err("the parts of the nef partition must not be empty");
+        }
+        for &r in part.iter() {
+            let r = usize::try_from(r)
+                .ok()
+                .filter(|&r| r < n_divisors)
+                .ok_or("the nef partition must consist of indices of rows of the charges")?;
+            if core::mem::replace(&mut seen[r], true) {
+                return Err("the parts of the nef partition must be disjoint");
+            }
+        }
+    }
+    if seen.contains(&false) {
+        return Err("the nef partition must include every row of the charges");
+    }
+    Ok(())
+}
+
+/// Checks that the intersection numbers are indexed by the `h11` divisors of the basis (but
+/// the first index of an n-fold, a reference surface), that each one is given in one
+/// ordering of its indices only, and that some of them do not vanish, returning what is
+/// wrong otherwise.
+pub(crate) fn check_intnums(
+    intnums: &std::collections::HashMap<(usize, usize, usize), i32>,
+    h11: usize,
+    cy_kind: CYKind,
+) -> Result<(), &'static str> {
+    let mut seen = std::collections::HashSet::new();
+    for (&(i, j, k), &v) in intnums {
+        let idx = match cy_kind {
+            CYKind::Threefold => {
+                let mut idx = [i, j, k];
+                idx.sort_unstable();
+                idx
+            }
+            CYKind::Nfold => [i, j.min(k), j.max(k)],
+        };
+        if idx[1..].iter().any(|&x| x >= h11) || (cy_kind.is_threefold() && idx[0] >= h11) {
+            return Err(match cy_kind {
+                CYKind::Threefold => "the indices of the intersection numbers must be below h11",
+                CYKind::Nfold => {
+                    "the last two indices of the intersection numbers must be below h11"
+                }
+            });
+        }
+        if v != 0 && !seen.insert(idx) {
+            return Err("each intersection number must be given in one ordering of its indices");
+        }
+    }
+    if seen.is_empty() {
+        return Err("there must be at least one nonzero intersection number");
+    }
+    Ok(())
+}
+
 /// The likely causes of GV invariants that are not integers, for the error messages of both
 /// pipelines.
 pub(crate) const NON_INTEGER_CAUSES: &str = "this usually means that the input is \
@@ -125,7 +194,8 @@ pub(crate) const NON_INTEGER_CAUSES: &str = "this usually means that the input i
 /// Which pipeline computes the invariants.
 ///
 /// Both compute the same invariants exactly. The modular pipeline is much faster, but only
-/// supports truncation by a maximum degree.
+/// supports truncation by a maximum degree or by target points, not by a minimum number of
+/// points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Method {
     /// The modular pipeline when it supports the request, and the reference one otherwise.
@@ -186,3 +256,49 @@ pub use malachite;
 pub use dispatch::*;
 #[doc(inline)]
 pub use reference::run_hkty;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::dvector;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_check_nefpart() {
+        assert_eq!(check_nefpart(&[], 6), Ok(()));
+        assert_eq!(
+            check_nefpart(&[dvector![3, 0, 1], dvector![2, 5, 4]], 6),
+            Ok(())
+        );
+        for nefpart in [
+            vec![dvector![0, 1, 2], dvector![3, 4]],
+            vec![dvector![0, 1, 2], dvector![2, 3, 4, 5]],
+            vec![dvector![0, 1, 2], dvector![3, 4, 6]],
+            vec![dvector![0, 1, 2], dvector![3, 4, -5]],
+            vec![dvector![0, 1, 2, 3, 4, 5], dvector![]],
+        ] {
+            assert!(check_nefpart(&nefpart, 6).is_err(), "{nefpart:?}");
+        }
+    }
+
+    #[test]
+    fn test_check_intnums() {
+        let ok = HashMap::from([((0, 0, 1), 2), ((1, 1, 1), 0), ((0, 1, 1), 3)]);
+        assert_eq!(check_intnums(&ok, 2, CYKind::Threefold), Ok(()));
+        // The same triple in two orderings, unless one of them vanishes.
+        let twice = HashMap::from([((0, 0, 1), 2), ((1, 0, 0), 2)]);
+        assert!(check_intnums(&twice, 2, CYKind::Threefold).is_err());
+        let zero = HashMap::from([((0, 0, 1), 2), ((1, 0, 0), 0)]);
+        assert_eq!(check_intnums(&zero, 2, CYKind::Threefold), Ok(()));
+        // For an n-fold the first index is a reference surface, and only the other two are
+        // unordered.
+        let nfold = HashMap::from([((0, 0, 1), 2), ((1, 0, 1), 3), ((5, 1, 1), 1)]);
+        assert_eq!(check_intnums(&nfold, 2, CYKind::Nfold), Ok(()));
+        assert!(check_intnums(&nfold, 2, CYKind::Threefold).is_err());
+        let twice = HashMap::from([((0, 0, 1), 2), ((0, 1, 0), 2)]);
+        assert!(check_intnums(&twice, 2, CYKind::Nfold).is_err());
+        assert!(check_intnums(&HashMap::from([((0, 0, 2), 1)]), 2, CYKind::Nfold).is_err());
+        assert!(check_intnums(&HashMap::from([((0, 0, 0), 0)]), 2, CYKind::Nfold).is_err());
+        assert!(check_intnums(&HashMap::new(), 2, CYKind::Threefold).is_err());
+    }
+}

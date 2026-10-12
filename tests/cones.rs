@@ -362,12 +362,15 @@ fn p11222_cone_data() -> ConeData {
     }
 }
 
+/// The invariants of [`compute_gvgw_strings`], labeled by curve class and component.
+type Strings = Vec<((DVector<i32>, usize), String)>;
+
 fn p11222(
     generators: DMatrix<i32>,
     cone_data: Option<ConeData>,
     min_points: Option<u32>,
     method: Method,
-) -> Result<Vec<((DVector<i32>, usize), String)>, ComputeError> {
+) -> Result<Strings, ComputeError> {
     let max_deg = if min_points.is_some() { None } else { Some(6) };
     let mut res = compute_gvgw_strings(
         generators,

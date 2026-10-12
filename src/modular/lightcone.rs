@@ -92,6 +92,9 @@ impl<K: super::key::Key> Lightcone<K> {
     }
 
     /// Whether the curve class with key `key` and coordinates `curve` is in the lightcones.
+    ///
+    /// The equations of a Mori cone that is a face are not tested: every class asked about is
+    /// a candidate or a sum of candidates, which lie in its span.
     pub fn contains(&self, key: K, curve: &[i32]) -> bool {
         match self {
             Self::All => true,

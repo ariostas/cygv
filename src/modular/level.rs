@@ -21,7 +21,7 @@ use core::cmp::Reverse;
 use core::fmt::Debug;
 
 /// A word that offsets are packed into: `u64`, or `u128` when the box needs more bits.
-pub trait LevelWord: Copy + Eq + Default + Debug + Send + Sync + 'static {
+pub trait LevelWord: Copy + Ord + Default + Debug + Send + Sync + 'static {
     /// The number of bits.
     const BITS: u32;
 

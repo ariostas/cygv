@@ -211,6 +211,14 @@ def test_methods() -> None:
     with pytest.raises(ValueError, match="unknown method"):
         compute_gv(*args, max_deg=3, method="fast")
 
+    # Invalid input is a ValueError with either method, not a crash of the computation.
+    bad_intnums = {(0, 0, 0): 5, (0, 0, 1): 1}
+    for method in ("reference", "modular"):
+        with pytest.raises(ValueError, match="every row"):
+            compute_gv(*args, max_deg=3, nefpart=[[0, 1, 2, 3]], method=method)
+        with pytest.raises(ValueError, match="below h11"):
+            compute_gv(*args[:3], bad_intnums, max_deg=3, method=method)
+
 
 def test_vex_phase() -> None:
     # A vex phase with h11 = 2, a flop of the resolved P(1,1,2,2,2)[8], which needs its

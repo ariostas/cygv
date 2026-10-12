@@ -25,6 +25,12 @@ pub trait Ring: Sync {
     /// The element type.
     type Elem: Copy + Default + PartialEq + Send + Sync + Debug;
 
+    /// Whether the arithmetic is exact, so that a sum does not depend on the order of its
+    /// terms. When it rounds, the stages take every sum in an order that depends neither on
+    /// the scheduling nor on the number of threads, at some cost in time and memory, so that
+    /// the results are reproducible.
+    const EXACT: bool = true;
+
     /// The multiplicative identity.
     fn one(&self) -> Self::Elem;
 

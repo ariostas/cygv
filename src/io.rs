@@ -95,8 +95,7 @@ use crate::dispatch::{
     check_target_points, compute_gvgw_strings, modular_unsupported, ComputeError,
 };
 use crate::phase::{Fan, FanError};
-use crate::reference::misc::process_int_nums;
-use crate::{check_strata, CYKind, InvariantKind, Method, Stratum};
+use crate::{check_intnums, check_nefpart, check_strata, CYKind, InvariantKind, Method, Stratum};
 use error::IoError;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
@@ -376,16 +375,8 @@ impl Input {
         // These are checked again, deeper in the computation, but the errors there are
         // not recoverable, so they are caught here to report them properly.
         let n_rays = q.nrows() as i64;
-        if nefpart
-            .iter()
-            .flat_map(|p| p.iter())
-            .any(|c| *c < 0 || (*c as i64) >= n_rays)
-        {
-            return Err(IoError::invalid_field(
-                "nefpart",
-                format!("the indices must be indices of the {n_rays} rays of \"q\""),
-            ));
-        }
+        check_nefpart(&nefpart, q.nrows())
+            .map_err(|reason| IoError::invalid_field("nefpart", reason))?;
         let cy_dim = n_rays - q.ncols() as i64 - nefpart.len().max(1) as i64;
         if cy_dim < 3 {
             return Err(IoError::invalid_field(
@@ -401,8 +392,8 @@ impl Input {
         }
         // The intersection numbers are canonicalized differently depending on the
         // dimension of the CY, so they can only be checked once it is known.
-        process_int_nums(intnums.clone(), cy_kind)
-            .map_err(|e| IoError::invalid_field("intnums", e.to_string()))?;
+        check_intnums(&intnums, h11, cy_kind)
+            .map_err(|reason| IoError::invalid_field("intnums", reason))?;
 
         Ok(Input {
             name,
@@ -1288,11 +1279,17 @@ cones:
                 .cy_kind,
             CYKind::Threefold
         );
-        // The nef partition must consist of indices of the rays.
-        assert!(matches!(
-            load_one(&data.replace("[2, 3, 4, 5, 6, 7]", "[2, 3, 4, 5, 6, 8]")),
-            Err(IoError::InvalidField { field, .. }) if field == "nefpart"
-        ));
+        // The nef partition must split the rays: indices of the rays, each in one part.
+        for parts in [
+            "[2, 3, 4, 5, 6, 8]",
+            "[1, 2, 3, 4, 5, 6, 7]",
+            "[2, 3, 4, 5, 6]",
+        ] {
+            assert!(matches!(
+                load_one(&data.replace("[2, 3, 4, 5, 6, 7]", parts)),
+                Err(IoError::InvalidField { field, .. }) if field == "nefpart"
+            ));
+        }
         // The resulting CY must be at least three-dimensional.
         assert!(matches!(
             load_one(&format!("{THREEFOLD}nefpart: [[0, 1], [2, 3, 4, 5]]\n")),
@@ -1322,6 +1319,11 @@ cones:
         ));
         assert!(matches!(
             load_one(&THREEFOLD.replace("[0, 1, 1, -1]", "[0, 1, 1, -1], [1, 0, 1, 2]")),
+            Err(IoError::InvalidField { field, .. }) if field == "intnums"
+        ));
+        // So must indices that are not those of the divisors.
+        assert!(matches!(
+            load_one(&THREEFOLD.replace("[1, 1, 1, 5]", "[1, 1, 2, 5]")),
             Err(IoError::InvalidField { field, .. }) if field == "intnums"
         ));
         // Intersection numbers that are all zero must be rejected, not panic.

@@ -1,4 +1,4 @@
-//! The modular pipeline, a faster reorganization of the HKTY procedure (work in progress).
+//! The modular pipeline, a faster reorganization of the HKTY procedure.
 //!
 //! It computes the invariants modulo a few word-sized primes and recovers them by the Chinese
 //! remainder theorem, stores curve classes as packed integer keys, and never enumerates the
@@ -15,7 +15,9 @@
 //!
 //! The entry points of [`dispatch`](crate::dispatch) reach it through
 //! [`Method`](crate::Method). The candidates come either from the Hilbert bases of the cones
-//! of [`crate::cone`] or from the enumeration of the semigroup of the generators. The stages
+//! of [`crate::cone`] (always, through the entry points) or from the enumeration of the
+//! semigroup of the generators. With [`Options::certify`] the results are proven by bounds
+//! computed over [`bound::BoundRing`]. The stages
 //! run on the threads of a rayon pool that each run builds for itself (see
 //! [`Options::threads`]); the extraction, which dominates, applies the curves of each degree
 //! in parallel (see [`extraction::extract`]).
@@ -426,7 +428,7 @@ pub struct Options {
     /// The number of primes per pass, from 2 to 4, or `None` to choose it from the size of the
     /// invariants: up to degree 12 two, and above that as many as the largest invariant needs,
     /// predicted from a run at 3/4 of the degree, plus the check primes, as the C program's
-    /// driver does.
+    /// driver does, but at most four (passes are added if they are not enough).
     pub lanes: Option<usize>,
     /// The minimum number of primes, even if fewer give a stable lift.
     pub min_primes: usize,
@@ -824,16 +826,30 @@ struct Run<'a, L: KeyLayout> {
 /// Adds passes over `NL` primes each to `residues`, taking the primes that follow theirs in
 /// [`field::primes`], until there are at least `min_primes` and the lift is stable, within
 /// `options.max_passes` passes in all.
+///
+/// A pass whose primes divide a denominator of the strata, which they cannot invert, is
+/// skipped, and counts towards the passes.
 fn passes<const NL: usize, L: KeyLayout>(
     run: &Run<'_, L>,
     options: &Options,
     mut residues: Residues<L::Key>,
     min_primes: usize,
 ) -> Result<Residues<L::Key>, Error> {
-    let mut primes = field::primes().skip(residues.primes().len());
-    while residues.primes().len() < options.max_passes * NL {
+    let mut primes = field::primes();
+    if let Some(&last) = residues.primes().last() {
+        primes.find(|&p| p == last);
+    }
+    let mut skipped = 0;
+    while residues.primes().len() + skipped * NL < options.max_passes * NL {
         let ring = LaneField::<NL>::new(core::array::from_fn(|_| primes.next().unwrap()));
-        residues.add_pass(&ring, &pass(&ring, run, None)?);
+        match pass(&ring, run, None) {
+            Ok(gv) => residues.add_pass(&ring, &gv),
+            Err(Error::NotInvertible) => {
+                skipped += 1;
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
         if residues.primes().len() >= min_primes && residues.is_stable(options.check_primes) {
             return Ok(residues);
         }
@@ -1179,6 +1195,45 @@ mod tests {
         }
     }
 
+    /// The bounds round, so they depend on the order of their sums, which the stages fix for
+    /// them: they do not depend on the threads, nor on how the extraction applies its layers.
+    #[test]
+    #[cfg(feature = "cli")]
+    fn test_bounds_threads() {
+        let yaml = include_str!("../benches/data/h11_9.yaml");
+        let input = crate::io::Input::load_all(yaml).unwrap().remove(0);
+        let w: Vec<i32> = input.grading_vector.iter().copied().collect();
+        let geometry =
+            Geometry::from_toric(&input.q, &input.nefpart, &input.intnums, input.cy_kind, &w)
+                .unwrap();
+        let gens: Vec<&[i32]> = input.generators.as_slice().chunks(w.len()).collect();
+        let source = || CandidateSource::Generators(&gens);
+        let max_deg = 8;
+        let gv = compute_gv(source(), &w, max_deg, &[], &geometry, &Options::default()).unwrap();
+        let bounds = |threads, extraction| {
+            let options = Options {
+                threads: Some(threads),
+                extraction,
+                ..Options::default()
+            };
+            bound_gv(source(), &w, max_deg, &[], &geometry, &options, &gv).unwrap()
+        };
+        let by_level = extraction::Tuning {
+            sync_max_curves: usize::MAX,
+            sync_min_terms: 0,
+            ..extraction::Tuning::default()
+        };
+        let one = bounds(1, extraction::Tuning::default());
+        assert!(!one.is_empty());
+        for threads in [2, 3, 8] {
+            for tuning in [extraction::Tuning::default(), by_level.clone()] {
+                for _ in 0..3 {
+                    assert!(bounds(threads, tuning.clone()) == one, "{threads} threads");
+                }
+            }
+        }
+    }
+
     fn quintic() -> Geometry {
         Geometry::from_toric(
             &DMatrix::from_element(5, 1, 1),
@@ -1260,5 +1315,36 @@ mod tests {
             bound_gv(source, &w, 5, &[], &geometry, &options, &[]),
             Err(Error::CertifyStrata)
         );
+    }
+
+    /// A pass whose primes cannot invert a denominator of the strata is skipped.
+    #[test]
+    fn test_strata_denominators() {
+        let q = DMatrix::from_row_slice(6, 2, &[1, 0, 0, 1, -1, 1, 1, 1, 0, 1, 1, 0]);
+        let intnums = HashMap::from([((0, 1, 1), 4), ((1, 1, 1), 2)]);
+        let w = [2, 1];
+        let gens: [&[i32]; 2] = [&[0, 1], &[1, -1]];
+        let p = field::primes().next().unwrap() as i64;
+        let run = |class| {
+            let strata = [Stratum {
+                divisors: [1, 2, 4],
+                class,
+            }];
+            let geometry = Geometry::from_toric(&q, &[], &intnums, CYKind::Threefold, &w)
+                .unwrap()
+                .with_strata(&strata, &w)
+                .unwrap();
+            let options = Options {
+                lanes: Some(2),
+                ..Options::default()
+            };
+            let source = CandidateSource::Generators(&gens);
+            compute_gv(source, &w, 8, &[], &geometry, &options).unwrap()
+        };
+        let expected = run(vec![(1, 1), (-1, 1)]);
+        assert!(!expected.is_empty());
+        // The same class, with the first prime as a denominator (where the grading is one,
+        // since the numerators are multiplied by it).
+        assert_eq!(run(vec![(1, 1), (-p, p)]), expected);
     }
 }

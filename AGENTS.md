@@ -162,7 +162,8 @@ folded in) and `multicover` (the GV
 invariants from those, by gcd of the coordinates; exponent 3 and a division by the degree for
 threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats passes with the
 next primes until `crt::Residues` gives a stable lift (the lift from all but the last
-`check_primes` primes must agree with those), with `Options` for the lane count (2 to 4 primes
+`check_primes` primes must agree with those), skipping a pass whose primes cannot invert a
+denominator of the strata (`Error::NotInvertible`), with `Options` for the lane count (2 to 4 primes
 per pass; by default `choose_lanes` predicts it from a probe run at 3/4 of the degree, as the
 C's driver does), a minimum number of primes, the thread count, the extraction's tuning and
 `certify`; big integers (`malachite::Integer`) are only built by `crt`, for the final values.
@@ -229,10 +230,13 @@ indices differently (the first index is a reference surface in the n-fold case).
   `max_deg` or `target_points` and no `min_points` (see `modular_unsupported`), and falls back
   to `reference` otherwise or when the curve classes do not fit `modular`'s keys; `Modular`
   makes an unsupported request a `ComputeError::Unsupported`; `Reference` always runs
-  `run_hkty`. The entry points return `Result<_, ComputeError>`, but only `modular`'s errors
-  and invalid strata, cone data and target points (checked up front by `check_strata`,
-  `check_cone_data` and `check_target_points`) get there: `run_hkty` still panics on invalid
-  input. `max_deg` may come with `target_points` (the reference then truncates its results by
+  `run_hkty`. The entry points return `Result<_, ComputeError>`: `modular`'s errors, and invalid input,
+  which `compute` checks up front for both pipelines because `run_hkty` still panics on it
+  (the nef partition, which must split the rows of the charges, by `check_nefpart`; the
+  dimension of the CY; the intersection numbers, by `check_intnums`, indices below $h^{1,1}$
+  but the reference surface of an n-fold, one ordering each, not all zero; the strata, cone
+  data and target points, by `check_strata`, `check_cone_data` and `check_target_points`;
+  the untruncated generators, by `untruncated_classes`). `max_deg` may come with `target_points` (the reference then truncates its results by
   degree, since its semigroup only takes the targets). Both give only the nonzero invariants.
   Both pipelines use every lattice point of the Mori cone (decision 6.2, phases 7b and 7d):
   the Mori cone is described by the cone data's inequalities, or else by `cone::facets` of
@@ -241,7 +245,9 @@ indices differently (the first index is a reference surface in the n-fold case).
   largest degree); the reference runs on `cone::hilbert_basis` of them instead of the
   generators. The exception is a request with none of `max_deg`, `min_points` and
   `target_points`, where the reference's semigroup is the generators as given
-  (`Semigroup::from_data`), so they are passed unchanged. With cone data the generators may
+  (`Semigroup::from_data`), so they are passed unchanged but for zero, which is added first
+  if it is missing, and duplicates, which are dropped (`untruncated_classes`; the others
+  must have positive degree). With cone data the generators may
   have no columns, except for such a request (`ComputeError::MissingGenerators`). Failures of
   the cone computations are `ComputeError::MoriCone`. The optional `fan` (threefold
   hypersurfaces only) is read first: its strata replace the `strata` argument, which must
@@ -300,7 +306,14 @@ indices differently (the first index is a reference surface in the n-fold case).
   `rayon::current_thread_index` with its own level tables; layers of few large curves (the first
   ones) instead go level-synchronously, with the scatter of each curve into each of its levels as
   a task (`extraction::Tuning`). Results do not depend on the thread count, since the arithmetic
-  is exact and every table is sorted when taken; `tests/stress.rs` (ignored, run with
+  is exact and every table is sorted when taken. The certifier's bounds round, so their sums
+  depend on their order, and for a `Ring` that is not `EXACT` the stages fix it: the
+  instanton products use chunks that do not depend on the threads and merge them in order
+  (`ShardedMap::add_in_order`), the exponentials sort their sources by hash, and the
+  extraction sorts each layer and applies it in groups of curves (`GROUP_TERMS`,
+  `GROUP_CURVES`), whose terms record their curve and are kept until the group is done, when
+  each shard takes its terms in the order of the curves (`Shard::fold_ordered`;
+  `modular::tests::test_bounds_threads`). That costs a certified run about 10%; `tests/stress.rs` (ignored, run with
   `cargo test --release --test stress -- --ignored` before releases and after changes to the
   parallel code) checks that over repeated runs, and `reference_tests::test_threads` forces both
   extraction modes on a few threads in every test run. The tuning constants were measured on a
@@ -314,7 +327,8 @@ stdout, flushing after each one. `--threads` and `--method` override the `n_thre
 `method` fields of every document. All of the parsing, validation, and formatting lives in
 `src/io.rs`, whose `Input` struct mirrors the arguments of `run_hkty` and whose field conventions
 match the Python API (each inner list is a *column*). `Input::from_yaml` rejects unknown fields and
-validates shapes eagerly — including a `process_int_nums` dry run, `method: modular` without
+validates shapes eagerly — including the nef partition and the intersection numbers (the
+`check_nefpart` and `check_intnums` of the dispatch), `method: modular` without
 `max_deg` or `target_points`, the cone data, the target points, the fan (from which it derives the
 grading vector when `grading_vector` is left out, since the output needs it), and leaving out
 `generators` without cone data or a fan, or without any of `max_deg`, `min_points` and

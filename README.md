@@ -40,8 +40,9 @@ How many curve classes are computed is controlled by `max_deg`, `min_points`, or
 `target_points` computes the backward lightcones of the given curve classes $P$, i.e. the curve
 classes $C$ with $P - C$ in the Mori cone, up to the largest degree of the $P$, or up to `max_deg`
 if it is given too. `min_points` cannot be combined with the other two. When none of them is
-given, the generators are taken to be the complete list of curve classes to use. Complete intersections are specified by passing the nef
-partition as `nefpart`. A vex phase of the ambient toric variety (MacFadden–Sheridan,
+given, the generators are taken to be the complete list of curve classes to use (zero is added
+if it is missing). Complete intersections are specified by passing the nef partition as
+`nefpart`, which must split the rows of the charges into parts, each row in exactly one. A vex phase of the ambient toric variety (MacFadden–Sheridan,
 arXiv:2512.14817), whose curves of negative anticanonical degree need the class of the stratum
 they force into the CY, is specified by passing those strata as `strata`, a list of
 `(divisors, class)` pairs: the three toric divisors (indices of the rays) and the class of the

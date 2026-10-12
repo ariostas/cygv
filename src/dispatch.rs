@@ -28,15 +28,17 @@
 //! [`modular::Options::certify`]); the reference pipeline is exact anyway. Vex phases cannot
 //! be certified yet.
 //!
-//! The reference pipeline still panics on invalid input, while the errors of the modular one
-//! are returned.
+//! The input is checked up front (the nef partition, the dimension of the CY, the intersection
+//! numbers, the strata, the cone data, the target points, the fan, and the generators of a
+//! computation without truncation, which get zero if they miss it), so that invalid input is
+//! an error with either pipeline, although [`run_hkty`] itself still panics on it.
 
 use crate::cone::{check_cone_data, columns, ConeData, ConeError};
 use crate::modular::key::KeyError;
 use crate::modular::{self, CandidateSource, CurveInvariants, Geometry, Options};
 use crate::phase::{Fan, FanError};
 use crate::reference::{self, run_hkty};
-use crate::{check_strata, CYKind, InvariantKind, Method, Stratum};
+use crate::{check_intnums, check_nefpart, check_strata, CYKind, InvariantKind, Method, Stratum};
 use core::fmt;
 use malachite::{Integer, Rational};
 use nalgebra::{DMatrix, DVector, RowDVector};
@@ -51,6 +53,15 @@ pub type Labeled<T> = ((DVector<i32>, usize), T);
 pub enum ComputeError {
     /// The modular method was requested for something it does not support, which is named.
     Unsupported(&'static str),
+    /// The nef partition does not split the rows of the charges, for the given reason.
+    InvalidNefPartition(&'static str),
+    /// The CY would have the given dimension, which is below three.
+    InvalidDimension(i64),
+    /// The intersection numbers do not fit the geometry, for the given reason.
+    InvalidIntersectionNumbers(&'static str),
+    /// The generators cannot be the curve classes of a computation without truncation, for
+    /// the given reason.
+    InvalidGenerators(&'static str),
     /// The strata do not fit the geometry, for the given reason.
     InvalidStrata(&'static str),
     /// The cone data does not fit the geometry or the generators, for the given reason.
@@ -78,9 +89,16 @@ impl fmt::Display for ComputeError {
                 f,
                 "the modular method does not support {what}; use the auto or reference method"
             ),
-            Self::InvalidStrata(reason)
+            Self::InvalidNefPartition(reason)
+            | Self::InvalidIntersectionNumbers(reason)
+            | Self::InvalidGenerators(reason)
+            | Self::InvalidStrata(reason)
             | Self::InvalidConeData(reason)
             | Self::InvalidTargetPoints(reason) => write!(f, "{reason}"),
+            Self::InvalidDimension(dim) => write!(
+                f,
+                "the dimension of the CY must be at least three, but it is {dim}"
+            ),
             Self::MissingGenerators => write!(
                 f,
                 "the generators are needed, without cone data or a fan, or without max_deg, \
@@ -167,6 +185,13 @@ fn compute(
     method: Method,
     certify: bool,
 ) -> Result<Results, ComputeError> {
+    check_nefpart(&nefpart, q.nrows()).map_err(ComputeError::InvalidNefPartition)?;
+    let dim = q.nrows() as i64 - q.ncols() as i64 - nefpart.len().max(1) as i64;
+    if dim < 3 {
+        return Err(ComputeError::InvalidDimension(dim));
+    }
+    check_intnums(&intnums, q.ncols(), cy_kind)
+        .map_err(ComputeError::InvalidIntersectionNumbers)?;
     // From the fan: the strata, and, when needed, the Mori cone, which is expensive at large
     // h11: for a default grading vector, or as the cone without cone data or generators.
     let (strata, grading_vector, mori_cone) = match fan {
@@ -252,6 +277,7 @@ fn compute(
                     .map_or_else(Vec::new, |t| columns(t).collect());
                 let top = match max_degree(&targets, grading_vector.as_slice()) {
                     Some(d) => max_deg.map_or(d, |m| m.min(d)),
+                    // Without targets the modular pipeline has a maximum degree.
                     None => max_deg.unwrap_or(u32::MAX),
                 };
                 computed = crate::cone::cone_data(
@@ -292,7 +318,7 @@ fn compute(
         if generators.ncols() == 0 {
             return Err(ComputeError::MissingGenerators);
         }
-        generators
+        untruncated_classes(generators, &grading_vector)?
     } else {
         // Every lattice point of the Mori cone, from the Hilbert basis.
         let basis =
@@ -326,6 +352,34 @@ fn compute(
         res.retain(|((c, _), _)| grading_vector.dot(&c.transpose()) <= max_deg as i32);
     }
     Ok(Results::Reference(res))
+}
+
+/// The curve classes of a computation without truncation: the generators, once each, after
+/// zero, which is added if it is missing. The others must have positive degree.
+fn untruncated_classes(
+    generators: DMatrix<i32>,
+    grading_vector: &RowDVector<i32>,
+) -> Result<DMatrix<i32>, ComputeError> {
+    let h11 = generators.nrows();
+    let mut seen = std::collections::HashSet::new();
+    let mut classes = vec![0; h11];
+    for g in generators.as_slice().chunks(h11) {
+        if g.iter().all(|&x| x == 0) || !seen.insert(g) {
+            continue;
+        }
+        let deg: i64 = g
+            .iter()
+            .zip(grading_vector.iter())
+            .map(|(&x, &w)| x as i64 * w as i64)
+            .sum();
+        if deg <= 0 {
+            return Err(ComputeError::InvalidGenerators(
+                "the nonzero generators must have positive degree under the grading vector",
+            ));
+        }
+        classes.extend_from_slice(g);
+    }
+    Ok(DMatrix::from_vec(h11, classes.len() / h11, classes))
 }
 
 /// The largest degree of the targets, if there are any.

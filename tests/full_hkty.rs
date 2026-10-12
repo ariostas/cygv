@@ -4,7 +4,7 @@ use cygv::dispatch::{
 };
 use cygv::malachite::Rational;
 use cygv::Method;
-use nalgebra::{dmatrix, dvector, DMatrix, RowDVector};
+use nalgebra::{dmatrix, dvector, DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
 
 #[test]
@@ -333,4 +333,93 @@ fn test_methods() {
     let expected = gv(Method::Reference, None, Some(4)).unwrap();
     assert!(!expected.is_empty());
     assert_eq!(gv(Method::Auto, None, Some(4)).unwrap(), expected);
+}
+
+/// Invalid nef partitions, intersection numbers and untruncated generators are errors with
+/// each method, rather than panics of the reference, and untruncated generators get zero.
+#[test]
+fn test_invalid_input() {
+    let q = DMatrix::from_element(5, 1, 1);
+    let quintic = HashMap::from([((0, 0, 0), 5)]);
+    let gv = |generators: DMatrix<i32>,
+              max_deg,
+              nefpart: Vec<DVector<i32>>,
+              intnums: &HashMap<(usize, usize, usize), i32>,
+              method| {
+        compute_gv_rat_threefold(
+            generators,
+            RowDVector::from_row_slice(&[1]),
+            max_deg,
+            None,
+            None,
+            q.clone(),
+            nefpart,
+            intnums.clone(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            method,
+            false,
+        )
+        .map(|mut res| {
+            res.sort_unstable_by(|a, b| a.0.as_slice().cmp(b.0.as_slice()));
+            res
+        })
+    };
+    for method in [Method::Auto, Method::Modular, Method::Reference] {
+        let run =
+            |nefpart, intnums: &HashMap<_, _>| gv(dmatrix![1], Some(3), nefpart, intnums, method);
+        for (nefpart, reason) in [
+            (vec![dvector![0, 1, 2, 3]], "include every row"),
+            (vec![dvector![0, 1, 2, 3, 4, 4]], "disjoint"),
+            (vec![dvector![0, 1, 2, 3, 7]], "indices of rows"),
+            (vec![dvector![0, 1, 2, 3, 4], dvector![]], "not be empty"),
+        ] {
+            match run(nefpart, &quintic) {
+                Err(ComputeError::InvalidNefPartition(r)) => assert!(r.contains(reason), "{r}"),
+                res => panic!("{method:?}, {reason}: {res:?}"),
+            }
+        }
+        assert_eq!(
+            run(vec![dvector![0, 1], dvector![2, 3, 4]], &quintic),
+            Err(ComputeError::InvalidDimension(2))
+        );
+        // A partition into one part is the hypersurface.
+        assert_eq!(
+            run(vec![dvector![4, 0, 1, 2, 3]], &quintic),
+            run(Vec::new(), &quintic)
+        );
+        for intnums in [
+            HashMap::from([((0, 0, 0), 5), ((0, 0, 1), 1)]),
+            HashMap::from([((0, 0, 0), 0)]),
+        ] {
+            assert!(
+                matches!(
+                    run(Vec::new(), &intnums),
+                    Err(ComputeError::InvalidIntersectionNumbers(_))
+                ),
+                "{method:?}: {intnums:?}"
+            );
+        }
+    }
+
+    // Without truncation the generators are the classes, with zero added, each once.
+    let expected = gv(
+        dmatrix![1],
+        Some(2),
+        Vec::new(),
+        &quintic,
+        Method::Reference,
+    )
+    .unwrap();
+    assert_eq!(expected.len(), 2);
+    for generators in [dmatrix![1, 2], dmatrix![2, 0, 1], dmatrix![1, 2, 1]] {
+        let res = gv(generators, None, Vec::new(), &quintic, Method::Auto);
+        assert_eq!(res.unwrap(), expected);
+    }
+    assert!(matches!(
+        gv(dmatrix![1, -1], None, Vec::new(), &quintic, Method::Auto),
+        Err(ComputeError::InvalidGenerators(_))
+    ));
 }

@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d, 8, 8b done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d, 8, 8b, 8c done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": phase 5b replaced `rug` with `malachite` everywhere (6.10). Branch
 `gv-modular-rust` is PR #94 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main`
@@ -24,7 +24,7 @@ The mathematics is still HKTY, but reorganised. In pipeline order:
 |---|------|------------------------------------------|
 | 1 | **Arithmetic mod ~62-bit primes** (Montgomery), 2–4 primes carried as "lanes" of one coefficient; integers recovered by CRT, one extra prime as a check, more passes if the check fails | replaces `rug::Rational`/`Float` everywhere in the hot path |
 | 2 | **Curve classes are packed `u128` keys** with `key(a+b) = key(a)+key(b)`; polynomials are sparse `(key, degree, value)` lists and open-addressing tables | replaces `Semigroup` (all points enumerated up front) and `Polynomial` (`HashMap<index, T>` over that enumeration) |
-| 3 | **Candidates**: only curves with ≤ 2 negative GLSM intersections carry period data. They are the lattice points of the cones $K_T = \text{Mori} \cap \{Q_r\cdot C \ge 0,\ r \notin T\}$, $\lvert T\rvert \le 2$, enumerated from each cone's Hilbert basis. The Mori cone is never enumerated. Fallback without cone data: enumerate the whole semigroup and filter | new; the fallback is the analogue of `Semigroup::with_max_degree` |
+| 3 | **Candidates**: only curves with ≤ 2 negative GLSM intersections carry period data. They are the lattice points of the cones $K_T = \text{Mori} \cap \{Q_r\cdot C \ge 0,\ r \notin T\}$, $\lvert T\rvert \le 2$, enumerated from each cone's Hilbert basis. The Mori cone is never enumerated. Fallback without cone data: enumerate the whole semigroup and filter | new; the fallback is the analogue of `Semigroup::with_max_degree` (ours computes the cone data instead since phase 7b, and keeps the enumeration for library callers and the tests) |
 | 4 | **Fundamental period** at each candidate: `c0`, `c1[a]`, and $S_2 = \sum_{a\le b} K_{ab}\, c_{2,ab}$ with $K_{ab} = \sum_t w_t \kappa_{tab}$ | same formulas as `compute_c_{0,1,2}neg`, but factorials/harmonic numbers come from tables mod p, and `c2` is contracted immediately instead of kept per index pair |
 | 5 | **One instanton series** $I = \sum_t w_t\, \mathrm{inst}_t = c_0^{-1} S_2 - \sum_a \alpha_a V_a$, $V_a = \tfrac12 \sum_b K_{ab}\alpha_b$ | replaces the $h^{1,1}$ `inst` polynomials and the per-pair beta/F products |
 | 6 | **Extraction** by degree layers: after subtracting lower curves, $I[C] = \deg(C)\, A_C$; each curve's correction is $s_C\, z^C \exp(C\cdot\alpha)$, computed with the Euler recurrence into per-degree hash tables | replaces `invert_series` (qN windows, `exp_pos_neg`, `pow`, `li_2`) |
@@ -183,7 +183,7 @@ existing stage modules, and no separate crate for now.**
   config, both CI cache keys, `deploy.yml` and the release process for two crates. The module
   boundary will be clean enough to split out later if there is a reason (e.g. a GMP-free build).
 
-Layout (6.7):
+Layout (6.7), as built:
 
 ```
 src/lib.rs                  InvariantKind, CYKind, Method; re-exports
@@ -197,17 +197,23 @@ src/reference/semigroup.rs, polynomial.rs (+ polynomial/), factorial.rs,
               fundamental_period.rs, instanton.rs, series_inversion.rs, misc.rs
                             moved as they are, with their error modules and tests
 
-src/modular.rs              entry point: run(...), options and stats structs, pass loop, lane probe
-src/modular/field.rs        Montgomery arithmetic, prime search, Lanes<const NL: usize>
-src/modular/key.rs          Key trait; packed u64/u128 with per-coordinate fields, inline arrays; bound check, hash
-src/modular/table.rs        slot map, sparse polynomial, per-degree level tables, heap
-src/modular/candidates.rs   generator reduction, semigroup enumeration, cone union, saturation check
+src/modular.rs              entry points (compute_gv, compute_gw, bound_gv), Options, Geometry, pass loop, lane probe, certifier
+src/modular/field.rs        Montgomery arithmetic, prime search, Lanes<const NL: usize>, the Ring trait
+src/modular/bound.rs        BoundRing: upward-rounded bounds for the certifier (8)
+src/modular/key.rs          Key trait; packed u64/u128 with per-coordinate fields; bound check, hash
+src/modular/table.rs        slot map, sharded map, sparse polynomial, heap
+src/modular/level.rs        the extraction's level tables keyed by linear hashes (8b)
+src/modular/candidates.rs   semigroup enumeration (library and tests), cone union
+src/modular/lightcone.rs    backward lightcones of target points
 src/modular/period.rs       tables (factorials, harmonic numbers), c0 / c1 / S2 per curve
 src/modular/instanton.rs    sparse mul / reciprocal, alpha, V, I
 src/modular/extraction.rs   the extraction interface (4.1) and its CPU implementation: layers, exp via Euler recurrence, sharded fold
 src/modular/multicover.rs   A -> GV, GV -> GW
-src/modular/crt.rs          Garner + big integers (pure-Rust crate, 6.10), stability check
+src/modular/crt.rs          Garner + big integers (malachite, 6.10), stability check
+src/modular/reference_tests.rs  stage-by-stage and end-to-end comparisons with the reference
 ```
+
+No stats structs were built (4.1.7); see phase 9.
 
 `src/hkty.rs` currently mixes three things that end up in different places: `run_hkty` (goes to
 `reference`), `compute_gvgw_strings` (the runtime dispatch used by the CLI and Python, goes to
@@ -470,6 +476,8 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     matrix has no columns, and a request that needs the reference (method `reference`, or one
     `modular` does not support) is `ComputeError::MissingGenerators`, or `MissingField` in YAML.
     `auto` does not fall back on key overflow then. `h11` comes from the grading vector now.
+    (Superseded by 7d: `auto` falls back to the reference on a key overflow, which then runs
+    on the Hilbert basis of the Mori cone's inequalities, without the generators.)
   - [x] `candidates` enumerates each $K_T$ from its Hilbert basis, with the containment and
     vanishing-form skips. The candidate source is an interface, so phase 7b can plug in a
     native one (Hilbert bases or direct enumeration) without touching the rest.
@@ -945,13 +953,52 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     of 1 MB or more (this machine's is 256 KB, where it picks the packed records we have).
     Tests: `level` (hashes add and decode, keys from hashes, the box, the table), the
     extraction round trip in 128 bits too, the existing comparisons and the stress test.
+- [x] **8c. Fixes from a review of the branch** (after 8b):
+  - Invalid input is an error with both methods instead of a panic of the reference: the
+    dispatch checks the nef partition (it must split the rows of the charges into nonempty
+    parts, which is what makes the anticanonical rows sum to $-K$; the modular method used to
+    report it as a curve of negative anticanonical degree), the dimension of the CY, and the
+    intersection numbers (indices below $h^{1,1}$, but the reference surface of an n-fold, one
+    ordering each, not all zero), with `ComputeError::InvalidNefPartition`,
+    `InvalidDimension` and `InvalidIntersectionNumbers`; the YAML input uses the same checks.
+    The generators of a request without truncation get zero if they miss it and lose their
+    duplicates, and must otherwise have positive degree (`InvalidGenerators`).
+  - The certifier's bounds no longer depend on the scheduling or the thread count: their sums
+    round, so for a `Ring` that is not `EXACT` (`BoundRing`) the instanton products use
+    chunks that do not depend on the threads, merged in order, the exponentials sort their
+    sources by hash (a level table's order depends on its capacity), and the extraction sorts
+    each layer and applies it in groups of curves (about twice the terms of the series, at
+    most 4096 curves), each curve keeping its own buffers until the shards take them in the
+    order of the curves (the buffers record the curve of each term, and each shard sorts its
+    terms by curve). Every bound was valid before too; only their last bits varied, and with
+    them, in principle, the number of primes. The cost, certified at degree 20 on 8 threads:
+    `h11_9` 9.2 → 10.0 s, `h11_11` 12.5 → 13.4 s, `h11_8` 14.6 → 16.5 s, peak memory 13–15%
+    higher, from folding each group's terms after it rather than while it runs (sorting is
+    free, and larger groups gain little); uncertified runs are unchanged. A first version
+    that gave each curve buffers of its own cost twice as much.
+  - A pass whose primes divide a denominator of the strata is skipped (6.5).
+  - Stale statements in this plan and in doc comments, and two clippy warnings.
+  - Tests: invalid input through the entry points (`tests/full_hkty.rs`), the checks, the
+    YAML input and Python; `h11_9_plike` against the reference; the 128-bit level tables
+    forced in `test_threads`; the bounds identical at 1, 2, 3 and 8 threads in both
+    extraction modes.
 - [ ] **9. Wrap up.**
   - [ ] Confirm with the PR author that the provenance of `refs_vex` allows shipping it as
     fixtures (5.2).
   - [ ] The selected oracle references converted into Rust fixtures (5.2), *before* `cgv/` is
     removed.
-  - [ ] `cgv/` removed.
+  - [ ] `cgv/` removed, and with it its three excludes (`.pre-commit-config.yaml`,
+    `[tool.ruff]` in `pyproject.toml`, `exclude` in `Cargo.toml`).
+  - [ ] The consistency check of 5.2 item 3 in the reference ($\mathrm{inst}_t[C]/C_t$ equal
+    across $t$), so that inconsistent input is an error in both methods rather than
+    different numbers.
+  - [ ] Decide 6.7's open question (the crate root's re-exports of `Semigroup`, `Polynomial`,
+    `PolynomialProperties` and `PolynomialCoeff`) before publishing.
+  - [ ] Run the rewritten CI workflows (5b) on a pushed branch.
   - [ ] README, CLAUDE.md and docs updated.
+  - [ ] Release notes and a version bump (`Cargo.toml` is still 0.3.0, and the branch has
+    many breaking changes: the module paths, the `Method` and `certify` arguments, the new
+    `ComputeError` variants, saturation by default; 6.2 and 6.7 list the consequences).
   - [ ] Decide what happens to PR #94 and credit its author (section 7).
 
 Outside the phases:
@@ -1042,7 +1089,7 @@ Layers, from cheapest to most independent:
    consistency check to the reference ($\mathrm{inst}_t[C]/C_t$ equal across $t$) so that
    inconsistent input is an error in both methods. Inputs then: P(1,1,2,2,2)[8], the realistic
    models at low degree including `h11_9_plike` (hundreds of degree levels, which stresses the
-   level tables most), a face of the Mori cone, target points, complete intersections, n-folds,
+   level tables most; `reference_tests::test_h11_9_plike_gv`, at degree 150), a face of the Mori cone, target points, complete intersections, n-folds,
    vex phases. Kept fast enough for every CI run.
    Paths that need forcing, because they never trigger at CI-sized degrees:
    - *Several CRT passes*: a test knob that forces a small lane count and a minimum number of
@@ -1051,7 +1098,10 @@ Layers, from cheapest to most independent:
    - *"CRT did not stabilize"*: a non-face subcone input must fail with the explanatory error.
    - *Candidate skips*: the containment and vanishing-form skips (`gv.c`, `build_candidates`)
      silently drop curves if wrong; compare candidate sets with and without them.
-   - *Keys*: the coordinate-bound abort, and the fallback from packed keys to array keys.
+   - *Keys*: the coordinate-bound abort, and the fallback to the reference when the classes do
+     not fit the packed keys (no array keys were built). The 128-bit level tables of 8b, which
+     no CI-sized geometry needs (the box takes 55 bits for `h11_11` at degree 16), are forced
+     by `Tuning::wide_levels` in `reference_tests::test_threads`.
 4. *Frozen fixtures*: expected values that come from neither implementation. A selection of
    `cgv/tests/refs` (outputs of cygv 0.2.3) and all or most of `refs_vex` (checked against an
    independent exact-rational implementation and across flops), converted to small compressed
@@ -1070,9 +1120,9 @@ Layers, from cheapest to most independent:
    CI (it needs a C toolchain and normaliz). Same prime sequence, so residues can be compared
    one for one when narrowing a mismatch down.
 
-### 5.3 Follow-ups from PR #102
+### 5.3 Follow-ups
 
-Not scheduled; each can be done after the wrap-up.
+Not scheduled; each can be done after the wrap-up. First those from PR #102:
 
 - [ ] **Curves of high $h^{1,1}$ on faces.** Express the curves in an LLL-reduced basis of the
   lattice the candidates span when it has lower rank than $h^{1,1}$ (the C's `setup_lattice`:
@@ -1094,6 +1144,15 @@ Not scheduled; each can be done after the wrap-up.
   candidates. Not in the C.
 - [ ] **Structure-of-arrays level tables** on CPUs with a large L2 (the C chooses at run
   time); needs a machine with one to measure.
+
+Other follow-ups, not from #102:
+
+- [ ] **Certifying vex phases** (`Error::CertifyStrata` today, as in the C): the stratum
+  terms need bounds of their own in the majorant run.
+- [ ] **Reporting as data** (4.1.7): a stats struct (passes, primes, timings per stage,
+  table sizes) returned next to the results instead of nothing; never built.
+- [ ] **An opt-out of the saturation** (6.2, still open): what "too large" means, whether
+  skipping it warns or errors, and its name.
 
 ## 6. Decisions needed
 
@@ -1164,7 +1223,7 @@ Not scheduled; each can be done after the wrap-up.
    since `auto` never mixes semantics.
    Still open: what "too large" means (a dimension threshold, a time budget, or both; nothing
    on the benchmark geometries comes close, so no threshold yet), whether skipping for size
-   should warn or error, and the name of the opt-out; none exists yet.
+   should warn or error, and the name of the opt-out; none exists yet (a follow-up in 5.3).
 3. **Scope. Direction: the same geometries as the reference** — threefolds and n-folds,
    hypersurfaces and complete intersections. "Complete intersection" here means what cygv
    already supports through `nefpart`: a complete intersection in a toric variety given by a
@@ -1242,6 +1301,7 @@ Not scheduled; each can be done after the wrap-up.
    - In `modular`, a stratum whose rational class has a denominator divisible by one of the
      primes makes that prime unusable: skip to the next prime instead of aborting as the C
      does. (With ~62-bit primes this essentially never happens, but it must not be fatal.)
+     Done in 8c: `passes` skips the pass (`modular::tests::test_strata_denominators`).
    - Validation: the C oracle and the 16 references in `cgv/tests/refs_vex` (6.6: sync `cgv/`).
    - The formula is taken from the C and the cited papers; we have not derived it ourselves.
 
@@ -1375,7 +1435,8 @@ Not scheduled; each can be done after the wrap-up.
 
    Still open: whether the crate root keeps re-exporting `Semigroup`, `Polynomial`,
    `PolynomialProperties` and `PolynomialCoeff`, or those are reached through
-   `cygv::reference`. (The question of what `auto` does with `prec` went away with phase 0c.)
+   `cygv::reference`, to decide in phase 9. (The question of what `auto` does with `prec` went
+   away with phase 0c.)
 8. **Features of the C that are not ported now (decided): future options, not ruled out.** The
    GPU extraction stage, the distributed mode (one run split by primes across machines), the
    low-memory switch and the C's tuning knobs are not part of this work, but the Rust code is

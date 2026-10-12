@@ -374,7 +374,7 @@ mod tests {
                                     .collect()
                             })
                             .collect();
-                        let sign = if (n - 1 + j) % 2 == 0 { 1 } else { -1 };
+                        let sign = if (n - 1 + j).is_multiple_of(2) { 1 } else { -1 };
                         sign * det(&m)
                     })
                     .collect();

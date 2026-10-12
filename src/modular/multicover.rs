@@ -130,7 +130,14 @@ pub fn gw_from_gv(
     for inv in gv.iter().filter(|inv| inv.degree != 0) {
         for m in 1..=max_deg / inv.degree {
             let denom = Integer::from(u64::from(m).pow(exponent));
-            let curve = inv.curve.iter().map(|&x| x * m as i32).collect();
+            let curve = inv
+                .curve
+                .iter()
+                .map(|&x| {
+                    x.checked_mul(m as i32)
+                        .expect("a multiple of a curve overflows")
+                })
+                .collect();
             let (_, values) = gw
                 .entry(curve)
                 .or_insert_with(|| (m * inv.degree, vec![Rational::default(); inv.values.len()]));

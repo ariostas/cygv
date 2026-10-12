@@ -55,9 +55,16 @@ fn chunks(n: usize, n_chunks: usize, cost: impl Fn(usize) -> usize) -> Vec<Range
     res
 }
 
+/// The number of chunks of [`par_accumulate`] when the sums must be taken in a fixed order.
+const ORDERED_CHUNKS: usize = 128;
+
 /// Calls `body(x, map)` for every `x` in `0..n`, in parallel over chunks of similar total
 /// `cost` on the threads of the current rayon pool, where `map` is a map with `width` values
 /// per slot of the chunk's own. Each chunk then adds its map to `acc` with `add`.
+///
+/// Unless `exact`, the sums are taken in a fixed order: the chunks do not depend on the
+/// number of threads, and their maps are added in order, a round of one chunk per thread at a
+/// time.
 fn par_accumulate<K: Key, E: Copy + Default + PartialEq + Send + Sync>(
     acc: &ShardedMap<K, E>,
     width: usize,
@@ -65,8 +72,26 @@ fn par_accumulate<K: Key, E: Copy + Default + PartialEq + Send + Sync>(
     cost: impl Fn(usize) -> usize,
     body: impl Fn(usize, &mut SlotMap<K, E>) + Sync,
     add: impl Fn(&mut [E], &[E]) + Sync,
+    exact: bool,
 ) {
     let threads = rayon::current_num_threads();
+    if !exact {
+        let chunks = chunks(n, ORDERED_CHUNKS, cost);
+        for round in chunks.chunks(threads) {
+            let mut maps: Vec<SlotMap<K, E>> = round
+                .par_iter()
+                .map(|xs| {
+                    let mut map = SlotMap::new(width, 1024);
+                    for x in xs.clone() {
+                        body(x, &mut map);
+                    }
+                    map
+                })
+                .collect();
+            acc.add_in_order(&mut maps, &add);
+        }
+        return;
+    }
     let n_chunks = if threads == 1 { 1 } else { 4 * threads };
     chunks(n, n_chunks, cost).into_par_iter().for_each_init(
         || SlotMap::new(width, 1024),
@@ -105,6 +130,7 @@ fn mul_scalar_into<R: Ring, K: Key>(
             }
         },
         |out, v| add_into(ring, out, v),
+        R::EXACT,
     );
 }
 
@@ -268,6 +294,7 @@ pub fn instanton<R: Ring, K: Key>(
             }
         },
         |out, v| add_into(ring, out, v),
+        R::EXACT,
     );
     let inst = acc.take();
     Ok(InstantonData { alpha, inst, beta })

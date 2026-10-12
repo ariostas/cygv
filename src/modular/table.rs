@@ -427,7 +427,9 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
 }
 
 /// The shard of a key among `n_shards`, from the high bits of its hash, since tables index by
-/// the low ones.
+/// the low ones. The tags of a [`SlotMap`] overlap these bits, so with a power of two of
+/// shards a few bits of the tags are the same throughout a shard, which only makes their
+/// collisions a little more likely.
 #[inline]
 pub fn shard_of<K: Key>(key: K, n_shards: usize) -> usize {
     ((key.hash64() >> 40) % n_shards as u64) as usize
@@ -470,6 +472,36 @@ impl<K: Key, V: Copy + Default + PartialEq + Send> ShardedMap<K, V> {
             }
         }
         map.clear();
+    }
+
+    /// Adds the values of every slot of each of `maps` to those of the same key, with `add`,
+    /// the maps one after the other, and clears them. The shards take their slots in
+    /// parallel, so that a sum is taken in the order of the maps whatever the threads.
+    pub fn add_in_order(&self, maps: &mut [SlotMap<K, V>], add: impl Fn(&mut [V], &[V]) + Sync)
+    where
+        K: Sync,
+        V: Sync,
+    {
+        let n = self.shards.len();
+        let by_shard: Vec<Vec<Vec<u32>>> = maps
+            .par_iter()
+            .map(|map| {
+                let mut by_shard = vec![Vec::new(); n];
+                for (s, &key) in map.keys().iter().enumerate() {
+                    by_shard[shard_of(key, n)].push(s as u32);
+                }
+                by_shard
+            })
+            .collect();
+        self.shards.par_iter().enumerate().for_each(|(i, shard)| {
+            let mut shard = shard.lock().unwrap();
+            for (map, slots) in maps.iter().zip(&by_shard) {
+                for &s in &slots[i] {
+                    add(shard.get_or_insert(map.key(s), map.deg(s)), map.values(s));
+                }
+            }
+        });
+        maps.iter_mut().for_each(SlotMap::clear);
     }
 
     /// The slots with a nonzero value, as a [`SparsePoly`].

@@ -518,9 +518,24 @@ bench_gv_tests! {
     test_h11_11_gv: "h11_11", 5;
 }
 
+/// `h11_9` under the sparse grading vector with large entries of the benchmarks'
+/// `h11_9_plike`, which spreads its curve classes over hundreds of degrees.
+#[test]
+#[cfg(feature = "cli")]
+fn test_h11_9_plike_gv() {
+    let yaml = include_str!("../../benches/data/h11_9.yaml").replace(
+        "grading_vector: [3, 1, -1, 0, -1, -1, 0, -2, -1]",
+        "grading_vector: [148, -121, -108, -29, -147, -114, -89, -141, -136]",
+    );
+    let case = load("h11_9_plike", &yaml, 150);
+    assert_eq!(case.grading_vector[0], 148);
+    check_gv(&case, &Options::default());
+}
+
 /// Several threads, with every layer of the extraction applied curve by curve and then
-/// level-synchronously, on a threefold and on the fourfold, whose instanton series has
-/// fourteen components.
+/// level-synchronously, and with the level tables in 128 bits, which the geometries the tests
+/// can afford do not need otherwise, on a threefold and on the fourfold, whose instanton
+/// series has fourteen components.
 #[test]
 #[cfg(feature = "cli")]
 fn test_threads() {
@@ -528,6 +543,11 @@ fn test_threads() {
     let by_level = Tuning {
         sync_max_curves: usize::MAX,
         sync_min_terms: 0,
+        ..Tuning::default()
+    };
+    let wide = Tuning {
+        wide_levels: true,
+        ..Tuning::default()
     };
     let cases = [
         load("h11_9", include_str!("../../benches/data/h11_9.yaml"), 6),
@@ -535,7 +555,7 @@ fn test_threads() {
     ];
     for case in &cases {
         for threads in [2, 3] {
-            for extraction in [Tuning::default(), by_level.clone()] {
+            for extraction in [Tuning::default(), by_level.clone(), wide.clone()] {
                 let options = Options {
                     threads: Some(threads),
                     extraction,

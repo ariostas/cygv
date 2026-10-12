@@ -61,6 +61,9 @@ pub struct Tuning {
     /// Curves are large when $\alpha$ has at least this many terms up to the degree their
     /// exponentials reach.
     pub sync_min_terms: usize,
+    /// Whether the level tables pack the offsets into 128 bits even when 64 bits fit, which
+    /// only the tests need, since the geometries they can afford fit 64 bits.
+    pub wide_levels: bool,
 }
 
 impl Default for Tuning {
@@ -68,6 +71,7 @@ impl Default for Tuning {
         Self {
             sync_max_curves: 2,
             sync_min_terms: 20000,
+            wide_levels: false,
         }
     }
 }
@@ -173,6 +177,10 @@ impl<W: LevelWord, E: Copy + Default + PartialEq> LTerms<W, E> {
 /// Collects the final terms $f_m$ of degree `e` of an exponential from `level`, where they
 /// sit multiplied by `e` (unless `e` is zero), as the nonzero sources for the levels above,
 /// and calls `emit(h, f_m)` for each one of positive degree, with `h` the hash of $m$.
+///
+/// Unless the ring is exact, the sources are sorted by hash, since the order in which a level
+/// table holds its terms depends on its capacity, so that the sums the scatters take do not
+/// depend on the history of the tables.
 fn finalize<R: Ring, W: LevelWord>(
     ring: &R,
     level: &LevelTable<W, R::Elem>,
@@ -195,6 +203,9 @@ fn finalize<R: Ring, W: LevelWord>(
             emit(key, f);
         }
         sources.push((key, f));
+    }
+    if !R::EXACT {
+        sources.sort_unstable_by_key(|&(h, _)| h);
     }
 }
 
@@ -262,6 +273,10 @@ impl<W: LevelWord, E: Copy + Default + PartialEq> ExpWorkspace<W, E> {
 struct Shard<K, E> {
     map: SlotMap<K, E>,
     heap: DegreeHeap,
+    /// Space for [`Shard::fold_ordered`]: the terms in order, by curve, buffer and index,
+    /// and the hashes of their keys.
+    order: Vec<(u32, u32, u32)>,
+    hashes: Vec<u64>,
 }
 
 impl<K: Key, E: Copy + Default + PartialEq> Shard<K, E> {
@@ -291,6 +306,45 @@ impl<K: Key, E: Copy + Default + PartialEq> Shard<K, E> {
         }
         out.clear();
     }
+
+    /// Subtracts the terms of `outs`, which record the curves that emitted them, in the order
+    /// of the curves, and empties them. A curve emits at most one term per key, so every key
+    /// takes its terms in the same order however they were spread over the buffers.
+    fn fold_ordered<R: Ring<Elem = E>>(&mut self, ring: &R, outs: &mut [&mut OutBuf<K, E>]) {
+        let width = self.map.width();
+        self.order.clear();
+        for (b, out) in outs.iter().enumerate() {
+            let terms = out.srcs.iter().enumerate();
+            self.order
+                .extend(terms.map(|(i, &src)| (src, b as u32, i as u32)));
+        }
+        self.order.sort_unstable_by_key(|&(src, _, _)| src);
+        self.hashes.clear();
+        self.hashes.extend(
+            self.order
+                .iter()
+                .map(|&(_, b, i)| outs[b as usize].keys[i as usize].hash64()),
+        );
+        for &h in self.hashes.iter().take(FOLD_PREFETCH) {
+            self.map.prefetch(h);
+        }
+        for (j, &(_, b, i)) in self.order.iter().enumerate() {
+            if let Some(&h) = self.hashes.get(j + FOLD_PREFETCH) {
+                self.map.prefetch(h);
+            }
+            let (out, i) = (&outs[b as usize], i as usize);
+            let deg = out.degs[i];
+            let (t, created) = self.map.insert_hashed(out.keys[i], self.hashes[j], deg);
+            if created {
+                self.heap.push(deg, t);
+            }
+            let v = &out.vals[i * width..(i + 1) * width];
+            for (x, &y) in self.map.values_mut(t).iter_mut().zip(v) {
+                *x = ring.sub(*x, y);
+            }
+        }
+        outs.iter_mut().for_each(|o| o.clear());
+    }
 }
 
 /// Terms to subtract from one shard, as a worker collects them.
@@ -298,6 +352,9 @@ struct OutBuf<K, E> {
     keys: Vec<K>,
     degs: Vec<u32>,
     vals: Vec<E>,
+    /// The index in its group of the curve that emitted each term, when the sums must be
+    /// taken in order (see [`extract`]).
+    srcs: Vec<u32>,
     /// Space for the hashes of the keys, when they are subtracted.
     hashes: Vec<u64>,
 }
@@ -308,6 +365,7 @@ impl<K, E> OutBuf<K, E> {
             keys: Vec::new(),
             degs: Vec::new(),
             vals: Vec::new(),
+            srcs: Vec::new(),
             hashes: Vec::new(),
         }
     }
@@ -316,16 +374,20 @@ impl<K, E> OutBuf<K, E> {
         self.keys.clear();
         self.degs.clear();
         self.vals.clear();
+        self.srcs.clear();
     }
 }
 
 /// Buffers $n_C f$ to be subtracted at `key`, of degree `deg`, in the buffer of its shard in
-/// `out`, and subtracts the buffer if it is full.
+/// `out`, and subtracts the buffer if it is full. With `src`, the index of the curve, the
+/// buffer records it and is only subtracted at the end of the group, in order.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn emit<R: Ring, K: Key>(
     ring: &R,
     shards: &[Mutex<Shard<K, R::Elem>>],
     out: &mut [OutBuf<K, R::Elem>],
+    src: Option<u32>,
     key: K,
     deg: u32,
     n_c: &[R::Elem],
@@ -336,9 +398,52 @@ fn emit<R: Ring, K: Key>(
     o.keys.push(key);
     o.degs.push(deg);
     o.vals.extend(n_c.iter().map(|&n| ring.mul(n, f)));
-    if o.keys.len() >= FLUSH {
+    if let Some(src) = src {
+        o.srcs.push(src);
+    } else if o.keys.len() >= FLUSH {
         shards[s].lock().unwrap().fold(ring, o);
     }
+}
+
+/// The most terms that the curves of a group of a layer are expected to emit in all, as a
+/// multiple of the terms of the instanton series, when they are kept until the group is done
+/// (see [`extract`]).
+const GROUP_TERMS: usize = 2;
+
+/// The most curves in a group of a layer.
+const GROUP_CURVES: usize = 4096;
+
+/// Sorts the curves of a layer, with their values, `width` each, by key.
+fn sort_layer<K: Key, E: Copy>(layer: &mut Vec<(K, u32)>, vals: &mut Vec<E>, width: usize) {
+    let mut order: Vec<usize> = (0..layer.len()).collect();
+    order.sort_unstable_by_key(|&i| layer[i].0);
+    *vals = order
+        .iter()
+        .flat_map(|&i| vals[i * width..(i + 1) * width].iter().copied())
+        .collect();
+    *layer = order.iter().map(|&i| layer[i]).collect();
+}
+
+/// The end of the group of the curves of `layer` from `start` on: at most [`GROUP_CURVES`],
+/// whose exponentials have about [`GROUP_TERMS`] times as many terms as `inst` in all, by the
+/// terms of `inst` up to the degree each one reaches, but at least one curve.
+fn group_end<K: Key, E: Copy + Default + PartialEq>(
+    layer: &[(K, u32)],
+    start: usize,
+    inst: &SparsePoly<K, E>,
+    max_deg: u32,
+) -> usize {
+    let budget = GROUP_TERMS * inst.len().max(1 << 16);
+    let mut end = start + 1;
+    let mut terms = inst.len_upto(max_deg - layer[start].1);
+    while end < layer.len() && end - start < GROUP_CURVES {
+        terms += inst.len_upto(max_deg - layer[end].1);
+        if terms > budget {
+            break;
+        }
+        end += 1;
+    }
+    end
 }
 
 /// The result of an extraction.
@@ -386,6 +491,8 @@ struct LayerCtx<'a, R: Ring, L: KeyLayout, W> {
     inv: &'a [R::Elem],
     max_deg: u32,
     shards: &'a [Mutex<Shard<L::Key, R::Elem>>],
+    /// Whether the terms record their curves, to be subtracted in order (see [`extract`]).
+    ordered: bool,
     /// The curves, each with its coefficients, `width` values each.
     curves: &'a [(L::Key, u32)],
     vals: &'a [R::Elem],
@@ -397,11 +504,16 @@ impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
         &self.vals[i * self.width..(i + 1) * self.width]
     }
 
+    /// What the terms of curve `i` record.
+    fn src(&self, i: usize) -> Option<u32> {
+        self.ordered.then_some(i as u32)
+    }
+
     /// Applies each curve on one thread, with the workers indexed by the threads.
     fn apply_by_curve(&self, workers: &Workers<W, L::Key, R::Elem>) {
         let apply = |i: usize| {
             let (kc, dc) = self.curves[i];
-            let n_c = self.n_c(i);
+            let (n_c, src) = (self.n_c(i), self.src(i));
             let t = rayon::current_thread_index().unwrap_or(0);
             let mut worker = workers[t].lock().unwrap();
             let Worker { ws, curve, out } = &mut *worker;
@@ -417,7 +529,7 @@ impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
                 self.max_deg - dc,
                 |h, e, f| {
                     let m = self.keys.key(h, e);
-                    emit(self.ring, self.shards, out, kc + m, dc + e, n_c, f)
+                    emit(self.ring, self.shards, out, src, kc + m, dc + e, n_c, f)
                 },
             );
         };
@@ -478,12 +590,12 @@ impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
                 if level.is_empty() {
                     return;
                 }
-                let n_c = self.n_c(i);
+                let (n_c, src) = (self.n_c(i), self.src(i));
                 let (kc, dc) = (c.key, c.deg);
                 let out = &mut c.out;
                 finalize(ring, level, e, self.inv, &mut c.sources, |h, f| {
                     let m = self.keys.key(h, e);
-                    emit(ring, self.shards, out, kc + m, dc + e, n_c, f)
+                    emit(ring, self.shards, out, src, kc + m, dc + e, n_c, f)
                 });
                 // This level is done.
                 *level = LevelTable::new(marker);
@@ -540,8 +652,16 @@ impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
 /// shard and subtracts a buffer when it is full, and the shards take the remaining buffers in
 /// parallel at the end of the layer.
 ///
+/// Unless the ring is exact ([`Ring::EXACT`]), the sums must not depend on the scheduling:
+/// the curves of a layer are sorted by key and applied in groups whose exponentials have
+/// about twice as many terms as `inst` in all (at most 4096 curves), the buffers recording
+/// which curve emitted each term and kept until the group is done, when each shard takes its
+/// terms in the order of the curves. Each curve emits at most one term per key, so every key
+/// then takes its terms in the same order whatever the threads.
+///
 /// The level tables pack the offsets into 64 bits when the box of [`level_box`] fits, and
-/// into 128 bits otherwise, which always fits when the curve classes fit `layout`.
+/// into 128 bits otherwise, which always fits when the curve classes fit `layout`
+/// ([`Tuning::wide_levels`] forces the latter).
 #[allow(clippy::too_many_arguments)]
 pub fn extract<R: Ring, L: KeyLayout>(
     ring: &R,
@@ -569,23 +689,26 @@ pub fn extract<R: Ring, L: KeyLayout>(
         alpha.degs().first().is_none_or(|&d| d > 0),
         "alpha has a constant term"
     );
-    extract_in::<R, L, u64>(
-        ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
-    )
-    .or_else(|| {
-        extract_in::<R, L, u128>(
+    let narrow = || {
+        extract_in::<R, L, u64>(
             ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
         )
-    })
-    .unwrap_or_else(|| {
-        let n_terms = alpha.len_upto(max_deg);
-        Err(Error::Key(KeyError::TooWide {
-            bits: offset_box(layout, grading, alpha, n_terms, max_deg)
-                .1
-                .bits(),
-            max_bits: u128::BITS - 1,
-        }))
-    })
+    };
+    (if tuning.wide_levels { None } else { narrow() })
+        .or_else(|| {
+            extract_in::<R, L, u128>(
+                ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
+            )
+        })
+        .unwrap_or_else(|| {
+            let n_terms = alpha.len_upto(max_deg);
+            Err(Error::Key(KeyError::TooWide {
+                bits: offset_box(layout, grading, alpha, n_terms, max_deg)
+                    .1
+                    .bits(),
+                max_bits: u128::BITS - 1,
+            }))
+        })
 }
 
 /// The coordinates of the terms of `alpha` up to the `n_terms`-th, one after the other, and
@@ -678,6 +801,8 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
             Mutex::new(Shard {
                 map: SlotMap::new(width, 2 * inst.len() / n_shards),
                 heap: DegreeHeap::new(),
+                order: Vec::new(),
+                hashes: Vec::new(),
             })
         })
         .collect();
@@ -741,47 +866,66 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
         if layer.is_empty() {
             continue;
         }
-
-        let ctx = LayerCtx {
-            ring,
-            layout,
-            level,
-            keys,
-            alpha,
-            hashes,
-            rows,
-            ints: &ints,
-            inv,
-            max_deg,
-            shards: &shards,
-            curves: &layer,
-            vals: &layer_vals,
-            width,
-        };
-        let by_level = threads > 1
-            && layer.len() < tuning.sync_max_curves.saturating_mul(threads)
-            && alpha.len_upto(max_deg.saturating_sub(d)) >= tuning.sync_min_terms;
-        let mut synced = if by_level {
-            ctx.apply_by_level()
-        } else {
-            ctx.apply_by_curve(&workers);
-            Vec::new()
-        };
-
-        let mut outs: Vec<Vec<&mut OutBuf<L::Key, R::Elem>>> =
-            (0..n_shards).map(|_| Vec::new()).collect();
-        let worker_outs = workers.iter_mut().map(|w| &mut w.get_mut().unwrap().out);
-        for out in worker_outs.chain(synced.iter_mut().map(|c| &mut c.out)) {
-            for (s, o) in out.iter_mut().enumerate() {
-                outs[s].push(o);
-            }
+        if !R::EXACT {
+            sort_layer(&mut layer, &mut layer_vals, width);
         }
-        shards.par_iter_mut().zip(outs).for_each(|(shard, outs)| {
-            let shard = shard.get_mut().unwrap();
-            for o in outs {
-                shard.fold(ring, o);
+        let mut start = 0;
+        while start < layer.len() {
+            let end = if R::EXACT {
+                layer.len()
+            } else {
+                group_end(&layer, start, inst, max_deg)
+            };
+            let ctx = LayerCtx {
+                ring,
+                layout,
+                level,
+                keys,
+                alpha,
+                hashes,
+                rows,
+                ints: &ints,
+                inv,
+                max_deg,
+                shards: &shards,
+                ordered: !R::EXACT,
+                curves: &layer[start..end],
+                vals: &layer_vals[start * width..end * width],
+                width,
+            };
+            let by_level = threads > 1
+                && end - start < tuning.sync_max_curves.saturating_mul(threads)
+                && alpha.len_upto(max_deg.saturating_sub(d)) >= tuning.sync_min_terms;
+            let mut synced = if by_level {
+                ctx.apply_by_level()
+            } else {
+                ctx.apply_by_curve(&workers);
+                Vec::new()
+            };
+
+            let mut outs: Vec<Vec<&mut OutBuf<L::Key, R::Elem>>> =
+                (0..n_shards).map(|_| Vec::new()).collect();
+            let worker_outs = workers.iter_mut().map(|w| &mut w.get_mut().unwrap().out);
+            for out in worker_outs.chain(synced.iter_mut().map(|c| &mut c.out)) {
+                for (s, o) in out.iter_mut().enumerate() {
+                    outs[s].push(o);
+                }
             }
-        });
+            shards
+                .par_iter_mut()
+                .zip(outs)
+                .for_each(|(shard, mut outs)| {
+                    let shard = shard.get_mut().unwrap();
+                    if R::EXACT {
+                        for o in outs {
+                            shard.fold(ring, o);
+                        }
+                    } else {
+                        shard.fold_ordered(ring, &mut outs);
+                    }
+                });
+            start = end;
+        }
     }
     let parts = shards
         .into_iter()

@@ -81,6 +81,8 @@ pub struct BoundRing;
 impl Ring for BoundRing {
     type Elem = Bound;
 
+    const EXACT: bool = false;
+
     #[inline]
     fn one(&self) -> Bound {
         Bound { m: 1.0, e: 0 }
