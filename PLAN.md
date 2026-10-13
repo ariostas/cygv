@@ -1020,6 +1020,12 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     different numbers.
   - [ ] Decide 6.7's open question (the crate root's re-exports of `Semigroup`, `Polynomial`,
     `PolynomialProperties` and `PolynomialCoeff`) before publishing.
+  - [ ] Decide on the interface redesign of `INTERFACE.md` (a review of every surface, Rust,
+    Python and YAML/CLI, from 2026-10-13, with a proposed design, a migration plan and a
+    prioritized list) before publishing: nothing added on this branch is released yet, so
+    its renames and restructuring cost no deprecations now and do after the release. At
+    least its quick wins, and whether to do the `Problem`/`Options`/`Invariants`
+    restructuring first.
   - [ ] Run the rewritten CI workflows (5b) on a pushed branch.
   - [ ] README, CLAUDE.md and docs updated.
   - [ ] Release notes and a version bump (`Cargo.toml` is still 0.3.0, and the branch has
