@@ -1318,6 +1318,15 @@ After phase 8e:
   keeping the mode's output.
 - [ ] **A targets-only mode by Lagrange–Good** (idea 3 above), only if invariants at isolated
   classes are wanted.
+- [x] **Quasi-linear products by NTT** (idea 4, measured on 2026-10-13 and not adopted): the
+  tree's products are, per target table, hundreds of products of one degree of a node by one
+  degree of its power, each far sparser than the table (on `h11_10` at degree 20 the root's table
+  of degree 20 takes 78 M pairs from 570 of them into 1.66 M terms). An NTT with cyclic
+  projections pays at least the table's size for each, and summed over the tables that is 11–34×
+  the pairs on the bench models at degree 20–22, about 7× slower than the products are now at
+  5.5 ns a pointwise multiply-add even before the transforms. It only drops below the pairs at
+  $h^{1,1} = 2$ and degree 100–200, where the products are 4–5% of the run. Cache-blocking the
+  products (above) stays the lever for them.
 
 Other follow-ups, not from #102:
 

@@ -30,7 +30,9 @@ formula holds, modulo the primes, at all 11 targets tried, but it needs an expon
 class it returns, so it cannot replace the extraction for full runs or for the target-point mode
 as it is (every invariant in the lightcones). For the targets alone it was 1–2× faster than the
 extraction on their lightcones and about 2.5× smaller, most of its time going to Δ and IΔ, which
-the targets share; not adopted (`PLAN.md` 5.3).
+the targets share; not adopted (`PLAN.md` 5.3). Idea 4 was measured against the tree's products and is not
+viable: they are sums of many small slice products into each table, and an NTT pays the output's
+size for each of them (see idea 4).
 
 ---
 
@@ -306,9 +308,22 @@ truncations: every class would need an exponential, including the ~90% with zero
 (DKMMR: 360 M classes examined for 2 500 nonzero at h¹¹ = 101). First experiment: Python on
 `h11_9` with the C's lightcone test cases (PLAN 6b), compare with idea 2.
 
-### Idea 4 — Quasi-linear products by NTT with randomized cyclic projections (high-degree regime)
+### Idea 4 — Quasi-linear products by NTT with randomized cyclic projections (high-degree regime) **[measured, not adopted]**
 
-**Status: literature + estimate; crossover too high for today's typical runs.**
+**Status: measured against the tree of idea 1, not adopted.** The tree's products are not a few
+dense products but, for each target table, hundreds of products of one degree of a node by one
+degree of its power (on `h11_10` at degree 20 the root's table of degree 20 takes 78 M pairs from
+570 of them into 1.66 M terms, 137 k pairs each). A cyclic-projection NTT pays at least the size of
+the output per such product and projection, even with the transforms free: summed over the tables,
+11× the pairs on `h11_10` at 20 (3.9e9 against 3.5e8), 19× on `h11_8` at 22, 12× on `h11_9` at 20,
+34× on `h11_11` at 20 **[measured]**. With a streaming multiply-add at 5.5 ns a point against
+35–55 ns a pair, that is still about 7× slower before the forward transforms (a naive radix-2 NTT
+of 2²² points took 0.9 s here, a tuned one perhaps 0.1 s, and the largest table alone would need up
+to 1 140 of them). The ratio only falls below one at small h¹¹ and high degree (the h¹¹ = 2 toy
+threefold: 1.0× at degree 100, 0.6× at 200), where the products are 4–5% of the run and a plain
+dense layout would do. The estimate below assumed dense products and a crossover at D ≈ 25–30; it
+does not hold for the tree. Before that: literature + estimate; crossover too high for today's
+typical runs.
 
 Map z^m ↦ x^{(e·m) mod N} τ^{deg m} with N ≈ 1.2–2× the slice size and 2–3 independent random
 linear forms e; multiply by cyclic NTT in x and univariate truncation in τ; peel collisions using the
