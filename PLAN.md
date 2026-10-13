@@ -1179,7 +1179,9 @@ Not scheduled; each can be done after the wrap-up. First those from PR #102:
   replayed by indexing for the others, with sums kept unreduced in blocks of 16 (which needs
   a dot-product method on `Ring`, `BoundRing` keeping plain fused multiply-adds). About 10%
   on one thread for the C here and mixed on 8, for up to a quarter more memory and a
-  budget, a cost model and a task order of its own. Measure again after the next item.
+  budget, a cost model and a task order of its own. Measure again after the next item, and
+  only if the shared-exponential extraction below does not pan out, since it would subsume
+  this.
 - [ ] **64-bit keys everywhere** when the whole layout fits (h11_8 and h11_9 take 51 and 56
   bits): a `PackedLayout` over `u64` would halve the keys of the series, the shards and the
   candidates. Not in the C.
@@ -1192,6 +1194,35 @@ Not scheduled; each can be done after the wrap-up. First those from PR #102:
   `Fan::mori_cone` already uses that rule; without a fan an empty grading vector is
   `ComputeError::MissingGradingVector` today, although the Python wrapper accepts `None`
   with cone data.
+
+From `ALGORITHMS.md` (2026-10-13), a search for changes of the order of the move to word-sized
+primes; it also lists the ideas rejected and why, among them every route through GKZ systems or
+Picard–Fuchs operators (each still ends in re-expanding a series in the mirror coordinates,
+which is the extraction):
+
+- [ ] **Shared-exponential extraction** (its idea 1, the largest). At a point with one
+  negative intersection $c_1$ is a multiple of $Q_s$, so $\alpha = Q^T \beta$ with scalar
+  series $\beta_r$ on the small cones $K_r$, and each curve's $\exp(C \cdot \alpha)$ is
+  $\prod_r E_r^{Q_r \cdot C}$ with $E_r = \exp \beta_r$. Curves with the same exponents on the
+  dominant divisors (one carries 50–66% of $\alpha$'s terms, two over 80%) then share those
+  factors: the subtraction becomes a tree over the divisors' exponents, with products kept
+  online in the degree so that the curves still come out in order. Exact counts on the bench
+  data: sharing two divisors cuts the scatter's pairs 14× (`h11_8` at degree 20) and 7×
+  (`h11_11` at 18), and the terms folded into the series 121× and 29×; projected 10–20× end to
+  end if the cost per pair holds, more at higher degree. The scheme is verified in exact
+  rationals on toy data, not implemented. First experiment (1–2 days): share only the largest
+  divisor, check the GVs and that the counters drop about 3× (pairs) and 10× (emitted terms),
+  then two divisors. Risks: larger tables per node, 2–3× the extraction's table memory, less
+  parallelism near the root.
+- [ ] **Lightcone pruning inside the exponentials** (idea 2): with target points, drop the
+  sources outside the lightcones when a level is finalized. Measured with three degree-16
+  targets on `h11_8`: 3.9× fewer pairs, 50× fewer emitted terms. Small.
+- [ ] **Per-target extraction by the Lagrange–Good formula** (idea 3):
+  $n_C = [z^C]\, I \Delta e^{-C \cdot \alpha}$, with $\Delta = \det(\delta + \theta \alpha)$
+  computed once; the targets become independent (parallel, local in memory) at about the cost
+  of idea 2. Only for targets (a full truncation would need an exponential for every class,
+  most with no invariant), and heavy for faces of high rank, where $\Delta$ is a determinant of
+  that size.
 
 Other follow-ups, not from #102:
 
