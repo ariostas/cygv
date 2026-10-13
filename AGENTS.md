@@ -158,7 +158,15 @@ products and reciprocal, $\alpha$, and the instanton series $I$), `extraction` (
 coefficients of $I$ in the basis $z^C \exp(C\cdot\alpha)$, curve by curve in order of degree,
 each exponential built by the Euler recurrence in per-degree level tables, the emitted terms
 subtracted through shards whose buffers are hashed first and prefetched while they are
-folded in) and `multicover` (the GV
+folded in; along the rows of the charges, $\exp(C \cdot \alpha) = \prod_r E_r^{Q_r \cdot C}$
+with $E_r = \exp \beta_r$, and `extraction/tree.rs`, `PLAN.md` phase 8e, shares the powers of
+the rows of the most terms between the curves: a tree of the curves by their exponents on
+those rows, by default at most two of them, whose nodes are multiplied by the power of their
+row once for all of their curves, relaxed in the degree, while each curve builds the
+exponential of the other rows as before; the pass takes $\beta$ along the rows whenever the
+tree is used, which `extraction::Tuning::tree_depth` and `uses_tree` decide: by default for a
+series of one component, while an n-fold's several components go curve by curve, the tree
+taking them one at a time) and `multicover` (the GV
 invariants from those, by gcd of the coordinates; exponent 3 and a division by the degree for
 threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats passes with the
 next primes until `crt::Residues` gives a stable lift (the lift from all but the last
@@ -301,7 +309,10 @@ indices differently (the first index is a reference surface in the n-fold case).
   shards: a `table::ShardedMap` (or the extraction's own shards, which also carry a degree heap)
   splits a table by the high bits of the key hash, each shard behind a `Mutex`, and workers add
   to it in batches (a chunk's own map, or per-shard buffers of `FLUSH` terms), so each lock is
-  taken rarely. The extraction applies the curves of a layer (degrees $[d, d + \delta)$, $\delta$
+  taken rarely. The extraction's tree builds the curves' exponentials in parallel by curve,
+  sums up the tree by parent, subtracts by table and multiplies by target table (its products
+  into one table are one task, and those near the root scale badly). The curve-by-curve
+  extraction applies the curves of a layer (degrees $[d, d + \delta)$, $\delta$
   the lowest degree of $\alpha$) in parallel, each worker indexed by
   `rayon::current_thread_index` with its own level tables; layers of few large curves (the first
   ones) instead go level-synchronously, with the scatter of each curve into each of its levels as
@@ -309,14 +320,18 @@ indices differently (the first index is a reference surface in the n-fold case).
   is exact and every table is sorted when taken. The certifier's bounds round, so their sums
   depend on their order, and for a `Ring` that is not `EXACT` the stages fix it: the
   instanton products use chunks that do not depend on the threads and merge them in order
-  (`ShardedMap::add_in_order`), the exponentials sort their sources by hash, and the
+  (`ShardedMap::add_in_order`), the exponentials sort their sources by hash, the tree sorts
+  each layer by key before numbering its nodes, adds the curves' terms in their order and
+  folds the subtractions in the order of their tables (each depth groups the bounds' sums
+  differently, so the bounds depend on it), and the curve-by-curve
   extraction sorts each layer and applies it in groups of curves (`GROUP_TERMS`,
   `GROUP_CURVES`), whose terms record their curve and are kept until the group is done, when
   each shard takes its terms in the order of the curves (`Shard::fold_ordered`;
   `modular::tests::test_bounds_threads`). That costs a certified run about 10%; `tests/stress.rs` (ignored, run with
   `cargo test --release --test stress -- --ignored` before releases and after changes to the
-  parallel code) checks that over repeated runs, and `reference_tests::test_threads` forces both
-  extraction modes on a few threads in every test run. The tuning constants were measured on a
+  parallel code) checks that over repeated runs, and `reference_tests::test_threads` forces
+  trees of several depths and both modes of the curve-by-curve extraction on a few threads in
+  every test run. The tuning constants were measured on a
   4-core machine with hyperthreading and are provisional.
 
 ### Command line interface

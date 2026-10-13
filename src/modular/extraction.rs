@@ -23,6 +23,10 @@
 //! The curves of each degree are applied in parallel, and the terms they emit are subtracted
 //! from the series through shards with a lock each (see [`extract`]).
 //!
+//! With $\alpha$ along the rows of the charges, the exponentials of the rows of the most terms
+//! are instead shared between the curves, along a tree of the curves by their intersections
+//! with those rows (`tree`, `PLAN.md` phase 8e), and only the rest is built curve by curve.
+//!
 //! This stage only takes plain series and tables and returns a series, so that other
 //! implementations of it, such as a GPU one, can take its place (`PLAN.md`, section 4.1).
 
@@ -34,6 +38,8 @@ use super::table::{shard_of, DegreeHeap, SlotMap, SparsePoly};
 use super::Error;
 use rayon::prelude::*;
 use std::sync::Mutex;
+
+mod tree;
 
 /// Level tables larger than this are freed after each curve rather than kept for the next.
 const LEVEL_KEEP: usize = 1 << 15;
@@ -64,6 +70,23 @@ pub struct Tuning {
     /// Whether the level tables pack the offsets into 128 bits even when 64 bits fit, which
     /// only the tests need, since the geometries they can afford fit 64 bits.
     pub wide_levels: bool,
+    /// The number of rows of the tree along which an extraction along rows shares the
+    /// exponentials of the curves (see [`extract`]); zero builds every exponential curve by
+    /// curve instead. `None` chooses the depth from the terms of the rows for a series with
+    /// one value per term, and builds the exponentials curve by curve for one with several,
+    /// which the tree extracts one component at a time, more slowly than the curves do.
+    pub tree_depth: Option<usize>,
+}
+
+impl Tuning {
+    /// Whether an extraction along rows of a series with `width` values per term goes along
+    /// the tree.
+    pub fn uses_tree(&self, width: usize) -> bool {
+        match self.tree_depth {
+            Some(depth) => depth > 0,
+            None => width == 1,
+        }
+    }
 }
 
 impl Default for Tuning {
@@ -72,6 +95,7 @@ impl Default for Tuning {
             sync_max_curves: 2,
             sync_min_terms: 20000,
             wide_levels: false,
+            tree_depth: None,
         }
     }
 }
@@ -636,6 +660,12 @@ impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
 /// $\sum_a \lvert C_a\rvert \lvert\alpha_a\rvert$; `inv` holds the inverses of the integers up to `max_deg` at least. Only the
 /// curves in `lightcone` are subtracted, so the coefficients are only right in there.
 ///
+/// Along rows, the exponentials go along a tree (see the module `tree`) unless `tuning` says
+/// otherwise ([`Tuning::uses_tree`]): $\exp(C \cdot \alpha) = \prod_r E_r^{M_r \cdot C}$ with
+/// $E_r = \exp \beta_r$, and the powers of the rows of the most terms multiply the sums of the
+/// curves that share their exponents, once for all of them. What follows describes the
+/// exponentials built curve by curve, which the tree also builds along the other rows.
+///
 /// With `source`, each curve's $n_C$ is still what the result holds, but what is subtracted
 /// is $q^C$ times the values `source` writes over it, given the curve and its degree. The
 /// certifier's majorant run passes the values the candidate invariants imply, so that the
@@ -689,6 +719,11 @@ pub fn extract<R: Ring, L: KeyLayout>(
         alpha.degs().first().is_none_or(|&d| d > 0),
         "alpha has a constant term"
     );
+    if let Some(rows) = rows.filter(|_| tuning.uses_tree(inst.width())) {
+        return tree::extract_tree(
+            ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
+        );
+    }
     let narrow = || {
         extract_in::<R, L, u64>(
             ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
@@ -1132,7 +1167,7 @@ mod tests {
                 }
             }
             let (beta, alpha_m) = (beta_map.take(), alpha_map.take());
-            let run = |a: &SparsePoly<PackedKey, E>, r: Option<&[Vec<i32>]>| {
+            let run = |a: &SparsePoly<PackedKey, E>, r: Option<&[Vec<i32>]>, tuning: &Tuning| {
                 let got = extract(
                     &lf,
                     &layout,
@@ -1143,7 +1178,7 @@ mod tests {
                     &inv,
                     max_deg,
                     &Lightcone::All,
-                    &Tuning::default(),
+                    tuning,
                     None,
                 )
                 .unwrap();
@@ -1151,11 +1186,22 @@ mod tests {
                     .map(|i| (got.keys()[i], got.values(i).to_vec()))
                     .collect::<HashMap<PackedKey, Vec<E>>>()
             };
-            assert_eq!(
-                run(&beta, Some(&rows)),
-                run(&alpha_m, None),
-                "width {width}"
-            );
+            let expected_rows = run(&alpha_m, None, &Tuning::default());
+            // Curve by curve, and along trees of every depth, in 64 and 128 bits.
+            for tree_depth in [None, Some(0), Some(1), Some(2), Some(3)] {
+                for wide_levels in [false, true] {
+                    let tuning = Tuning {
+                        tree_depth,
+                        wide_levels,
+                        ..Tuning::default()
+                    };
+                    assert_eq!(
+                        run(&beta, Some(&rows), &tuning),
+                        expected_rows,
+                        "width {width}, {tuning:?}"
+                    );
+                }
+            }
         }
     }
 

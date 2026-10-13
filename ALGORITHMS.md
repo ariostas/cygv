@@ -18,6 +18,14 @@ Labels: **[measured]** = measured on this machine with the code in `measure/`; *
 checked by an exact computation; **[literature]** = established, with a source; **[estimate]** = cost
 model or inference; **[speculation]** = plausible, unchecked.
 
+**Outcome.** Ideas 1 and 2 were implemented in phase 8e of `PLAN.md` (`modular/extraction/tree.rs`),
+with outputs identical to the earlier extraction: 3–6× end to end on the bench models at degree
+20–22 and 13× on `h11_10` at 20, on the 4-core development machine. Two predictions below were off:
+computing the powers E_r^m in full cost more than everything else until each one was computed
+only up to the degree its node needs, and a product costs 35–55 ns a pair (tables near the root out
+of cache) against the 14 ns of the scatter, so trees deeper than two rows save pairs but not time.
+`PLAN.md` 8e has the measurements, and 5.3 the follow-ups.
+
 ---
 
 ## 0. Summary

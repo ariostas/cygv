@@ -1,6 +1,6 @@
 # Plan: a Rust implementation of the fast GV algorithm from PR #94
 
-Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d, 8, 8b, 8c, 8d done.** Progress is
+Status: **investigation done, phases 0 (0–0d), 1, 2, 3, 3b, 4, 4b, 6–6c, 5, 5b, 7a–7d, 8, 8b, 8c, 8d, 8e done.** Progress is
 tracked by the check boxes in section 5. Where sections 1–5 mention `rug` for the new code, read
 "big integers": phase 5b replaced `rug` with `malachite` everywhere (6.10). Branch
 `gv-modular-rust` is PR #94 (`natemacfadden:cgv-cc-cpu`, 11 commits) rebased onto `origin/main`
@@ -1008,6 +1008,56 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     C's instructions run in `cb_run`, and its scatter and replay together take 50G against
     our scatter's 58G) and our per-curve finalize and emit (26G against the C's 7G in
     `apply_curve`, mostly decoding hashes into 128-bit keys).
+- [x] **8e. The shared-exponential extraction** (`ALGORITHMS.md` idea 1, on 2026-10-13;
+  `modular/extraction/tree.rs`). Along the rows $M_r$ of the charges,
+  $\exp(C \cdot \alpha) = \prod_r E_r^{M_r \cdot C}$ with $E_r = \exp \beta_r$, and a few
+  rows hold most of the terms of $\beta$ (on `h11_8` at 20, 14013 and 4939 of 21289). The
+  curves go into a tree by their exponents on the rows of the most terms; a node holds the
+  sum over its curves of $n_C z^C$ times the powers of the rows below it times
+  $\exp(L'_C)$, the exponential of the other rows, which each curve still builds with the
+  Euler recurrence of the level tables. A node is multiplied by the power of its row once,
+  for all of its curves. The products are relaxed: the terms of a node of the degrees of a
+  layer are final once its curves are applied, and are then scattered against the power into
+  the parent, while the root's terms of a layer's degrees are summed up the tree and
+  subtracted from the series before its curves are read. The nodes key absolute classes by
+  the linear hashes of a box over the sums of $\beta$ and the series, so a product's target
+  is one addition, as in the exponentials.
+  - Measured on the way: one row 3.2× fewer exponential pairs (515M → 163M on `h11_8` at
+    20); two rows, with each power computed only up to the degree its node needs (in full,
+    the 146 powers took 70M pairs, more than everything else), 515M → 40M (25M in the
+    curves' exponentials, 15M in the products). Deeper trees save more pairs but no time:
+    all 13 rows take 25M pairs and 15 s, from the cost of the nodes. A third row helps
+    only on one thread at $h^{1,1} = 10$ (43 against 51 s), so the default takes the rows
+    with a tenth of the terms of the first, at most two (`Tuning::tree_depth` sets it).
+  - A product costs 35–55 ns a pair against 14 for the scatter of an exponential: the
+    tables of the nodes near the root hold hundreds of thousands of terms, out of cache, and
+    the products into one table are one task, so they scale badly (on `h11_10` at 20, 12 s
+    on one thread and 11 on eight). Splitting a table's products into private tables merged
+    afterwards doubled their cost (the outputs are a sixtieth of the pairs, but still large),
+    and a longer prefetch changed nothing. Cache blocking is a follow-up (5.3).
+  - Parallel: the curves' exponentials as before (by curve; an exact ring adds their terms
+    to the leaves under the lock of each table, a bound waits for the layer and adds them
+    in the order of the curves), the sums up the tree by parent, the subtractions by table,
+    the products by target table. For the certifier every sum is taken in an order that
+    does not depend on the threads: the layer is sorted by key and the nodes numbered after
+    it, and the subtractions fold in the order of their tables
+    (`modular::tests::test_bounds_threads` for each depth: the depths group the bounds'
+    sums differently, so each one only agrees with itself).
+  - With target points the terms of the nodes outside the lightcones are dropped before
+    their products and their subtraction (idea 2, there): three degree-16 targets on
+    `h11_8`, 3.6× fewer product pairs.
+  - n-folds: the components do not mix, so the tree extracts them one at a time, which on
+    the fourfold's 14 is slower than the curves, which share their exponentials over the
+    components (degree 30: 5.9 against 4.4 s). By default a series of several components
+    therefore still goes curve by curve (`Tuning::uses_tree`); a tree with several values
+    per node is a follow-up.
+  - Memory: the nodes' tables add 12–25% at peak (`h11_8` at 22: 465 against 370 MB;
+    `h11_10` at 20: 1.91 against 1.70 GB).
+  - Result (identical outputs; the C of 8d / before / after, best of two): `h11_8` at 20 one
+    thread 17.0 / 18.1 / 3.3 s, 8 threads 5.7 / 6.2 / 1.8 s; `h11_9` 3.5 / 3.8 / 1.8 s;
+    `h11_11` one thread 11.4 / 13.3 / 4.0 s, 8 threads 4.6 / 5.5 / 2.6 s; `h11_8` at 22
+    24.4 / 27.5 / 4.5 s; `h11_10` at 20, one thread – / 647 / 51 s, 8 threads – / 244 /
+    29 s. Certified runs: `h11_8` 14.3 → 3.5 s, `h11_11` 12.4 → 5.0 s (8 threads).
 - [ ] **9. Wrap up.**
   - [ ] Confirm with the PR author that the provenance of `refs_vex` allows shipping it as
     fixtures (5.2).
@@ -1179,9 +1229,9 @@ Not scheduled; each can be done after the wrap-up. First those from PR #102:
   replayed by indexing for the others, with sums kept unreduced in blocks of 16 (which needs
   a dot-product method on `Ring`, `BoundRing` keeping plain fused multiply-adds). About 10%
   on one thread for the C here and mixed on 8, for up to a quarter more memory and a
-  budget, a cost model and a task order of its own. Measure again after the next item, and
-  only if the shared-exponential extraction below does not pan out, since it would subsume
-  this.
+  budget, a cost model and a task order of its own. The tree of 8e now does most of what it
+  would (it shares more), so only worth measuring again for the curves' exponentials along
+  the other rows.
 - [ ] **64-bit keys everywhere** when the whole layout fits (h11_8 and h11_9 take 51 and 56
   bits): a `PackedLayout` over `u64` would halve the keys of the series, the shards and the
   candidates. Not in the C.
@@ -1200,7 +1250,9 @@ primes; it also lists the ideas rejected and why, among them every route through
 Picard–Fuchs operators (each still ends in re-expanding a series in the mirror coordinates,
 which is the extraction):
 
-- [ ] **Shared-exponential extraction** (its idea 1, the largest). At a point with one
+- [x] **Shared-exponential extraction** (its idea 1, the largest). Done in phase 8e: 3–6× end
+  to end on the bench models at degree 20–22 and 13× on `h11_10`, about half the pairs the
+  report projected per row shared, but at a higher cost per pair. At a point with one
   negative intersection $c_1$ is a multiple of $Q_s$, so $\alpha = Q^T \beta$ with scalar
   series $\beta_r$ on the small cones $K_r$, and each curve's $\exp(C \cdot \alpha)$ is
   $\prod_r E_r^{Q_r \cdot C}$ with $E_r = \exp \beta_r$. Curves with the same exponents on the
@@ -1214,15 +1266,29 @@ which is the extraction):
   divisor, check the GVs and that the counters drop about 3× (pairs) and 10× (emitted terms),
   then two divisors. Risks: larger tables per node, 2–3× the extraction's table memory, less
   parallelism near the root.
-- [ ] **Lightcone pruning inside the exponentials** (idea 2): with target points, drop the
+- [x] **Lightcone pruning inside the exponentials** (idea 2): with target points, drop the
   sources outside the lightcones when a level is finalized. Measured with three degree-16
-  targets on `h11_8`: 3.9× fewer pairs, 50× fewer emitted terms. Small.
+  targets on `h11_8`: 3.9× fewer pairs, 50× fewer emitted terms. Small. Done in the tree of
+  8e for the terms of its nodes; the curve-by-curve extraction (n-folds) does not prune.
 - [ ] **Per-target extraction by the Lagrange–Good formula** (idea 3):
   $n_C = [z^C]\, I \Delta e^{-C \cdot \alpha}$, with $\Delta = \det(\delta + \theta \alpha)$
   computed once; the targets become independent (parallel, local in memory) at about the cost
   of idea 2. Only for targets (a full truncation would need an exponential for every class,
   most with no invariant), and heavy for faces of high rank, where $\Delta$ is a determinant of
   that size.
+
+After phase 8e:
+
+- [ ] **Cache-blocked products of the tree.** The products into the tables near the root run
+  at 35–55 ns a pair, out of cache, and those into one table are one task. Partitioning each
+  product's pairs by the top bits of their hashes (the bucket ranges of the target table)
+  before adding them would keep the target in cache, and would let the partitions of one
+  table run in parallel. The largest remaining share of the extraction on `h11_10`.
+- [ ] **A tree with several values per node**, for n-folds, so that their components share
+  the exponentials as the curves do; today an n-fold goes curve by curve unless a depth is
+  asked for.
+- [ ] **The depth of the tree** was chosen on this 4-core machine; check it on a larger one
+  (a third row helps on one thread at $h^{1,1} = 10$).
 
 Other follow-ups, not from #102:
 

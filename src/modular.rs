@@ -937,8 +937,9 @@ fn pass<R: Ring, L: KeyLayout>(
         lightcone,
         tuning,
     } = *run;
-    let majorant = source.is_some();
-    let pd = period::period(ring, layout, geometry, cands, max_deg, majorant)?;
+    // The extraction goes along the rows for its tree, and for the majorant run.
+    let along_rows = source.is_some() || tuning.uses_tree(geometry.n_forms());
+    let pd = period::period(ring, layout, geometry, cands, max_deg, along_rows)?;
     let inst = instanton::instanton(ring, geometry, &pd, max_deg)?;
     let inv = &pd.tables.inv;
     let rows: Vec<Vec<i32>> = (0..geometry.n_anticanonical())
@@ -1218,17 +1219,29 @@ mod tests {
             };
             bound_gv(source(), &w, max_deg, &[], &geometry, &options, &gv).unwrap()
         };
+        let tree = |depth| extraction::Tuning {
+            tree_depth: Some(depth),
+            ..extraction::Tuning::default()
+        };
         let by_level = extraction::Tuning {
             sync_max_curves: usize::MAX,
             sync_min_terms: 0,
-            ..extraction::Tuning::default()
+            ..tree(0)
         };
-        let one = bounds(1, extraction::Tuning::default());
-        assert!(!one.is_empty());
-        for threads in [2, 3, 8] {
-            for tuning in [extraction::Tuning::default(), by_level.clone()] {
-                for _ in 0..3 {
-                    assert!(bounds(threads, tuning.clone()) == one, "{threads} threads");
+        // Along trees, which group the sums differently for each depth, and curve by curve,
+        // every layer applied curve by curve and then level-synchronously.
+        let default = extraction::Tuning::default();
+        for tunings in [vec![default], vec![tree(3)], vec![tree(0), by_level]] {
+            let one = bounds(1, tunings[0].clone());
+            assert!(!one.is_empty());
+            for threads in [2, 3, 8] {
+                for tuning in &tunings {
+                    for _ in 0..3 {
+                        assert!(
+                            bounds(threads, tuning.clone()) == one,
+                            "{threads} threads, {tuning:?}"
+                        );
+                    }
                 }
             }
         }

@@ -1,6 +1,7 @@
 //! A stress test of the parallel code of the modular pipeline: repeated runs at several thread
-//! counts, with the extraction's layers applied curve by curve and level-synchronously, must
-//! all give the results of a run on one thread.
+//! counts, with the extraction along trees of two and three rows, and curve by curve, its
+//! layers applied curve by curve and level-synchronously, must all give the results of a run
+//! on one thread.
 //!
 //! It runs each case 40 times, which takes half a minute in a release build and much longer
 //! in a debug one, so it is ignored by default; run it before releases and after changes to
@@ -41,10 +42,14 @@ fn test_stress() {
         ("h11_9, generators", &h11_9, 12, false),
         ("fourfold", &fourfold, 15, false),
     ];
+    let tree = |depth| Tuning {
+        tree_depth: Some(depth),
+        ..Tuning::default()
+    };
     let by_level = Tuning {
         sync_max_curves: usize::MAX,
         sync_min_terms: 0,
-        ..Tuning::default()
+        ..tree(0)
     };
     for (name, input, max_deg, cones) in cases {
         let one = Options {
@@ -54,7 +59,7 @@ fn test_stress() {
         let expected = run(input, max_deg, cones, &one);
         assert!(!expected.is_empty());
         for threads in [2, 3, 4, 8] {
-            for extraction in [Tuning::default(), by_level.clone()] {
+            for extraction in [tree(2), tree(3), tree(0), by_level.clone()] {
                 let options = Options {
                     threads: Some(threads),
                     extraction,

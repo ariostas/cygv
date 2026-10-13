@@ -532,22 +532,27 @@ fn test_h11_9_plike_gv() {
     check_gv(&case, &Options::default());
 }
 
-/// Several threads, with every layer of the extraction applied curve by curve and then
+/// Several threads, with the extraction along trees of one to three rows, and building every
+/// exponential curve by curve, with every layer applied curve by curve and then
 /// level-synchronously, and with the level tables in 128 bits, which the geometries the tests
 /// can afford do not need otherwise, on a threefold and on the fourfold, whose instanton
-/// series has fourteen components.
+/// series has fourteen components (which only go along a tree when it is asked for).
 #[test]
 #[cfg(feature = "cli")]
 fn test_threads() {
     use super::extraction::Tuning;
+    let tree = |depth| Tuning {
+        tree_depth: Some(depth),
+        ..Tuning::default()
+    };
     let by_level = Tuning {
         sync_max_curves: usize::MAX,
         sync_min_terms: 0,
-        ..Tuning::default()
+        ..tree(0)
     };
-    let wide = Tuning {
+    let wide = |depth| Tuning {
         wide_levels: true,
-        ..Tuning::default()
+        ..tree(depth)
     };
     let cases = [
         load("h11_9", include_str!("../../benches/data/h11_9.yaml"), 6),
@@ -555,7 +560,15 @@ fn test_threads() {
     ];
     for case in &cases {
         for threads in [2, 3] {
-            for extraction in [Tuning::default(), by_level.clone(), wide.clone()] {
+            for extraction in [
+                Tuning::default(),
+                tree(1),
+                tree(3),
+                tree(0),
+                by_level.clone(),
+                wide(0),
+                wide(2),
+            ] {
                 let options = Options {
                     threads: Some(threads),
                     extraction,
