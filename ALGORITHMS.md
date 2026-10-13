@@ -16,7 +16,8 @@ are not in the repository:
 
 Labels: **[measured]** = measured on this machine with the code in `measure/`; **[verified]** =
 checked by an exact computation; **[literature]** = established, with a source; **[estimate]** = cost
-model or inference; **[speculation]** = plausible, unchecked.
+model or inference; **[speculation]** = plausible, unchecked; **[implemented]** = in the Rust code
+now (see the outcome below).
 
 **Outcome.** Ideas 1 and 2 were implemented in phase 8e of `PLAN.md` (`modular/extraction/tree.rs`),
 with outputs identical to the earlier extraction: 3–6× end to end on the bench models at degree
@@ -56,11 +57,12 @@ of cache) against the 14 ns of the scatter, so trees deeper than two rows save p
    the terms folded into the series **121× / 29×**. Half of the remaining cost is per-curve
    exponentials over the other divisors, which deeper sharing removes; projected **10–30× on the
    extraction** at these sizes, growing with degree. Correctness of the online scheme is
-   **[verified]** in `tree_extraction_poc.py`. This is idea 1 below.
+   **[verified]** in `tree_extraction_poc.py`. This is idea 1 below, now implemented.
 
 4. **For target-point / lightcone mode** two cheaper wins: prune the exponentials to the lightcone
-   (**[measured]** 3.9× pairs, 50× emitted terms on `h11_8` with 3 targets), and the Lagrange–Good
-   per-target formula (**[verified]**), which makes targets independent (parallel, memory-local).
+   (**[measured]** 3.9× pairs, 50× emitted terms on `h11_8` with 3 targets; idea 2, now
+   implemented), and the Lagrange–Good per-target formula (**[verified]**), which makes targets
+   independent (parallel, memory-local).
 
 5. Ideas with orders of magnitude *only in other regimes*: NTT products via randomized cyclic
    projections at D ≳ 30 (memory makes that regime rare), lightcone-chunked extraction as a
@@ -138,10 +140,11 @@ This is the structure every idea below builds on.
 
 ## 2. Ranked ideas
 
-### Idea 1 — Shared-exponential extraction: Horner tree over divisor exponents with relaxed products
+### Idea 1 — Shared-exponential extraction: Horner tree over divisor exponents with relaxed products **[implemented]**
 
-**Status: strongest candidate; cost model measured on real data; algorithm verified exactly on
-synthetic data; not yet implemented in Rust.**
+**Status: implemented in phase 8e of `PLAN.md` (`modular/extraction/tree.rs`), the default for
+threefolds, with at most two rows shared (see the outcome above). Before that: strongest candidate;
+cost model measured on real data; algorithm verified exactly on synthetic data.**
 
 **Mathematics.** Write the extraction identity with α along the rows of the charge matrix (the
 anticanonical rows j and the divisor rows r; the code already has this as `c1_rows`/`beta`/`rows`
@@ -254,9 +257,12 @@ accumulation (keep the A_m across layers and scatter only their newly finalized 
 GVs against `compute_gv` on `h11_8`@20 and `h11_11`@18 and compare the scatter counters with the
 table above (expect ≈ 3× pairs, ≈ 10× emitted terms). Then the 2-level version.
 
-### Idea 2 — Lightcone pruning inside the exponentials (target-point mode)
+### Idea 2 — Lightcone pruning inside the exponentials (target-point mode) **[implemented]**
 
-**Status: measured; trivial to implement; large gain only with targets.**
+**Status: implemented in phase 8e of `PLAN.md`, in the tree of idea 1 (its nodes' sources and the
+emitted terms; the curve-by-curve extraction does not prune): 3.6× fewer product pairs on `h11_8`
+with three degree-16 targets. Before that: measured; trivial to implement; large gain only with
+targets.**
 
 With targets P, a level-table entry at offset v of curve C is useful only if C + v is in the
 lightcone (if it is not, no C + v + u is: the lightcone is a lower set). Today the pruning is at
