@@ -1270,12 +1270,32 @@ which is the extraction):
   sources outside the lightcones when a level is finalized. Measured with three degree-16
   targets on `h11_8`: 3.9× fewer pairs, 50× fewer emitted terms. Small. Done in the tree of
   8e for the terms of its nodes; the curve-by-curve extraction (n-folds) does not prune.
-- [ ] **Per-target extraction by the Lagrange–Good formula** (idea 3):
-  $n_C = [z^C]\, I \Delta e^{-C \cdot \alpha}$, with $\Delta = \det(\delta + \theta \alpha)$
-  computed once; the targets become independent (parallel, local in memory) at about the cost
-  of idea 2. Only for targets (a full truncation would need an exponential for every class,
-  most with no invariant), and heavy for faces of high rank, where $\Delta$ is a determinant of
-  that size.
+- [x] **Per-target extraction by the Lagrange–Good formula** (idea 3, explored on 2026-10-13
+  and not adopted): $n_C = [z^C]\, I \Delta e^{-C \cdot \alpha}$, with
+  $\Delta = \det(\delta + \theta \alpha)$ computed once on the lightcones. A scratch
+  prototype in the pass (modulo the pass's primes, one thread, dense series over the lattice
+  points of the lightcones, $\Delta$ by elimination) matched the extraction's coefficients at
+  all 11 targets tried, on `h11_8`, `h11_10` and `h11_11` at degrees 16–24. It replaces nothing:
+  a full truncation needs an exponential for every class (one central class of degree 24 on
+  `h11_10` costs 1.0e8 pairs, the whole tree extraction of `h11_10` at 20 6.6e8), and the
+  target-point mode returns every invariant in the lightcones, each of which would need its own.
+  It only pays for a mode that returns the targets alone (and their divisors, for the
+  multicover). Per pass, one target, against the extraction on its lightcone:
+
+  | Target | Extraction | $\Delta$ + $I\Delta$ + exponential |
+  |---|---|---|
+  | `h11_8`, degree 20 | 0.74 s | 0.78 s |
+  | `h11_8`, degree 22 | 1.85 s | 1.19 s |
+  | `h11_8`, degree 24 | 4.23 s | 3.56 s |
+  | `h11_11`, degree 20 | 0.12 s | 0.32 s |
+  | `h11_10`, degree 20 | 2.86 s | 1.48 s |
+  | `h11_10`, degree 24 | 63 s, 2.3 GB peak | 38 s, 0.9 GB peak |
+
+  Three targets of degree 20 on `h11_10`: 6.0 s against 5.7 s. About 90% of the time is
+  $\Delta$ ($h^{1,1}$-sized elimination over series) and the product $I\Delta$, both shared by
+  the targets, so each further target costs one small exponential. The prototype ran at about
+  45 ns a pair; tuned and parallel, perhaps 2–4× faster than the extraction and 2–5× smaller,
+  which is not worth a mode of its own unless someone needs invariants at isolated classes.
 
 After phase 8e:
 
@@ -1289,6 +1309,15 @@ After phase 8e:
   asked for.
 - [ ] **The depth of the tree** was chosen on this 4-core machine; check it on a larger one
   (a third row helps on one thread at $h^{1,1} = 10$).
+- [ ] **Prune the rest of the extraction to the lightcones.** The tree drops the terms
+  outside them only at its nodes' sources and at the emission: the powers of the shared rows
+  and each curve's exponential along the other rows are still built up to the maximum degree.
+  One degree-24 target on `h11_10` (3.3e5 points in its lightcone) peaks at 0.39 GB before the
+  extraction and 2.3 GB after it, against 0.9 GB for the Lagrange–Good prototype above, which
+  only stores series on the lightcone; that gap is presumably what pruning would recover,
+  keeping the mode's output.
+- [ ] **A targets-only mode by Lagrange–Good** (idea 3 above), only if invariants at isolated
+  classes are wanted.
 
 Other follow-ups, not from #102:
 

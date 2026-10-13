@@ -25,7 +25,12 @@ with outputs identical to the earlier extraction: 3–6× end to end on the benc
 computing the powers E_r^m in full cost more than everything else until each one was computed
 only up to the degree its node needs, and a product costs 35–55 ns a pair (tables near the root out
 of cache) against the 14 ns of the scatter, so trees deeper than two rows save pairs but not time.
-`PLAN.md` 8e has the measurements, and 5.3 the follow-ups.
+`PLAN.md` 8e has the measurements, and 5.3 the follow-ups. Idea 3 was then prototyped in the pass: the
+formula holds, modulo the primes, at all 11 targets tried, but it needs an exponential for every
+class it returns, so it cannot replace the extraction for full runs or for the target-point mode
+as it is (every invariant in the lightcones). For the targets alone it was 1–2× faster than the
+extraction on their lightcones and about 2.5× smaller, most of its time going to Δ and IΔ, which
+the targets share; not adopted (`PLAN.md` 5.3).
 
 ---
 
@@ -275,10 +280,13 @@ pairs 3.2e7 → 8.2e6 (**3.9×**), emitted terms 2.65e6 → 5.25e4 (**50×**). W
 time, expect ≈ 5–8× on the extraction in this mode; more for fewer or lower targets. Also the enabler
 of idea 5. No effect on full runs. Works for every variant (the lightcone is a property of the keys).
 
-### Idea 3 — Lagrange–Good per-target extraction
+### Idea 3 — Lagrange–Good per-target extraction **[measured, not adopted]**
 
-**Status: formula established [literature: Good 1960; Gessel 1987; Bender–Richmond 1998]; verified
-here exactly; cost estimated, not measured.**
+**Status: prototyped in the Rust pass and measured (see the outcome above and `PLAN.md` 5.3): it
+matches the extraction at every target tried, but only pays for a mode that returns the targets
+alone, by 1–2× in time and about 2.5× in memory in an untuned prototype. Before that: formula
+established [literature: Good 1960; Gessel 1987; Bender–Richmond 1998]; verified here exactly; cost
+estimated, not measured.**
 
 For q_a = z_a e^{α_a(z)} and any series F,
 
