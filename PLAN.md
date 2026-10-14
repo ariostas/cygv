@@ -1101,6 +1101,8 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
   - The pruning of the target mode (section 5.3), for runs with targets.
   - Lightcone chunks (idea 5 of `ALGORITHMS.md`, measured in 5.3): 1.6× less memory for 2.9×
     the time with four chunks, so the last resort; it composes with the others.
+  - Opportunistically, folding the tables onto the orbits of a symmetry (idea 6, measured in
+    5.3) divides them by $|G|$, but few geometries have one, mostly of order 2, so last.
 
 Outside the phases:
 
@@ -1360,6 +1362,14 @@ After phase 8e:
   tables instead (about 1 GB of it), which phase 10 would address. A by-product of the
   experiment: the pass now frees the period data before the extraction, which only needs its
   table of inverses (1.91 → 1.78 GB peak on that run, identical output).
+- [x] **Symmetries of the polytope** (idea 6, measured on 2026-10-13 and not adopted): the
+  orbits of an automorphism group $G$ preserving the fan, $\kappa$ and the grading would need
+  one exponential each, saving up to $|G|$ in the extraction's time and tables. None of the 28
+  geometries at hand (the bench models, `cgv/tests/refs` and `refs_vex`) has a symmetry, and in
+  random samples of 200 Kreuzer–Skarke polytopes the group acting on the divisors is trivial for
+  72–86% at $h^{1,1} = 8$–30 and of order 2 for most of the rest (an upper bound: the
+  triangulation and grading must be symmetric too); the 491 polytope has order 2. Under 10%
+  on average at $h^{1,1} = 10$, for the detection, canonical keys and an equivariant tree.
 
 Other follow-ups, not from #102:
 

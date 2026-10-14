@@ -35,7 +35,8 @@ viable: they are sums of many small slice products into each table, and an NTT p
 size for each of them (see idea 4). Idea 5 works but trades badly: on `h11_10` at degree 20, two
 chunks lower the peak 1.3× for 1.7× the time, four 1.6× for 2.9×, because most classes sit at the
 top degree and each chunk keeps everything below its own; the memory is mostly the tree's node
-tables (see idea 5).
+tables (see idea 5). Idea 6 would rarely apply: none of the 28 geometries at hand has a
+symmetry, and about four in five Kreuzer–Skarke polytopes at h¹¹ = 8–30 have none (see idea 6).
 
 ---
 
@@ -77,7 +78,7 @@ tables (see idea 5).
 5. Ideas with orders of magnitude *only in other regimes*: NTT products via randomized cyclic
    projections at D ≳ 30 (memory makes that regime rare), lightcone-chunked extraction as a
    time–memory tradeoff for the memory-bound degree-26–28 regime (measured since: a poor trade, see
-   idea 5), symmetry orbits.
+   idea 5), symmetry orbits (measured since: rare, see idea 6).
 
 6. Rejected: Kronecker/box FFT, Taylor/θ expansion, triangular/Horner composition, Newton inversion
    of the mirror map, evaluation–interpolation over F_p, p-adic lifting, GKZ/PF/Yukawa/Birkhoff,
@@ -373,7 +374,23 @@ lightcones (all share the low-degree region) is the overhead — plausibly 2–5
 **[speculation]**. Only worth it in the memory-bound regime; idea 1's structure (node tables)
 complicates it.
 
-### Idea 6 — Symmetries of the polytope
+### Idea 6 — Symmetries of the polytope **[measured, not adopted]**
+
+**Status: measured, not adopted.** A search for the permutations of the toric divisors induced by
+a lattice automorphism of the curve classes that preserves κ, the Mori cone and the grading found
+only the identity on the four bench models (h¹¹ = 8–11), the 12 oracle geometries of
+`cgv/tests/refs` and the 12 fans of `cgv/tests/refs_vex`, and the whole S₄ of the (2,2,2,2)
+hypersurface in (P¹)⁴, whose GV invariants are constant on the orbits (36 251 classes in 2 059
+orbits at degree 30) **[measured]**. On the Kreuzer–Skarke polytopes, 200 drawn from the first
+3 000 the database lists for each h¹¹, the automorphisms acting on the points not interior to
+facets form the trivial group for 40% at h¹¹ = 5 and for 72–86% at h¹¹ = 8, 10, 12, 15, 20 and
+30, a group of order 2 for most of the rest, and one of order 16–32 for one polytope in 200 at
+h¹¹ = 8, 20 and 30; the 491 polytope has order 2 **[measured]**. That is an upper bound, since the
+triangulation and the grading must be symmetric too. The gain (≤ |G|, in time and in table memory
+alike: exponentials only for the orbits' representatives, the emitted terms folded onto theirs)
+averages under 10% at h¹¹ = 10, against detecting the group, canonicalizing the emitted keys and
+an equivariant tree. Where a geometry does have one, constancy on the orbits is a cheap check of
+the output. Before that, the estimate:
 
 Automorphisms of the polytope that preserve the fan, q (up to row permutation), κ and the grading
 permute curve classes and leave GV invariant; exponentials of an orbit are permutations of one
