@@ -939,9 +939,11 @@ fn pass<R: Ring, L: KeyLayout>(
     } = *run;
     // The extraction goes along the rows for its tree, and for the majorant run.
     let along_rows = source.is_some() || tuning.uses_tree(geometry.n_forms());
-    let pd = period::period(ring, layout, geometry, cands, max_deg, along_rows)?;
+    let mut pd = period::period(ring, layout, geometry, cands, max_deg, along_rows)?;
     let inst = instanton::instanton(ring, geometry, &pd, max_deg)?;
-    let inv = &pd.tables.inv;
+    // Only the inverses outlive the instanton: freeing the rest lowers the extraction's peak.
+    let inv = &std::mem::take(&mut pd.tables.inv);
+    drop(pd);
     let rows: Vec<Vec<i32>> = (0..geometry.n_anticanonical())
         .map(|j| geometry.q0(j).to_vec())
         .chain((0..geometry.n_divisors()).map(|r| geometry.q(r).to_vec()))
