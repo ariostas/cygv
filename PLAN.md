@@ -1373,6 +1373,24 @@ After phase 8e:
 
 Other follow-ups, not from #102:
 
+- [ ] **A measurement session on a newer machine.** Everything here was measured on a 4-core
+  Haswell laptop CPU (AVX2 and FMA, no AVX-512, 256 KB of L2) in a VM. Once a newer one is at
+  hand, ideally a recent x86 with AVX-512 (Zen 4/5, Ice Lake or later) with 16 or more cores,
+  and an ARM machine (Apple M-series or Graviton) if possible, measure in one session, with
+  the C of #102 rerun there as the baseline and hardware counters next to the wall clock:
+  - SIMD modular arithmetic (the constant factors of `ALGORITHMS.md`): 50-bit primes with
+    the double-precision FMA mulmod, or 52-bit AVX-512 IFMA, against the scalar 62-bit
+    Montgomery of today, at the price of more primes. Cannot be tried here at all.
+  - Structure-of-arrays level tables (above), which only pay with a large L2.
+  - The block size of the cache-blocked products of the tree (above); the products' misses
+    should show everywhere, so that follow-up can start here.
+  - The tree's depth and the tuning constants of `extraction::Tuning` (layer thresholds,
+    chunk counts, the prefetch distance), and the scaling of the products near the root on
+    many cores.
+  Not on that list, because they barely depend on the CPU: more lanes per pass (`NL` up to
+  8, one pass instead of two), 64-bit keys, and the lane probe, all of which can be measured
+  here.
+
 - [ ] **Certifying vex phases** (`Error::CertifyStrata` today, as in the C): the stratum
   terms need bounds of their own in the majorant run.
 - [ ] **Reporting as data** (4.1.7): a stats struct (passes, primes, timings per stage,
