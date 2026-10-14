@@ -1082,6 +1082,25 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     many breaking changes: the module paths, the `Method` and `certify` arguments, the new
     `ComputeError` variants, saturation by default; 6.2 and 6.7 list the consequences).
   - [ ] Decide what happens to PR #94 and credit its author (section 7).
+- [ ] **10. A low-memory mode** (after the release; added on 2026-10-13): an option that
+  prefers memory to speed, for the runs that do not fit (the C reports 3–6 GB at degree
+  26–28 for $h^{1,1} = 10$–11, and `h11_10` at 20 already peaks at 1.8 GB here, against 0.6 GB
+  before the extraction). Explore first, measuring each lever's memory against its time on
+  `h11_10` at 20–24, then decide the option's shape (a flag, or a memory budget the run
+  plans for). Candidates, roughly in order of promise:
+  - The tree's node tables, about 1 GB of the peak on `h11_10` at 20: terms waiting for their
+    degree, copied into every node on the way down (leaves 534 MB, depth one 276 MB, root
+    176 MB at layer 16). Store them once and let the nodes refer to them, flush them sooner,
+    or keep a shallower tree (curve by curve the extraction took 1.70 against 1.91 GB).
+  - Two lanes per pass instead of three or four: every term holds one value per lane next
+    to its key, so the tables shrink by a third or so, for more passes.
+  - Dropping $\alpha$ when the extraction goes along the rows ($\beta$ replaces it), and
+    whatever else the stages keep alive past their last use (the period data already goes
+    before the extraction).
+  - 64-bit keys when the layout fits (section 5.3), and smaller shards' buffers.
+  - The pruning of the target mode (section 5.3), for runs with targets.
+  - Lightcone chunks (idea 5 of `ALGORITHMS.md`, measured in 5.3): 1.6× less memory for 2.9×
+    the time with four chunks, so the last resort; it composes with the others.
 
 Outside the phases:
 
@@ -1315,7 +1334,10 @@ After phase 8e:
   One degree-24 target on `h11_10` (3.3e5 points in its lightcone) peaks at 0.39 GB before the
   extraction and 2.3 GB after it, against 0.9 GB for the Lagrange–Good prototype above, which
   only stores series on the lightcone; that gap is presumably what pruning would recover,
-  keeping the mode's output.
+  keeping the mode's output. The chunking experiment of idea 5 (below) found pruning by one
+  functional nearly free: sort each degree of a power by it, and give each source the prefix
+  within its slack. Any few of the lightcones' facets are a valid relaxation, so the
+  dominant ones could prune the powers that way, and the full test stay at the emission.
 - [ ] **A targets-only mode by Lagrange–Good** (idea 3 above), only if invariants at isolated
   classes are wanted.
 - [x] **Quasi-linear products by NTT** (idea 4, measured on 2026-10-13 and not adopted): the
@@ -1327,6 +1349,17 @@ After phase 8e:
   5.5 ns a pointwise multiply-add even before the transforms. It only drops below the pairs at
   $h^{1,1} = 2$ and degree 100–200, where the products are 4–5% of the run. Cache-blocking the
   products (above) stays the lever for them.
+- [x] **Lightcone-chunked extraction** (idea 5, measured on 2026-10-13 and not adopted): split
+  the truncation into chunks closed under going down in the Mori cone (cut by functionals
+  nonnegative on it), run each restricted to its chunk and merge. The union matched the full
+  run exactly, but on `h11_10` at degree 20 (8 threads; 29 s and 1.9 GB in full) two chunks
+  peak at 1.2–1.4 GB for 49 s in all and four at 0.86–1.11 GB for 84 s, and only once the
+  tree's powers, products and curves' terms are pruned to the chunk too. Most classes sit at
+  the top degree and each brings its whole lightcone: by counting, the largest of 16 chunks
+  would still hold 29% of the classes, for 4.4× the work. The peak is mostly the tree's node
+  tables instead (about 1 GB of it), which phase 10 would address. A by-product of the
+  experiment: the pass now frees the period data before the extraction, which only needs its
+  table of inverses (1.91 → 1.78 GB peak on that run, identical output).
 
 Other follow-ups, not from #102:
 

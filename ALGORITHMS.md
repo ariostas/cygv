@@ -32,7 +32,10 @@ as it is (every invariant in the lightcones). For the targets alone it was 1–2
 extraction on their lightcones and about 2.5× smaller, most of its time going to Δ and IΔ, which
 the targets share; not adopted (`PLAN.md` 5.3). Idea 4 was measured against the tree's products and is not
 viable: they are sums of many small slice products into each table, and an NTT pays the output's
-size for each of them (see idea 4).
+size for each of them (see idea 4). Idea 5 works but trades badly: on `h11_10` at degree 20, two
+chunks lower the peak 1.3× for 1.7× the time, four 1.6× for 2.9×, because most classes sit at the
+top degree and each chunk keeps everything below its own; the memory is mostly the tree's node
+tables (see idea 5).
 
 ---
 
@@ -73,7 +76,8 @@ size for each of them (see idea 4).
 
 5. Ideas with orders of magnitude *only in other regimes*: NTT products via randomized cyclic
    projections at D ≳ 30 (memory makes that regime rare), lightcone-chunked extraction as a
-   time–memory tradeoff for the memory-bound degree-26–28 regime, symmetry orbits.
+   time–memory tradeoff for the memory-bound degree-26–28 regime (measured since: a poor trade, see
+   idea 5), symmetry orbits.
 
 6. Rejected: Kronecker/box FFT, Taylor/θ expansion, triangular/Horner composition, Newton inversion
    of the mirror map, evaluation–interpolation over F_p, p-adic lifting, GKZ/PF/Yukawa/Birkhoff,
@@ -337,9 +341,31 @@ small h¹¹ (≤ 4–5) at very high degree (DKMMR's h¹¹ = 2 at degree 200 too
 objects. Kronecker substitution into a box is hopeless (box/cone ratio ≈ 10⁶ at h¹¹ = 8, D = 20,
 coordinate bounds up to 60 **[measured]**).
 
-### Idea 5 — Lightcone-chunked extraction as a time–memory tradeoff
+### Idea 5 — Lightcone-chunked extraction as a time–memory tradeoff **[measured, not adopted]**
 
-**Status: estimate.** Peak memory ∝ the touched set (366 k points at `h11_8`@20 but growing like
+**Status: measured on `h11_10` at degree 20 (8 threads), not adopted.** A chunk is cut by linear
+functionals nonnegative on the Mori cone (a facet h: {h·C ≤ t}, and its complement within the
+degree, {(q·g − p·h)·C ≤ qD − pt} with p/q = min deg/h over the cone), so every chunk is closed
+under going down in the cone and the chunks cover the truncation; recursive cuts give
+intersections. Two and four chunks reproduced all 1.17 M invariants of the full run exactly
+**[verified]**. Restricting the candidates and the tree's sources alone changes little (two chunks:
+extraction peaks 1.64 and 1.75 GB against 1.86 GB, each about as long as the full run); pruning the
+powers of the shared rows (each degree sorted by the functional, so that a source takes the prefix
+within its slack), the products and the curves' terms to the chunk brings two chunks to 1.22 and
+1.41 GB in 23 and 25 s, and four to 0.86–1.11 GB in 19–23 s each, 84 s in all against 29 s and
+1.8 GB for the full run **[measured]**: 1.3× less memory for 1.7× the time, or 1.6× for 2.9×.
+Counting the output classes in each chunk bounds what more chunks could do: the largest of 2, 4,
+8 and 16 recursive chunks still holds 68%, 48%, 37% and 29% of the classes, for 1.3×, 1.9×, 2.8×
+and 4.4× the total, and k-way cuts by one functional leave about 66% in every chunk; most classes
+sit at the top degree and each one brings its whole lightcone **[measured]**. The candidates, the
+period and the instanton are also repeated in every chunk without being pruned to it. The peak is
+mostly elsewhere: about 1 GB of it is the tree's node tables at their height (terms waiting for
+their degree, the same class copied into many nodes; the leaves alone take 534 MB), then the shards
+(140–220 MB) and the period data, which the extraction kept alive only for its table of inverses
+(freed since, 1.91 → 1.78 GB). Those are the levers for memory (`PLAN.md` phase 10), not chunking.
+One by-product: pruning by a single functional costs almost nothing once the powers are sorted by
+it, and any subset of the lightcones' facets is a valid relaxation, which the pruning of the target
+mode can use (`PLAN.md` 5.3). Before that, the estimate: Peak memory ∝ the touched set (366 k points at `h11_8`@20 but growing like
 D^{h¹¹}: the C reports 3–6 GB at degree 26–28 for h¹¹ = 10–11). Partition the top-degree classes into
 groups, run the extraction restricted (idea 2) to the union of each group's lightcones, and merge.
 Memory ∝ the largest group's lightcone; time ∝ Σ_groups (restricted cost), i.e. the overlap of the
