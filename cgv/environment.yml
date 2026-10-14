@@ -1,0 +1,52 @@
+# Environment for studying Gopakumar-Vafa (GV) invariants: CYTools for the
+# toric geometry, cygv for computing GV/GW invariants.
+# Based on CYTools' environment.yml.
+#
+#   mamba env create -f environment.yml --yes      (or conda)
+#   conda activate gvs
+name: gvs
+channels:
+  - conda-forge
+dependencies:
+  # CYTools dependencies
+  - python=3.12
+  - numba
+  - numpy<2.5  # numba 0.65 caps numpy at <2.5; unpinned, a rebuild floats to 2.5 and breaks the numba import
+  - normaliz
+  - scipy
+  - cvxopt
+  - python-flint
+  - ppl
+  - joblib
+  - tqdm
+  - requests
+  - osqp>=1.0
+  - pytest
+  - pip
+  - pip:
+    - numpy<2.5  # also bind pip's resolver so a pip dep can't float numpy past conda's copy
+    - pandas
+    - pyarrow
+    - sympy
+    - duckdb
+    - ortools==9.15.*      # bundles HiGHS 1.12; keep matched to highspy below
+    - highspy==1.12.*      # must match ortools' bundled HiGHS (SONAME clash)
+    - mosek
+    - triangulumancer
+    - pplpy
+    - pypalp
+    - qpsolvers
+    - regfans>=0.2.1
+    - latticepts
+    - fanroots
+    # GV/GW invariant computation
+    - cygv
+    # The actual cytools package (taken from pypi)
+    - cytools
+  # Common useful tools
+  - jupyterlab
+  - ipykernel
+  - matplotlib
+  - plotly
+  - ipywidgets
+  - anywidget

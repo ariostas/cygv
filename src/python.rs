@@ -85,9 +85,23 @@ pub fn compute_gvgw(
         .collect())
 }
 
+/// Path to the bundled cgv program (see `crate::cgv`).
+#[cfg(feature = "cgv")]
+#[pyfunction]
+#[pyo3(name = "_cgv_executable")]
+fn cgv_executable() -> PyResult<String> {
+    crate::cgv::executable()
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| {
+            pyo3::exceptions::PyOSError::new_err(format!("cannot write the cgv program: {e}"))
+        })
+}
+
 /// A Python module implemented in Rust.
 #[pymodule(gil_used = false)]
 pub fn cygv(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_gvgw, m)?)?;
+    #[cfg(feature = "cgv")]
+    m.add_function(wrap_pyfunction!(cgv_executable, m)?)?;
     Ok(())
 }
