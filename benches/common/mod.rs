@@ -5,12 +5,12 @@
 
 #![allow(dead_code)]
 
-use cygv::dispatch::{
-    compute_gv_rat_nfold, compute_gv_rat_threefold, compute_gw_rat_nfold, compute_gw_rat_threefold,
-};
+use cygv::cone::ConeData;
 use cygv::io::Input;
-use cygv::{CYKind, ConeData, Method};
-use nalgebra::{dmatrix, dvector, DMatrix, DVector, RowDVector};
+use cygv::{
+    compute_gv, compute_gw, CYKind, Geometry, Method, MoriCone, Options, Problem, Selection,
+};
+use nalgebra::{dmatrix, DMatrix, RowDVector};
 use std::collections::HashMap;
 
 /// Number of threads the benchmarks run with.
@@ -35,7 +35,7 @@ pub struct Model {
     pub generators: DMatrix<i32>,
     pub grading_vector: RowDVector<i32>,
     pub q: DMatrix<i32>,
-    pub nefpart: Vec<DVector<i32>>,
+    pub nefpart: Vec<Vec<usize>>,
     pub intnums: HashMap<(usize, usize, usize), i32>,
     pub cy_kind: CYKind,
     /// The cone data, for the realistic models, with which the modular pipeline takes its
@@ -81,19 +81,43 @@ pub fn model(name: &str) -> Model {
 /// and is only complete up to the degree the scenarios reach (see the comments
 /// at the top of those files). It is left out of the published crate.
 fn fixture(name: &'static str, data: &str, cones: &str) -> Model {
-    let mut inputs = Input::load_all(&format!("{data}\n{cones}"))
-        .unwrap_or_else(|e| panic!("invalid fixture {name:?}: {e}"));
-    assert_eq!(inputs.len(), 1, "fixture {name:?} must hold one document");
-    let input = inputs.remove(0);
+    let load = |data: &str| {
+        let mut inputs =
+            Input::load_all(data).unwrap_or_else(|e| panic!("invalid fixture {name:?}: {e}"));
+        assert_eq!(inputs.len(), 1, "fixture {name:?} must hold one document");
+        inputs.remove(0)
+    };
+    let problem = load(data).problem;
+    // The cone data replaces the generators, which come last.
+    let head = &data[..data
+        .find("\ngenerators:")
+        .expect("the generators come last")
+        + 1];
+    let with_cones = load(&format!("{head}{cones}"));
+    let MoriCone::Inequalities {
+        hyperplanes,
+        equations,
+    } = with_cones.problem.cone
+    else {
+        panic!("the cone data of {name:?} has no inequalities")
+    };
+    let MoriCone::Generators(generators) = problem.cone else {
+        panic!("fixture {name:?} has no generators")
+    };
+    let geometry = problem.geometry;
     Model {
         name,
-        generators: input.generators,
-        grading_vector: input.grading_vector,
-        q: input.q,
-        nefpart: input.nefpart,
-        intnums: input.intnums,
-        cy_kind: input.cy_kind,
-        cone_data: input.cone_data,
+        generators,
+        grading_vector: RowDVector::from_vec(problem.grading_vector.unwrap()),
+        cy_kind: CYKind::from_is_threefold(geometry.dimension() == 3),
+        q: geometry.q,
+        nefpart: geometry.nefpart,
+        intnums: geometry.intnums,
+        cone_data: Some(ConeData {
+            hyperplanes,
+            equations,
+            cones: with_cones.options.hilbert_bases.unwrap(),
+        }),
     }
 }
 
@@ -187,7 +211,7 @@ pub fn fourfold() -> Model {
         0,0,0,0,1,0;
         0,0,0,0,0,1;
     ];
-    let nefpart = vec![dvector![0, 1, 2, 3], dvector![4, 5, 6, 7, 8, 9, 10, 11]];
+    let nefpart = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7, 8, 9, 10, 11]];
 
     let intnums = HashMap::from([
         ((0, 0, 2), 1),
@@ -387,95 +411,38 @@ impl Scenario {
     /// being measured; the entry points consume their arguments, so it still
     /// has to be cloned on every call.
     pub fn run(&self, m: &Model) -> usize {
-        let gens = m.generators.clone();
-        let grading = m.grading_vector.clone();
-        let deg = Some(self.max_deg);
-        let q = m.q.clone();
-        let nefpart = m.nefpart.clone();
-        let intnums = m.intnums.clone();
-        let threads = n_threads();
-        let (method, cone_data) = match self.pipeline {
-            Pipeline::Reference => (Method::Reference, None),
-            Pipeline::Modular => (Method::Modular, None),
-            Pipeline::ModularCones => (
-                Method::Modular,
-                Some(m.cone_data.clone().expect("the model has no cone data")),
-            ),
+        let (method, cone, hilbert_bases) = match self.pipeline {
+            Pipeline::Reference => (Method::Reference, None, None),
+            Pipeline::Modular => (Method::Modular, None, None),
+            Pipeline::ModularCones => {
+                let cd = m.cone_data.clone().expect("the model has no cone data");
+                let cone = MoriCone::Inequalities {
+                    hyperplanes: cd.hyperplanes,
+                    equations: cd.equations,
+                };
+                (Method::Modular, Some(cone), Some(cd.cones))
+            }
         };
-
-        match (self.variant, m.cy_kind) {
-            (Variant::GvRat, CYKind::Threefold) => compute_gv_rat_threefold(
-                gens,
-                grading,
-                deg,
-                None,
-                None,
-                q,
-                nefpart,
-                intnums,
-                vec![],
-                None,
-                cone_data,
-                threads,
-                method,
-                false,
-            )
-            .unwrap()
-            .len(),
-            (Variant::GwRat, CYKind::Threefold) => compute_gw_rat_threefold(
-                gens,
-                grading,
-                deg,
-                None,
-                None,
-                q,
-                nefpart,
-                intnums,
-                vec![],
-                None,
-                cone_data,
-                threads,
-                method,
-                false,
-            )
-            .unwrap()
-            .len(),
-            (Variant::GvRat, CYKind::Nfold) => compute_gv_rat_nfold(
-                gens,
-                grading,
-                deg,
-                None,
-                None,
-                q,
-                nefpart,
-                intnums,
-                vec![],
-                None,
-                cone_data,
-                threads,
-                method,
-                false,
-            )
-            .unwrap()
-            .len(),
-            (Variant::GwRat, CYKind::Nfold) => compute_gw_rat_nfold(
-                gens,
-                grading,
-                deg,
-                None,
-                None,
-                q,
-                nefpart,
-                intnums,
-                vec![],
-                None,
-                cone_data,
-                threads,
-                method,
-                false,
-            )
-            .unwrap()
-            .len(),
+        let problem = Problem {
+            geometry: Geometry {
+                q: m.q.clone(),
+                intnums: m.intnums.clone(),
+                nefpart: m.nefpart.clone(),
+                ..Geometry::default()
+            },
+            cone: cone.unwrap_or_else(|| MoriCone::Generators(m.generators.clone())),
+            selection: Selection::MaxDeg(self.max_deg),
+            grading_vector: Some(m.grading_vector.iter().copied().collect()),
+        };
+        let options = Options {
+            method,
+            n_threads: n_threads().map(|n| n.max(1) as usize),
+            hilbert_bases,
+            ..Options::default()
+        };
+        match self.variant {
+            Variant::GvRat => compute_gv(&problem, &options).unwrap().entries.len(),
+            Variant::GwRat => compute_gw(&problem, &options).unwrap().entries.len(),
         }
     }
 }

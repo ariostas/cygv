@@ -1,14 +1,17 @@
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 
 pub mod cone;
-pub mod dispatch;
+mod dispatch;
 #[cfg(feature = "cli")]
 pub mod io;
 pub mod modular;
 pub mod phase;
+mod problem;
 #[cfg(feature = "python")]
 pub mod python;
 pub mod reference;
+
+use malachite::Rational;
 
 /// Which invariants to compute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -74,9 +77,35 @@ impl CYKind {
 pub struct Stratum {
     /// The indices of the three toric divisors, i.e. of rows of the charge matrix.
     pub divisors: [usize; 3],
-    /// The class $d_S$, as fractions (numerator, positive denominator), one per Kähler
-    /// parameter.
-    pub class: Vec<(i64, i64)>,
+    /// The class $d_S$, one entry per Kähler parameter.
+    pub class: Vec<Rational>,
+}
+
+impl Stratum {
+    /// The class as fractions of 64-bit integers (numerator, positive denominator), which
+    /// [`check_strata`] makes sure they are.
+    pub(crate) fn class_i64(&self) -> Vec<(i64, i64)> {
+        self.class
+            .iter()
+            .map(|x| fraction_i64(x).expect("the strata were checked"))
+            .collect()
+    }
+}
+
+/// The class of a stratum from fractions (numerator, denominator), for the tests.
+#[cfg(test)]
+pub(crate) fn class(fractions: &[(i64, i64)]) -> Vec<Rational> {
+    fractions
+        .iter()
+        .map(|&(n, d)| Rational::from(n) / Rational::from(d))
+        .collect()
+}
+
+/// A rational as a numerator and a positive denominator, if both fit in 64 bits.
+pub(crate) fn fraction_i64(x: &Rational) -> Option<(i64, i64)> {
+    let num = i64::try_from(x.numerator_ref()).ok()?;
+    let den = i64::try_from(x.denominator_ref()).ok()?;
+    Some((if *x < 0 { -num } else { num }, den))
 }
 
 /// Checks that the strata fit a threefold hypersurface with `n_divisors` toric divisors and
@@ -108,8 +137,10 @@ pub(crate) fn check_strata(
         if s.class.len() != h11 {
             return Err("the class of a stratum must have one entry per Kähler parameter");
         }
-        if s.class.iter().any(|&(_, den)| den <= 0) {
-            return Err("the denominators of the class of a stratum must be positive");
+        if s.class.iter().any(|x| fraction_i64(x).is_none()) {
+            return Err(
+                "the entries of the class of a stratum must be fractions of 64-bit integers",
+            );
         }
     }
     Ok(())
@@ -119,10 +150,7 @@ pub(crate) fn check_strata(
 /// `n_divisors` toric divisors, i.e. the rows of the charges, into nonempty parts, which
 /// makes its anticanonical rows sum to the anticanonical class, returning what is wrong
 /// otherwise.
-pub(crate) fn check_nefpart(
-    nefpart: &[nalgebra::DVector<i32>],
-    n_divisors: usize,
-) -> Result<(), &'static str> {
+pub(crate) fn check_nefpart(nefpart: &[Vec<usize>], n_divisors: usize) -> Result<(), &'static str> {
     if nefpart.is_empty() {
         return Ok(());
     }
@@ -131,11 +159,10 @@ pub(crate) fn check_nefpart(
         if part.is_empty() {
             return Err("the parts of the nef partition must not be empty");
         }
-        for &r in part.iter() {
-            let r = usize::try_from(r)
-                .ok()
-                .filter(|&r| r < n_divisors)
-                .ok_or("the nef partition must consist of indices of rows of the charges")?;
+        for &r in part {
+            if r >= n_divisors {
+                return Err("the nef partition must consist of indices of rows of the charges");
+            }
             if core::mem::replace(&mut seen[r], true) {
                 return Err("the parts of the nef partition must be disjoint");
             }
@@ -194,11 +221,14 @@ pub(crate) const NON_INTEGER_CAUSES: &str = "this usually means that the input i
 /// Which pipeline computes the invariants.
 ///
 /// Both compute the same invariants exactly. The modular pipeline is much faster, but only
-/// supports truncation by a maximum degree or by target points, not by a minimum number of
-/// points.
+/// supports the selections [`Selection::MaxDeg`] and [`Selection::TargetPoints`], and curve
+/// classes whose coordinates fit its keys; the reference pipeline cannot finish at high
+/// $h^{1,1}$ anyway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Method {
-    /// The modular pipeline when it supports the request, and the reference one otherwise.
+    /// The modular pipeline when the selection allows it, and the reference one otherwise.
+    /// Curve classes too large for the modular keys are an error, which names
+    /// [`Method::Reference`], rather than a slow run of it.
     #[default]
     Auto,
     /// The modular pipeline ([`mod@modular`]). A request it does not support is an error.
@@ -226,56 +256,39 @@ impl Method {
     }
 }
 
-// Re-export the main structs
 #[doc(inline)]
-pub use reference::polynomial::{
-    prettyprint::PrettyPrintPolynomial, properties::PolynomialProperties, Polynomial,
+pub use dispatch::{
+    compute, compute_gv, compute_gw, Computed, Error, Invariant, Invariants, Report,
 };
 #[doc(inline)]
-pub use reference::semigroup::Semigroup;
+pub use problem::{Ambient, Geometry, MoriCone, Options, Problem, Selection};
 
-// Re-export main trait
 #[doc(inline)]
-pub use reference::polynomial::coefficient::PolynomialCoeff;
+pub use cone::CandidateCone;
 
 // Re-export python module
 #[cfg(feature = "python")]
 #[doc(inline)]
 pub use python::cygv;
 
-// Re-export the cone data
-#[doc(inline)]
-pub use cone::{CandidateCone, ConeData};
-
 // Re-export the big-number crate of the results, so that callers can name its types and
 // traits without depending on a matching version themselves.
 pub use malachite;
 
-// Re-export main functions
-#[doc(inline)]
-pub use dispatch::*;
-#[doc(inline)]
-pub use reference::run_hkty;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::dvector;
     use std::collections::HashMap;
 
     #[test]
     fn test_check_nefpart() {
         assert_eq!(check_nefpart(&[], 6), Ok(()));
-        assert_eq!(
-            check_nefpart(&[dvector![3, 0, 1], dvector![2, 5, 4]], 6),
-            Ok(())
-        );
+        assert_eq!(check_nefpart(&[vec![3, 0, 1], vec![2, 5, 4]], 6), Ok(()));
         for nefpart in [
-            vec![dvector![0, 1, 2], dvector![3, 4]],
-            vec![dvector![0, 1, 2], dvector![2, 3, 4, 5]],
-            vec![dvector![0, 1, 2], dvector![3, 4, 6]],
-            vec![dvector![0, 1, 2], dvector![3, 4, -5]],
-            vec![dvector![0, 1, 2, 3, 4, 5], dvector![]],
+            vec![vec![0, 1, 2], vec![3, 4]],
+            vec![vec![0, 1, 2], vec![2, 3, 4, 5]],
+            vec![vec![0, 1, 2], vec![3, 4, 6]],
+            vec![vec![0, 1, 2, 3, 4, 5], vec![]],
         ] {
             assert!(check_nefpart(&nefpart, 6).is_err(), "{nefpart:?}");
         }

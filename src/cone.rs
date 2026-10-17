@@ -242,7 +242,7 @@ mod tests {
         // A stratum needs its cone, of three divisors, which other sets cannot have.
         let strata = [Stratum {
             divisors: [5, 0, 1],
-            class: vec![(1, 1), (0, 1)],
+            class: vec![1.into(), 0.into()],
         }];
         assert!(check_cone_data(&cd, &q, &gens, &strata).is_err());
         let mut with_stratum = cd.clone();

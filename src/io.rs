@@ -2,17 +2,14 @@
 //!
 //! This module implements the YAML-based data format used by the `cygv` command line
 //! interface. An input stream contains one or more YAML documents, each of which
-//! specifies a single computation.
+//! specifies a single computation. The fields have the names of the fields of [`Problem`] and
+//! [`Options`], and of the keywords of the Python package.
 //!
 //! ```yaml
 //! ---
 //! # Optional label that is echoed back in the output.
 //! name: quintic-like threefold
-//! # The generators of the Mori cone, given as a list of vectors.
-//! generators: [[0, -1], [1, 2]]
-//! # A vector that has a positive inner product with every generator.
-//! grading_vector: [3, -1]
-//! # The GLSM charge matrix, given as a list of charge vectors.
+//! # The GLSM charges, one charge vector per Kähler parameter.
 //! q: [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]
 //! # The intersection numbers, given as a list of [i, j, k, value] entries.
 //! intnums:
@@ -20,26 +17,27 @@
 //!   - [0, 0, 1, 1]
 //!   - [0, 1, 1, -1]
 //!   - [1, 1, 1, 5]
+//! # The Mori cone: vectors that span it (or mori_hyperplanes, or nothing with a fan).
+//! generators: [[0, -1], [1, 2]]
+//! # The degree is the inner product with this vector, positive on the Mori cone. It
+//! # defaults to the primitive sum of the inequalities of the Mori cone.
+//! grading_vector: [3, -1]
+//! # Which curve classes: those up to a maximum degree (max_deg), those below target
+//! # points (target_points, which max_deg may accompany), at least a number of them
+//! # (min_points), or exactly the ones listed (curve_classes).
+//! max_deg: 10
 //! # Whether to compute GV or GW invariants. Defaults to gv.
 //! invariants: gv
-//! # How many curve classes to compute: those up to a maximum degree (max_deg), at
-//! # least a number of them (min_points), or those below target points
-//! # (target_points), i.e. that leave a target in the Mori cone when subtracted.
-//! # max_deg may be given with target_points, and lowers the largest degree of the
-//! # targets. When none of them is given, the generators are taken to be the
-//! # complete list of curve classes to use.
-//! min_points: 100
-//! # Which pipeline to use: auto, modular or reference. Defaults to auto, which
-//! # uses the modular one, which is much faster, whenever max_deg or target_points
-//! # is given.
+//! # Which pipeline to use: auto, modular or reference. Defaults to auto, which uses the
+//! # modular one, which is much faster, for max_deg and target_points.
 //! method: auto
-//! # Whether to prove the results of the modular pipeline exact, taking more primes if
-//! # needed (not in vex phases). Defaults to false.
+//! # Whether to prove the results exact, taking more primes if needed (not in vex phases).
+//! # Defaults to false.
 //! certify: false
 //! ```
 //!
-//! A vex phase of the ambient toric variety also needs its strata (see [`Stratum`]), each
-//! given by three divisors and a class whose entries may be fractions.
+//! A vex phase of the ambient toric variety needs its strata (see [`Stratum`]), each given by
+//! three divisors and a class whose entries may be fractions.
 //!
 //! ```yaml
 //! strata:
@@ -47,25 +45,24 @@
 //!     class: [1, "-1/2"]
 //! ```
 //!
-//! They can instead be derived from the fan of the ambient toric variety (see [`Fan`]), given by
-//! its maximal cones as indices of the divisors. The fan also gives the Mori cone and a grading
-//! vector, so `generators` and `grading_vector` can be left out (the generators only when the
-//! computation is truncated), and the intersection numbers and a grading vector that is given
-//! are checked against it.
+//! They can instead be derived from the fan of the ambient toric variety (see
+//! [`crate::phase::Fan`]), given by its maximal cones as indices of the divisors. The fan also
+//! gives the Mori cone, so `generators` can be left out, and the default grading vector; the
+//! intersection numbers and a grading vector that is given are checked against it.
 //!
 //! ```yaml
 //! fan: [[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 3, 4], [0, 2, 3, 4], [1, 2, 3, 5], [1, 2, 4, 5],
 //!   [1, 3, 4, 5], [2, 3, 4, 5]]
 //! ```
 //!
-//! The Mori cone can also be given by cone data (see [`ConeData`]): its inequalities, the
-//! equations of its span if it is a face, and the Hilbert basis of the cone $K_T$ of every set
-//! $T$ of one or two divisors, which an external program such as normaliz computes. Then the
-//! generators can be left out. Without it, the cone data is computed from the generators.
+//! The Mori cone can also be given by its inequalities, and the equations of its span if it is
+//! a face, and the modular pipeline can take the Hilbert basis of the cone $K_T$ of every set
+//! $T$ of one or two divisors from an external program such as Normaliz (see
+//! [`crate::cone::ConeData`]) instead of computing them.
 //!
 //! ```yaml
 //! mori_hyperplanes: [[1, 0], [0, 1]]
-//! cones:
+//! hilbert_bases:
 //!   - divisors: [0]
 //!     hilbert_basis: [[1, 0], [2, 1]]
 //!   - divisors: [0, 5]
@@ -79,8 +76,9 @@
 //! ---
 //! name: quintic-like threefold
 //! invariants: gv
-//! is_threefold: true
+//! dimension: 3
 //! grading_vector: [3, -1]
+//! report: {method: modular, certified: false, grading_vector_derived: false}
 //! results:
 //!   - {curve_class: [0, -1], degree: 1, gv: -4}
 //!   - {curve_class: [1, 0], degree: 3, gv: 7524}
@@ -90,93 +88,69 @@
 
 pub mod error;
 
-use crate::cone::{check_cone_data, CandidateCone, ConeData};
-use crate::dispatch::{
-    check_target_points, compute_gvgw_strings, modular_unsupported, ComputeError,
+use crate::cone::CandidateCone;
+use crate::{
+    compute, Ambient, Computed, Error, Geometry, InvariantKind, Invariants, Method, MoriCone,
+    Options, Problem, Selection, Stratum,
 };
-use crate::phase::{Fan, FanError};
-use crate::{check_intnums, check_nefpart, check_strata, CYKind, InvariantKind, Method, Stratum};
 use error::IoError;
-use nalgebra::{DMatrix, DVector, RowDVector};
+use malachite::Rational;
+use nalgebra::DMatrix;
 use std::collections::HashMap;
 use std::io::Write;
+use std::str::FromStr;
 use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
 /// The fields that are accepted in an input document.
-const INPUT_FIELDS: [&str; 19] = [
+const INPUT_FIELDS: [&str; 20] = [
     "name",
-    "generators",
-    "grading_vector",
     "q",
     "intnums",
     "nefpart",
-    "invariants",
-    "max_deg",
-    "min_points",
-    "target_points",
-    "is_threefold",
-    "n_threads",
-    "method",
-    "certify",
-    "strata",
     "fan",
+    "strata",
+    "generators",
     "mori_hyperplanes",
     "mori_equations",
+    "grading_vector",
+    "max_deg",
+    "target_points",
+    "min_points",
+    "curve_classes",
+    "invariants",
+    "method",
+    "n_threads",
+    "certify",
+    "hilbert_bases",
+    // Rejected below with what to write instead.
     "cones",
 ];
 
 /// The specification of a single computation of GV or GW invariants.
-///
-/// The matrices are stored using the same convention as the rest of the crate, i.e.
-/// the vectors of the input data are the *columns* of the matrices.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Input {
     /// An optional label that is echoed back in the output.
     pub name: Option<String>,
-    /// The generators of the Mori cone. It has no columns when they are left out, which the
-    /// cone data allows.
-    pub generators: DMatrix<i32>,
-    /// A vector that has a positive inner product with every generator.
-    pub grading_vector: RowDVector<i32>,
-    /// The GLSM charge matrix.
-    pub q: DMatrix<i32>,
-    /// The nef partition. It is empty for hypersurfaces.
-    pub nefpart: Vec<DVector<i32>>,
-    /// The triple intersection numbers.
-    pub intnums: HashMap<(usize, usize, usize), i32>,
-    /// The strata of a vex phase. It is empty otherwise.
-    pub strata: Vec<Stratum>,
-    /// The maximal cones of the fan of the ambient toric variety, as indices of rows of `q`,
-    /// from which the strata are derived (see [`Fan`]).
-    pub fan: Option<Vec<Vec<usize>>>,
-    /// The cone data for the modular method, if any.
-    pub cone_data: Option<ConeData>,
+    /// What to compute.
+    pub problem: Problem,
     /// Which invariants to compute.
-    pub invariant_kind: InvariantKind,
-    /// The kind of CY the invariants are computed for.
-    pub cy_kind: CYKind,
-    /// The maximum degree of the curve classes that are computed.
-    pub max_deg: Option<u32>,
-    /// The minimum number of curve classes that are computed.
-    pub min_points: Option<u32>,
-    /// The curve classes that must be included in the computation.
-    pub target_points: Option<DMatrix<i32>>,
-    /// The number of threads to use. It is deduced from the machine when [`None`].
-    pub n_threads: Option<u32>,
-    /// Which pipeline to use.
-    pub method: Method,
-    /// Whether to prove the results of the modular pipeline exact (see
-    /// [`crate::modular::Options::certify`]).
-    pub certify: bool,
+    pub kind: InvariantKind,
+    /// How to compute them.
+    pub options: Options,
 }
 
-/// A computed invariant, consisting of a curve class, a reference surface index that
-/// is only meaningful when the CY is not a threefold, and the invariant itself.
-pub type InvariantResult = ((DVector<i32>, usize), String);
+impl From<Error> for IoError {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::Input { field, reason } => IoError::invalid_field(field, reason),
+            e => IoError::Unsupported(e.to_string()),
+        }
+    }
+}
 
 impl Input {
-    /// Parse every YAML document of the given string into an [`Input`].
+    /// Parse every YAML document of the given string into an [`Input`], and check each.
     pub fn load_all(data: &str) -> Result<Vec<Self>, IoError> {
         let docs =
             YamlLoader::load_from_str(data).map_err(|e| IoError::InvalidYaml(e.to_string()))?;
@@ -186,11 +160,37 @@ impl Input {
         docs.iter().map(Input::from_yaml).collect()
     }
 
-    /// Parse a single YAML document into an [`Input`].
+    /// Parse a single YAML document into an [`Input`], and check it ([`Input::validate`]).
     pub fn from_yaml(doc: &Yaml) -> Result<Self, IoError> {
+        let input = Self::parse(doc)?;
+        input.validate()?;
+        Ok(input)
+    }
+
+    /// Checks the problem and the options, as far as that can be done before computing.
+    pub fn validate(&self) -> Result<(), IoError> {
+        Ok(self.problem.validate(&self.options)?)
+    }
+
+    /// Parse a single YAML document into an [`Input`], checking the shapes of the fields but
+    /// not how they fit together.
+    fn parse(doc: &Yaml) -> Result<Self, IoError> {
         let hash = doc.as_hash().ok_or(IoError::NotAMapping)?;
         for key in hash.keys() {
             match key.as_str() {
+                Some("cones") => {
+                    return Err(IoError::invalid_field(
+                        "cones",
+                        "it is called hilbert_bases now, and the Mori cone it came with is \
+                         given by mori_hyperplanes alone",
+                    ))
+                }
+                Some("is_threefold") => {
+                    return Err(IoError::invalid_field(
+                        "is_threefold",
+                        "the dimension is derived from q and nefpart, so leave it out",
+                    ))
+                }
                 Some(k) if INPUT_FIELDS.contains(&k) => {}
                 Some(k) => return Err(IoError::UnknownField(k.to_owned())),
                 None => return Err(IoError::UnknownField(format!("{key:?}"))),
@@ -205,68 +205,91 @@ impl Input {
                     .to_owned(),
             ),
         };
-        let generators = get_field(hash, "generators")
-            .map(|y| as_matrix(y, "generators"))
-            .transpose()?;
-        let grading_vector = get_field(hash, "grading_vector")
-            .map(|y| as_int_vec(y, "grading_vector"))
-            .transpose()?;
-        let fan = get_field(hash, "fan").map(as_fan).transpose()?;
-        if grading_vector.is_none() && fan.is_none() {
-            return Err(IoError::MissingField("grading_vector"));
-        }
         let q = as_matrix(require_field(hash, "q")?, "q")?;
-        // Without a grading vector, which the fan gives a default for, the charges give h11.
-        let h11 = grading_vector.as_ref().map_or(q.ncols(), Vec::len);
-        if let Some(generators) = &generators {
-            if generators.nrows() != h11 {
-                let field = if grading_vector.is_some() {
-                    "grading_vector"
-                } else {
-                    "q"
-                };
-                return Err(IoError::invalid_field(
-                    field,
-                    format!(
-                        "expected {} entries to match the generators",
-                        generators.nrows()
-                    ),
-                ));
-            }
-        }
-        if q.ncols() != h11 {
-            return Err(IoError::invalid_field(
-                "q",
-                format!("expected {h11} charge vectors to match the grading vector"),
-            ));
-        }
+        let h11 = q.ncols();
         let intnums = as_intnums(require_field(hash, "intnums")?)?;
         let nefpart = match get_field(hash, "nefpart") {
             None => Vec::new(),
-            Some(y) => as_vectors(y, "nefpart")?,
+            Some(y) => as_index_lists(y, "nefpart")?,
         };
-        let strata = match get_field(hash, "strata") {
-            None => Vec::new(),
-            Some(y) => as_strata(y)?,
+        let ambient = match (get_field(hash, "fan"), get_field(hash, "strata")) {
+            (Some(_), Some(_)) => return Err(IoError::Conflicting("fan", "strata")),
+            (Some(fan), None) => Ambient::Fan(as_index_lists(fan, "fan")?),
+            (None, Some(strata)) => Ambient::Strata(as_strata(strata)?),
+            (None, None) => Ambient::Plain,
         };
-        let cone_data = match (
+        let cone = match (
+            get_field(hash, "generators"),
             get_field(hash, "mori_hyperplanes"),
-            get_field(hash, "cones"),
+            get_field(hash, "mori_equations"),
         ) {
-            (Some(hyperplanes), Some(cones)) => Some(ConeData {
-                hyperplanes: as_matrix(hyperplanes, "mori_hyperplanes")?,
-                equations: match get_field(hash, "mori_equations") {
+            (Some(_), Some(_), _) => {
+                return Err(IoError::Conflicting("generators", "mori_hyperplanes"))
+            }
+            (Some(_), None, Some(_)) => {
+                return Err(IoError::Conflicting("generators", "mori_equations"))
+            }
+            (Some(g), None, None) => MoriCone::Generators(as_matrix(g, "generators")?),
+            (None, Some(h), e) => MoriCone::Inequalities {
+                hyperplanes: as_matrix(h, "mori_hyperplanes")?,
+                equations: match e {
                     None => DMatrix::zeros(h11, 0),
-                    Some(y) => as_matrix(y, "mori_equations")?,
+                    Some(e) => as_matrix_or_empty(e, "mori_equations", h11)?,
                 },
-                cones: as_cones(cones, h11)?,
-            }),
-            (None, None) if get_field(hash, "mori_equations").is_none() => None,
-            (None, _) => return Err(IoError::MissingField("mori_hyperplanes")),
-            (_, None) => return Err(IoError::MissingField("cones")),
+            },
+            (None, None, Some(_)) => return Err(IoError::MissingField("mori_hyperplanes")),
+            (None, None, None) if matches!(ambient, Ambient::Fan(_)) => MoriCone::FromFan,
+            (None, None, None) => {
+                return Err(IoError::MissingOneOf(&[
+                    "generators",
+                    "mori_hyperplanes",
+                    "fan",
+                ]))
+            }
+        };
+        let grading_vector = get_field(hash, "grading_vector")
+            .map(|y| as_int_vec(y, "grading_vector"))
+            .transpose()?;
+        let max_deg = get_field(hash, "max_deg")
+            .map(|y| as_u32(y, "max_deg"))
+            .transpose()?;
+        let target_points = get_field(hash, "target_points")
+            .map(|y| as_target_points(y, h11))
+            .transpose()?;
+        let min_points = get_field(hash, "min_points")
+            .map(|y| as_u32(y, "min_points"))
+            .transpose()?;
+        let curve_classes = get_field(hash, "curve_classes")
+            .map(|y| as_matrix(y, "curve_classes"))
+            .transpose()?;
+        let selection = match (max_deg, target_points, min_points, curve_classes) {
+            (max_deg, Some(points), None, None) => Selection::TargetPoints { points, max_deg },
+            (Some(d), None, None, None) => Selection::MaxDeg(d),
+            (None, None, Some(n), None) => Selection::MinPoints(n),
+            (None, None, None, Some(classes)) => Selection::CurveClasses(classes),
+            (None, None, None, None) => {
+                return Err(IoError::MissingOneOf(&[
+                    "max_deg",
+                    "target_points",
+                    "min_points",
+                    "curve_classes",
+                ]))
+            }
+            (max_deg, target_points, min_points, curve_classes) => {
+                let given: Vec<&'static str> = [
+                    ("max_deg", max_deg.is_some()),
+                    ("target_points", target_points.is_some()),
+                    ("min_points", min_points.is_some()),
+                    ("curve_classes", curve_classes.is_some()),
+                ]
+                .into_iter()
+                .filter_map(|(f, given)| given.then_some(f))
+                .collect();
+                return Err(IoError::Conflicting(given[0], given[1]));
+            }
         };
 
-        let invariant_kind = match get_field(hash, "invariants") {
+        let kind = match get_field(hash, "invariants") {
             None => InvariantKind::GV,
             Some(y) => match y.as_str().map(str::to_lowercase).as_deref() {
                 Some("gv") => InvariantKind::GV,
@@ -279,17 +302,8 @@ impl Input {
                 }
             },
         };
-        let max_deg = get_field(hash, "max_deg")
-            .map(|y| as_u32(y, "max_deg"))
-            .transpose()?;
-        let min_points = get_field(hash, "min_points")
-            .map(|y| as_u32(y, "min_points"))
-            .transpose()?;
-        let target_points = get_field(hash, "target_points")
-            .map(|y| as_target_points(y, h11))
-            .transpose()?;
         let n_threads = get_field(hash, "n_threads")
-            .map(|y| as_u32(y, "n_threads"))
+            .map(|y| as_u32(y, "n_threads").map(|n| n as usize))
             .transpose()?;
         let certify = match get_field(hash, "certify") {
             None => false,
@@ -306,178 +320,49 @@ impl Input {
                 )
             })?,
         };
-
-        let cy_kind = match get_field(hash, "is_threefold") {
-            None => infer_cy_kind(&q, &nefpart),
-            Some(y) => CYKind::from_is_threefold(
-                y.as_bool()
-                    .ok_or_else(|| IoError::invalid_field("is_threefold", "expected a boolean"))?,
-            ),
-        };
-        if min_points.is_some() && (max_deg.is_some() || target_points.is_some()) {
-            return Err(IoError::ConflictingTruncations);
-        }
-        // The fan is checked again by the computation, but the default grading vector is
-        // needed here.
-        let grading_vector = match &fan {
-            None => RowDVector::from_vec(grading_vector.unwrap_or_default()),
-            Some(cones) => {
-                let fan_err = |e: FanError| IoError::invalid_field("fan", e.to_string());
-                if !cy_kind.is_threefold() || !nefpart.is_empty() {
-                    return Err(fan_err(FanError::NotHypersurface));
-                }
-                if !strata.is_empty() {
-                    return Err(IoError::invalid_field(
-                        "strata",
-                        "the strata are derived from the fan, so they cannot be given with it",
-                    ));
-                }
-                let fan = Fan::new(cones, &q).map_err(fan_err)?;
-                fan.check_intnums(&intnums).map_err(|e| match e {
-                    FanError::InvalidIntnums => IoError::invalid_field("intnums", e.to_string()),
-                    e => fan_err(e),
-                })?;
-                fan.strata().map_err(fan_err)?;
-                match grading_vector {
-                    Some(g) => {
-                        let g = RowDVector::from_vec(g);
-                        fan.check_grading(&g).map_err(|e| match e {
-                            FanError::NonpositiveGrading => {
-                                IoError::invalid_field("grading_vector", e.to_string())
-                            }
-                            e => fan_err(e),
-                        })?;
-                        g
-                    }
-                    None => fan.mori_cone().map_err(fan_err)?.grading_vector,
-                }
-            }
-        };
-        if let Some(target_points) = &target_points {
-            check_target_points(target_points, &grading_vector)
-                .map_err(|reason| IoError::invalid_field("target_points", reason))?;
-        }
-        let unsupported = modular_unsupported(max_deg, min_points, target_points.is_some());
-        if let (Method::Modular, Some(what)) = (method, unsupported) {
-            return Err(IoError::invalid_field(
-                "method",
-                ComputeError::Unsupported(what).to_string(),
-            ));
-        }
-        // The cone data describes the Mori cone without them, but without any truncation the
-        // generators are the curve classes to use.
-        let truncated = max_deg.is_some() || min_points.is_some() || target_points.is_some();
-        let generators = match generators {
-            Some(generators) => generators,
-            None if (cone_data.is_some() || fan.is_some()) && truncated => DMatrix::zeros(h11, 0),
-            None => return Err(IoError::MissingField("generators")),
-        };
-        // These are checked again, deeper in the computation, but the errors there are
-        // not recoverable, so they are caught here to report them properly.
-        let n_rays = q.nrows() as i64;
-        check_nefpart(&nefpart, q.nrows())
-            .map_err(|reason| IoError::invalid_field("nefpart", reason))?;
-        let cy_dim = n_rays - q.ncols() as i64 - nefpart.len().max(1) as i64;
-        if cy_dim < 3 {
-            return Err(IoError::invalid_field(
-                "q",
-                format!("the dimension of the CY must be at least three, but it is {cy_dim}"),
-            ));
-        }
-        check_strata(&strata, q.nrows(), h11, cy_kind, nefpart.is_empty())
-            .map_err(|reason| IoError::invalid_field("strata", reason))?;
-        if let Some(cone_data) = &cone_data {
-            check_cone_data(cone_data, &q, &generators, &strata)
-                .map_err(|(field, reason)| IoError::invalid_field(field, reason))?;
-        }
-        // The intersection numbers are canonicalized differently depending on the
-        // dimension of the CY, so they can only be checked once it is known.
-        check_intnums(&intnums, h11, cy_kind)
-            .map_err(|reason| IoError::invalid_field("intnums", reason))?;
+        let hilbert_bases = get_field(hash, "hilbert_bases")
+            .map(|y| as_hilbert_bases(y, h11))
+            .transpose()?;
 
         Ok(Input {
             name,
-            generators,
-            grading_vector,
-            q,
-            nefpart,
-            intnums,
-            strata,
-            fan,
-            cone_data,
-            invariant_kind,
-            cy_kind,
-            max_deg,
-            min_points,
-            target_points,
-            n_threads,
-            method,
-            certify,
+            problem: Problem {
+                geometry: Geometry {
+                    q,
+                    intnums,
+                    nefpart,
+                    ambient,
+                },
+                cone,
+                selection,
+                grading_vector,
+            },
+            kind,
+            options: Options {
+                method,
+                n_threads,
+                certify,
+                hilbert_bases,
+                ..Options::default()
+            },
         })
     }
 
-    /// Run the computation specified by this input.
-    ///
-    /// The results are sorted by degree, and then by curve class and reference surface
-    /// index. The last two are only used to break ties, since the order in which
-    /// curve classes of equal degree are computed is not deterministic.
-    pub fn compute(&self) -> Result<Vec<InvariantResult>, ComputeError> {
-        let mut results = self.compute_unsorted()?;
-        // The degrees are computed once rather than at every comparison, and the results are
-        // permuted in place.
-        let degrees: Vec<i64> = results.iter().map(|r| self.degree(&r.0 .0)).collect();
-        let mut order: Vec<usize> = (0..results.len()).collect();
-        order.sort_unstable_by(|&a, &b| {
-            let (ra, rb) = (&results[a], &results[b]);
-            degrees[a]
-                .cmp(&degrees[b])
-                .then_with(|| ra.0 .0.as_slice().cmp(rb.0 .0.as_slice()))
-                .then_with(|| ra.0 .1.cmp(&rb.0 .1))
-        });
-        // Position i takes the result at order[i], following each cycle of the permutation.
-        for start in 0..order.len() {
-            let mut i = start;
-            while order[i] != start {
-                let j = order[i];
-                results.swap(i, j);
-                order[i] = i;
-                i = j;
-            }
-            order[i] = i;
+    /// Sets the maximum degree, as the command line option does: of a [`Selection::MaxDeg`],
+    /// or alongside [`Selection::TargetPoints`]. The other selections do not take one.
+    pub fn set_max_deg(&mut self, max_deg: u32) -> Result<(), IoError> {
+        match &mut self.problem.selection {
+            Selection::MaxDeg(d) => *d = max_deg,
+            Selection::TargetPoints { max_deg: d, .. } => *d = Some(max_deg),
+            s => return Err(IoError::Conflicting("max_deg", s.name())),
         }
-        Ok(results)
+        Ok(())
     }
 
-    /// The degree of a curve class under the grading vector.
-    fn degree(&self, curve: &DVector<i32>) -> i64 {
-        self.grading_vector
-            .iter()
-            .zip(curve.iter())
-            .map(|(g, c)| (*g as i64) * (*c as i64))
-            .sum()
-    }
-
-    /// Run the computation specified by this input, leaving the results in the order
-    /// in which they were computed.
-    fn compute_unsorted(&self) -> Result<Vec<InvariantResult>, ComputeError> {
-        compute_gvgw_strings(
-            self.generators.clone(),
-            self.grading_vector.clone(),
-            self.q.clone(),
-            self.nefpart.clone(),
-            self.intnums.clone(),
-            self.strata.clone(),
-            self.fan.clone(),
-            self.cone_data.clone(),
-            self.invariant_kind,
-            self.cy_kind,
-            self.max_deg,
-            self.min_points,
-            self.target_points.clone(),
-            self.n_threads,
-            self.method,
-            self.certify,
-        )
+    /// Run the computation specified by this input. The results are sorted by degree, and
+    /// then by curve class and reference surface.
+    pub fn compute(&self) -> Result<Computed, Error> {
+        compute(&self.problem, self.kind, &self.options)
     }
 
     /// Write the results of a computation as a YAML document.
@@ -489,48 +374,56 @@ impl Input {
     pub fn write_results(
         &self,
         writer: &mut impl Write,
-        results: &[InvariantResult],
+        results: &Computed,
     ) -> std::io::Result<()> {
-        let key = self.invariant_kind.as_str();
+        match results {
+            Computed::Gv(gv) => self.write(writer, gv, InvariantKind::GV),
+            Computed::Gw(gw) => self.write(writer, gw, InvariantKind::GW),
+        }
+    }
+
+    fn write<T: std::fmt::Display>(
+        &self,
+        writer: &mut impl Write,
+        invariants: &Invariants<T>,
+        kind: InvariantKind,
+    ) -> std::io::Result<()> {
+        let key = kind.as_str();
         writeln!(writer, "---")?;
         if let Some(name) = &self.name {
             writeln!(writer, "name: {}", quote_string(name))?;
         }
         writeln!(writer, "invariants: {key}")?;
-        writeln!(writer, "is_threefold: {}", self.cy_kind.is_threefold())?;
+        writeln!(writer, "dimension: {}", invariants.dimension)?;
         write!(writer, "grading_vector: ")?;
-        write_int_seq(writer, self.grading_vector.iter())?;
+        write_int_seq(writer, invariants.grading_vector.iter())?;
         writeln!(writer)?;
-        if results.is_empty() {
+        let report = &invariants.report;
+        writeln!(
+            writer,
+            "report: {{method: {}, certified: {}, grading_vector_derived: {}}}",
+            report.method.as_str(),
+            report.certified,
+            report.grading_vector_derived
+        )?;
+        if invariants.entries.is_empty() {
             return writeln!(writer, "results: []");
         }
         writeln!(writer, "results:")?;
-        for ((curve, idx), value) in results {
+        for e in &invariants.entries {
             write!(writer, "  - {{curve_class: ")?;
-            write_int_seq(writer, curve.iter())?;
-            write!(writer, ", degree: {}", self.degree(curve))?;
-            if !self.cy_kind.is_threefold() {
-                write!(writer, ", surface_index: {idx}")?;
+            write_int_seq(writer, e.curve.iter())?;
+            write!(writer, ", degree: {}", e.degree)?;
+            if let Some(surface) = e.surface {
+                write!(writer, ", surface: {surface}")?;
             }
-            match self.invariant_kind {
-                InvariantKind::GV => writeln!(writer, ", {key}: {value}}}")?,
-                InvariantKind::GW => writeln!(writer, ", {key}: '{value}'}}")?,
+            match kind {
+                InvariantKind::GV => writeln!(writer, ", {key}: {}}}", e.value)?,
+                InvariantKind::GW => writeln!(writer, ", {key}: '{}'}}", e.value)?,
             }
         }
         Ok(())
     }
-}
-
-/// Deduce the kind of CY from the shape of the GLSM charge matrix and the nef
-/// partition.
-fn infer_cy_kind(q: &DMatrix<i32>, nefpart: &[DVector<i32>]) -> CYKind {
-    let ambient_dim = q.nrows() as i64 - q.ncols() as i64;
-    let cy_codim = if nefpart.is_empty() {
-        1
-    } else {
-        nefpart.len() as i64
-    };
-    CYKind::from_is_threefold(ambient_dim - cy_codim == 3)
 }
 
 /// Look up a field, treating an explicitly null value as a missing one.
@@ -572,15 +465,24 @@ fn as_int_vec(data: &Yaml, field: &str) -> Result<Vec<i32>, IoError> {
     entries.iter().map(|c| as_i32(c, field)).collect()
 }
 
-/// Read a value that must be a list of vectors, which are allowed to have different
-/// lengths.
-fn as_vectors(data: &Yaml, field: &str) -> Result<Vec<DVector<i32>>, IoError> {
-    let vectors = data
-        .as_vec()
-        .ok_or_else(|| IoError::invalid_field(field, "expected a list of vectors"))?;
-    vectors
+/// Read a value that must be a list of lists of non-negative indices, which are allowed to
+/// have different lengths.
+fn as_index_lists(data: &Yaml, field: &'static str) -> Result<Vec<Vec<usize>>, IoError> {
+    let err = || IoError::invalid_field(field, "expected a list of lists of indices of divisors");
+    data.as_vec()
+        .ok_or_else(err)?
         .iter()
-        .map(|v| Ok(DVector::from_vec(as_int_vec(v, field)?)))
+        .map(|c| {
+            c.as_vec()
+                .ok_or_else(err)?
+                .iter()
+                .map(|i| {
+                    i.as_i64()
+                        .and_then(|i| usize::try_from(i).ok())
+                        .ok_or_else(err)
+                })
+                .collect()
+        })
         .collect()
 }
 
@@ -615,24 +517,13 @@ fn as_matrix(data: &Yaml, field: &str) -> Result<DMatrix<i32>, IoError> {
     ))
 }
 
-/// Read the maximal cones of a fan, a list of lists of indices.
-fn as_fan(data: &Yaml) -> Result<Vec<Vec<usize>>, IoError> {
-    let err = || IoError::invalid_field("fan", "expected a list of lists of indices of rows of q");
-    data.as_vec()
-        .ok_or_else(err)?
-        .iter()
-        .map(|c| {
-            c.as_vec()
-                .ok_or_else(err)?
-                .iter()
-                .map(|i| {
-                    i.as_i64()
-                        .and_then(|i| usize::try_from(i).ok())
-                        .ok_or_else(err)
-                })
-                .collect()
-        })
-        .collect()
+/// Read a list of vectors like [`as_matrix`], but allowing an empty list, which gives a
+/// matrix with `n_rows` rows and no columns.
+fn as_matrix_or_empty(data: &Yaml, field: &str, n_rows: usize) -> Result<DMatrix<i32>, IoError> {
+    match data.as_vec() {
+        Some(v) if v.is_empty() => Ok(DMatrix::zeros(n_rows, 0)),
+        _ => as_matrix(data, field),
+    }
 }
 
 /// Read the strata of a vex phase, a list of mappings with the three `divisors` and the
@@ -680,10 +571,10 @@ fn as_strata(data: &Yaml) -> Result<Vec<Stratum>, IoError> {
         .collect()
 }
 
-/// Read the cones of the cone data, a list of mappings with the `divisors` and the
+/// Read the Hilbert bases of the cones $K_T$, a list of mappings with the `divisors` and the
 /// `hilbert_basis`, which may be empty.
-fn as_cones(data: &Yaml, h11: usize) -> Result<Vec<CandidateCone>, IoError> {
-    let field = "cones";
+fn as_hilbert_bases(data: &Yaml, h11: usize) -> Result<Vec<CandidateCone>, IoError> {
+    let field = "hilbert_bases";
     let entries = data.as_vec().ok_or_else(|| {
         IoError::invalid_field(
             field,
@@ -716,10 +607,7 @@ fn as_cones(data: &Yaml, h11: usize) -> Result<Vec<CandidateCone>, IoError> {
                     IoError::invalid_field(field, "the divisors must be non-negative indices")
                 })?;
             let basis = require_field(hash, "hilbert_basis")?;
-            let hilbert_basis = match basis.as_vec() {
-                Some(v) if v.is_empty() => DMatrix::zeros(h11, 0),
-                _ => as_matrix(basis, field)?,
-            };
+            let hilbert_basis = as_matrix_or_empty(basis, field, h11)?;
             Ok(CandidateCone {
                 divisors,
                 hilbert_basis,
@@ -729,7 +617,7 @@ fn as_cones(data: &Yaml, h11: usize) -> Result<Vec<CandidateCone>, IoError> {
 }
 
 /// Read a fraction, given as an integer or as a string of the form `"p/q"` or `"p"`.
-fn as_fraction(data: &Yaml) -> Result<(i64, i64), IoError> {
+fn as_fraction(data: &Yaml) -> Result<Rational, IoError> {
     let invalid = || {
         IoError::invalid_field(
             "strata",
@@ -737,12 +625,15 @@ fn as_fraction(data: &Yaml) -> Result<(i64, i64), IoError> {
         )
     };
     match data {
-        Yaml::Integer(n) => Ok((*n, 1)),
+        Yaml::Integer(n) => Ok(Rational::from(*n)),
         Yaml::String(s) => {
             let (num, den) = s.split_once('/').unwrap_or((s, "1"));
-            let num = num.trim().parse().map_err(|_| invalid())?;
-            let den = den.trim().parse().map_err(|_| invalid())?;
-            Ok((num, den))
+            let num = i64::from_str(num.trim()).map_err(|_| invalid())?;
+            let den = i64::from_str(den.trim()).map_err(|_| invalid())?;
+            if den == 0 {
+                return Err(invalid());
+            }
+            Ok(Rational::from(num) / Rational::from(den))
         }
         _ => Err(invalid()),
     }
@@ -765,7 +656,7 @@ fn as_target_points(data: &Yaml, h11: usize) -> Result<DMatrix<i32>, IoError> {
     if points.nrows() != h11 {
         return Err(IoError::invalid_field(
             field,
-            format!("expected vectors with {h11} entries to match the grading vector"),
+            format!("expected vectors with {h11} entries, one per Kähler parameter"),
         ));
     }
     Ok(points)
@@ -912,7 +803,9 @@ fn quote_string(data: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::{dmatrix, dvector};
+    use crate::{Invariant, Report};
+    use malachite::Integer;
+    use nalgebra::dmatrix;
 
     const THREEFOLD: &str = "\
 name: test
@@ -927,22 +820,91 @@ min_points: 20
         Input::load_all(data).map(|mut v| v.remove(0))
     }
 
+    /// The field of an invalid-field error.
+    fn field_of(data: &str) -> String {
+        match load_one(data) {
+            Err(IoError::InvalidField { field, .. }) => field,
+            res => panic!("{res:?}"),
+        }
+    }
+
     #[test]
     fn test_parse_threefold() {
         let input = load_one(THREEFOLD).unwrap();
         assert_eq!(input.name.as_deref(), Some("test"));
-        assert_eq!(input.generators, dmatrix![0, 1; -1, 2]);
-        assert_eq!(input.grading_vector, RowDVector::from_row_slice(&[3, -1]));
-        assert_eq!(input.q.shape(), (6, 2));
-        assert_eq!(input.q[(2, 1)], -1);
-        assert_eq!(input.intnums[&(0, 1, 1)], -1);
-        assert!(input.nefpart.is_empty());
-        assert_eq!(input.invariant_kind, InvariantKind::GV);
-        assert_eq!(input.cy_kind, CYKind::Threefold);
-        assert_eq!(input.min_points, Some(20));
-        assert_eq!(input.max_deg, None);
-        assert_eq!(input.target_points, None);
-        assert_eq!(input.method, Method::default());
+        let problem = &input.problem;
+        assert_eq!(problem.cone, MoriCone::Generators(dmatrix![0, 1; -1, 2]));
+        assert_eq!(problem.grading_vector, Some(vec![3, -1]));
+        let geometry = &problem.geometry;
+        assert_eq!(geometry.q.shape(), (6, 2));
+        assert_eq!(geometry.q[(2, 1)], -1);
+        assert_eq!(geometry.intnums[&(0, 1, 1)], -1);
+        assert!(geometry.nefpart.is_empty());
+        assert_eq!(geometry.ambient, Ambient::Plain);
+        assert_eq!(geometry.dimension(), 3);
+        assert_eq!(problem.selection, Selection::MinPoints(20));
+        assert_eq!(input.kind, InvariantKind::GV);
+        assert_eq!(input.options, Options::default());
+    }
+
+    #[test]
+    fn test_parse_selection() {
+        let base = THREEFOLD.replace("min_points: 20\n", "");
+        let selection =
+            |extra: &str| load_one(&format!("{base}{extra}")).map(|i| i.problem.selection);
+        assert_eq!(selection("max_deg: 5\n"), Ok(Selection::MaxDeg(5)));
+        assert_eq!(
+            selection("curve_classes: [[0, -1], [1, 0]]\n"),
+            Ok(Selection::CurveClasses(dmatrix![0, 1; -1, 0]))
+        );
+        assert_eq!(
+            selection(""),
+            Err(IoError::MissingOneOf(&[
+                "max_deg",
+                "target_points",
+                "min_points",
+                "curve_classes"
+            ]))
+        );
+        assert_eq!(
+            selection("max_deg: 5\nmin_points: 3\n"),
+            Err(IoError::Conflicting("max_deg", "min_points"))
+        );
+        assert_eq!(
+            selection("max_deg: 5\ncurve_classes: [[1, 0]]\n"),
+            Err(IoError::Conflicting("max_deg", "curve_classes"))
+        );
+        // The modular method does not support min_points or curve_classes.
+        assert!(matches!(
+            selection("min_points: 3\nmethod: modular\n"),
+            Err(IoError::Unsupported(reason)) if reason.contains("min_points")
+        ));
+        assert_eq!(
+            field_of(&format!("{base}curve_classes: [[1, 0, 0]]\n")),
+            "curve_classes"
+        );
+    }
+
+    #[test]
+    fn test_set_max_deg() {
+        let mut input = load_one(&THREEFOLD.replace("min_points: 20", "max_deg: 5")).unwrap();
+        input.set_max_deg(7).unwrap();
+        assert_eq!(input.problem.selection, Selection::MaxDeg(7));
+        let mut input =
+            load_one(&THREEFOLD.replace("min_points: 20", "target_points: [1, 2]")).unwrap();
+        input.set_max_deg(2).unwrap();
+        assert_eq!(
+            input.problem.selection,
+            Selection::TargetPoints {
+                points: dmatrix![1; 2],
+                max_deg: Some(2)
+            }
+        );
+        let mut input = load_one(THREEFOLD).unwrap();
+        assert_eq!(
+            input.set_max_deg(2),
+            Err(IoError::Conflicting("max_deg", "min_points"))
+        );
     }
 
     #[test]
@@ -953,20 +915,24 @@ min_points: 20
              - {{divisors: [0, 1, 5], class: [\"3\", 0]}}\n"
         ))
         .unwrap();
+        let r = |n: i64, d: i64| Rational::from(n) / Rational::from(d);
         assert_eq!(
-            input.strata,
-            [
+            input.problem.geometry.ambient,
+            Ambient::Strata(vec![
                 Stratum {
                     divisors: [3, 1, 2],
-                    class: vec![(1, 1), (-1, 2)]
+                    class: vec![r(1, 1), r(-1, 2)]
                 },
                 Stratum {
                     divisors: [0, 1, 5],
-                    class: vec![(3, 1), (0, 1)]
+                    class: vec![r(3, 1), r(0, 1)]
                 }
-            ]
+            ])
         );
-        assert!(load_one(&base).unwrap().strata.is_empty());
+        assert_eq!(
+            load_one(&base).unwrap().problem.geometry.ambient,
+            Ambient::Plain
+        );
 
         for bad in [
             "[{divisors: [1, 2], class: [1, 1]}]",
@@ -979,11 +945,9 @@ min_points: 20
             "[{divisors: [1, 2, 3], class: [1, 1]}, {divisors: [3, 2, 1], class: [0, 1]}]",
             "[[1, 2, 3], [1, 1]]",
         ] {
-            assert!(
-                matches!(
-                    load_one(&format!("{base}strata: {bad}\n")),
-                    Err(IoError::InvalidField { field, .. }) if field == "strata"
-                ),
+            assert_eq!(
+                field_of(&format!("{base}strata: {bad}\n")),
+                "strata",
                 "{bad}"
             );
         }
@@ -991,13 +955,20 @@ min_points: 20
             load_one(&format!("{base}strata: [{{divisors: [1, 2, 3]}}]\n")),
             Err(IoError::MissingField("class"))
         );
-        // Strata are only supported for threefold hypersurfaces, by both methods.
+        // Strata are only supported for threefold hypersurfaces.
+        let fourfold = base.replace(
+            "q: [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]",
+            "q: [[1, 1, 1, 0, 1, 2, 1], [0, 0, -1, 1, 1, -1, 0]]",
+        );
         let strata = "strata: [{divisors: [1, 2, 3], class: [1, 1]}]\n";
-        assert!(matches!(
-            load_one(&format!("{base}{strata}is_threefold: false\n")),
-            Err(IoError::InvalidField { field, .. }) if field == "strata"
-        ));
+        assert_eq!(field_of(&format!("{fourfold}{strata}")), "strata");
         assert!(load_one(&format!("{base}{strata}method: modular\n")).is_ok());
+        // Nor certified, by the modular method.
+        assert!(matches!(
+            load_one(&format!("{base}{strata}certify: true\n")),
+            Err(IoError::Unsupported(_))
+        ));
+        assert!(load_one(&format!("{base}{strata}certify: true\nmethod: reference\n")).is_ok());
     }
 
     /// A vex phase of P(1,1,2,2,2)[8] given by its fan.
@@ -1011,26 +982,26 @@ fan: [[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 3, 4], [0, 2, 3, 4], [1, 2, 3, 5], [1, 
 
     #[test]
     fn test_parse_fan() {
-        // The grading vector is derived from the fan; the strata and the generators are
-        // left to the computation.
+        // The Mori cone and the grading vector are derived from the fan.
         let input = load_one(FAN).unwrap();
-        assert_eq!(input.grading_vector, RowDVector::from_row_slice(&[2, 1]));
-        assert_eq!(input.generators.shape(), (2, 0));
-        assert!(input.strata.is_empty());
-        assert_eq!(input.fan.as_ref().map(Vec::len), Some(8));
+        assert_eq!(input.problem.cone, MoriCone::FromFan);
+        assert_eq!(input.problem.grading_vector, None);
+        assert!(matches!(&input.problem.geometry.ambient, Ambient::Fan(c) if c.len() == 8));
         let given = load_one(&format!("{FAN}grading_vector: [3, 1]\n")).unwrap();
-        assert_eq!(given.grading_vector, RowDVector::from_row_slice(&[3, 1]));
+        assert_eq!(given.problem.grading_vector, Some(vec![3, 1]));
 
-        let field_of = |data: &str| match load_one(data) {
-            Err(IoError::InvalidField { field, .. }) => field,
-            res => panic!("{res:?}"),
-        };
         let strata = "strata: [{divisors: [1, 2, 4], class: [1, -1]}]\n";
-        assert_eq!(field_of(&format!("{FAN}{strata}")), "strata");
-        assert_eq!(field_of(&format!("{FAN}is_threefold: false\n")), "fan");
+        assert_eq!(
+            load_one(&format!("{FAN}{strata}")),
+            Err(IoError::Conflicting("fan", "strata"))
+        );
+        assert_eq!(
+            field_of(&format!("{FAN}nefpart: [[0, 1, 2], [3, 4, 5]]\n")),
+            "q"
+        );
         assert_eq!(
             field_of(&FAN.replace("[1, 1, 1, 2]", "[1, 1, 1, 3]")),
-            "fan"
+            "intnums"
         );
         assert_eq!(
             field_of(&FAN.replace("[1, 1, 1, 2]", "[1, 1, 2, 2]")),
@@ -1041,24 +1012,27 @@ fan: [[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 3, 4], [0, 2, 3, 4], [1, 2, 3, 5], [1, 
             field_of(&FAN.replace("[0, 1, 2, 3]", "[0, 1, 2, -3]")),
             "fan"
         );
-        assert_eq!(field_of(&format!("{FAN}generators: [[1, 0, 0]]\n")), "q");
-        // Without any truncation the generators are the curve classes to use.
-        let untruncated = FAN.replace("max_deg: 6\n", "method: reference\n");
         assert_eq!(
-            load_one(&untruncated),
-            Err(IoError::MissingField("generators"))
+            field_of(&format!("{FAN}generators: [[1, 0, 0]]\n")),
+            "generators"
         );
-        assert!(load_one(&format!("{untruncated}generators: [[0, 1], [1, -1]]\n")).is_ok());
-        // Without a fan, the grading vector is needed.
-        let without = FAN.replace("fan: ", "strata: []\nignored: ");
-        let without = &without[..without.find("ignored").unwrap()];
+        assert_eq!(
+            field_of(&format!("{FAN}grading_vector: [1, -5]\n")),
+            "grading_vector"
+        );
+        // Without a fan, the Mori cone is needed.
+        let without = &FAN[..FAN.find("fan:").unwrap()];
         assert_eq!(
             load_one(without),
-            Err(IoError::MissingField("grading_vector"))
+            Err(IoError::MissingOneOf(&[
+                "generators",
+                "mori_hyperplanes",
+                "fan"
+            ]))
         );
     }
 
-    /// P(1,1,2,2,2)[8] with its cone data and no generators.
+    /// P(1,1,2,2,2)[8] with the inequalities of its Mori cone and the Hilbert bases.
     fn p11222_cones() -> String {
         let mut data = "\
 grading_vector: [1, 1]
@@ -1066,7 +1040,7 @@ q: [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]]
 intnums: [[0, 0, 0, 8], [0, 0, 1, 4]]
 max_deg: 6
 mori_hyperplanes: [[1, 0], [0, 1]]
-cones:
+hilbert_bases:
 "
         .to_owned();
         for s in 0..6 {
@@ -1084,66 +1058,55 @@ cones:
     }
 
     #[test]
-    fn test_parse_cone_data() {
+    fn test_parse_hilbert_bases() {
         let data = p11222_cones();
         let input = load_one(&data).unwrap();
-        assert_eq!(input.generators.shape(), (2, 0));
-        let cone_data = input.cone_data.unwrap();
-        assert_eq!(cone_data.hyperplanes, dmatrix![1, 0; 0, 1]);
-        assert_eq!(cone_data.equations.shape(), (2, 0));
-        assert_eq!(cone_data.cones.len(), 21);
-        assert_eq!(cone_data.cones[1].divisors, [0, 1]);
-        assert_eq!(cone_data.cones[1].hilbert_basis, dmatrix![1, 2; 0, 1]);
-        assert!(load_one(&format!("{data}generators: [[1, 0], [0, 1]]\n"))
-            .unwrap()
-            .cone_data
-            .is_some());
+        assert_eq!(
+            input.problem.cone,
+            MoriCone::Inequalities {
+                hyperplanes: dmatrix![1, 0; 0, 1],
+                equations: DMatrix::zeros(2, 0)
+            }
+        );
+        let bases = input.options.hilbert_bases.unwrap();
+        assert_eq!(bases.len(), 21);
+        assert_eq!(bases[1].divisors, [0, 1]);
+        assert_eq!(bases[1].hilbert_basis, dmatrix![1, 2; 0, 1]);
+        assert_eq!(
+            load_one(&format!("{data}generators: [[1, 0], [0, 1]]\n")),
+            Err(IoError::Conflicting("generators", "mori_hyperplanes"))
+        );
 
         // The face spanned by (1, 0), which meets no divisor negatively, so it is every K_T.
         let face = data
             .replace("max_deg: 6\n", "max_deg: 6\nmori_equations: [[0, 1]]\n")
             .replace("[[1, 0], [0, 1]]}", "[[1, 0]]}")
             .replace("[[1, 0], [2, 1]]}", "[[1, 0]]}");
-        let cone_data = load_one(&face).unwrap().cone_data.unwrap();
-        assert_eq!(cone_data.equations, dmatrix![0; 1]);
-        assert_eq!(cone_data.cones[0].hilbert_basis, dmatrix![1; 0]);
+        let input = load_one(&face).unwrap();
+        assert!(matches!(
+            &input.problem.cone,
+            MoriCone::Inequalities { equations, .. } if *equations == dmatrix![0; 1]
+        ));
         // An empty Hilbert basis is read too (a K_T can be just the origin).
         let empty = data.replacen("[[1, 0], [2, 1]]}", "[]}", 1);
-        let cone_data = load_one(&empty).unwrap().cone_data.unwrap();
-        assert_eq!(cone_data.cones[0].hilbert_basis.shape(), (2, 0));
+        let bases = load_one(&empty).unwrap().options.hilbert_bases.unwrap();
+        assert_eq!(bases[0].hilbert_basis.shape(), (2, 0));
 
-        // The cone data needs both the hyperplanes and the cones, and replaces the generators
-        // for every method, unless nothing truncates the computation.
-        let no_cones = &data[..data.find("cones:").unwrap()];
-        assert_eq!(load_one(no_cones), Err(IoError::MissingField("cones")));
-        let no_hyperplanes = data.replace("mori_hyperplanes: [[1, 0], [0, 1]]\n", "");
+        // The inequalities alone describe the Mori cone; the Hilbert bases are optional.
+        let head = &data[..data.find("hilbert_bases:").unwrap()];
+        assert!(load_one(head).unwrap().options.hilbert_bases.is_none());
+        let no_hyperplanes = head.replace("mori_hyperplanes: [[1, 0], [0, 1]]\n", "");
         assert_eq!(
-            load_one(&no_hyperplanes),
+            load_one(&format!("{no_hyperplanes}mori_equations: [[0, 1]]\n")),
             Err(IoError::MissingField("mori_hyperplanes"))
         );
-        let head = &data[..data.find("mori_hyperplanes").unwrap()];
-        assert_eq!(
-            load_one(&format!("{head}mori_equations: [[0, 1]]\n")),
-            Err(IoError::MissingField("mori_hyperplanes"))
-        );
-        assert_eq!(load_one(head), Err(IoError::MissingField("generators")));
-        for extra in ["method: reference\nmax_deg: 6\n", "min_points: 5\n"] {
-            let data = data.replace("max_deg: 6\n", extra);
-            assert_eq!(load_one(&data).unwrap().generators.shape(), (2, 0));
-        }
-        let untruncated = data.replace("max_deg: 6\n", "method: reference\n");
-        assert_eq!(
-            load_one(&untruncated),
-            Err(IoError::MissingField("generators"))
-        );
+        // The reference method, which runs for min_points, has no use for them.
+        assert!(load_one(&data.replace("max_deg: 6\n", "min_points: 5\n")).is_ok());
+        assert!(load_one(&format!("{data}method: reference\n")).is_ok());
 
-        // The cone data is checked.
-        let field_of = |data: &str| match load_one(data) {
-            Err(IoError::InvalidField { field, .. }) => field,
-            res => panic!("{res:?}"),
-        };
+        // They are checked against the Mori cone.
         let last = data.rfind("  - ").unwrap();
-        assert_eq!(field_of(&data[..last]), "cones");
+        assert_eq!(field_of(&data[..last]), "hilbert_bases");
         for (from, to) in [
             (
                 "{divisors: [0], hilbert_basis: [[1, 0], [2, 1]]}",
@@ -1164,7 +1127,11 @@ cones:
                 "{divisors: [0, 1, 2], hilbert_basis: []}",
             ),
         ] {
-            assert_eq!(field_of(&data.replacen(from, to, 1)), "cones", "{to}");
+            assert_eq!(
+                field_of(&data.replacen(from, to, 1)),
+                "hilbert_bases",
+                "{to}"
+            );
         }
         assert_eq!(
             field_of(&data.replace(
@@ -1174,13 +1141,20 @@ cones:
             "mori_hyperplanes"
         );
         assert_eq!(
-            field_of(&format!("{data}generators: [[1, 0], [-1, 1]]\n")),
-            "generators"
-        );
-        assert_eq!(
             field_of(&format!("{data}mori_equations: [[1]]\n")),
             "mori_equations"
         );
+    }
+
+    #[test]
+    fn test_removed_fields() {
+        // The fields of earlier versions say what replaced them.
+        for (field, extra) in [
+            ("cones", "cones: []\n"),
+            ("is_threefold", "is_threefold: true\n"),
+        ] {
+            assert_eq!(field_of(&format!("{THREEFOLD}{extra}")), field);
+        }
     }
 
     #[test]
@@ -1192,30 +1166,21 @@ cones:
             ("reference", Method::Reference),
         ] {
             let input = load_one(&format!("{base}method: {name}\n")).unwrap();
-            assert_eq!(input.method, method);
+            assert_eq!(input.options.method, method);
         }
-        assert!(matches!(
-            load_one(&format!("{base}method: fast\n")),
-            Err(IoError::InvalidField { field, .. }) if field == "method"
-        ));
-        // The modular method does not support min_points, which is checked eagerly.
+        assert_eq!(field_of(&format!("{base}method: fast\n")), "method");
         assert!(load_one(&format!("{THREEFOLD}method: auto\n")).is_ok());
-        assert!(matches!(
-            load_one(&format!("{THREEFOLD}method: modular\n")),
-            Err(IoError::InvalidField { field, reason })
-                if field == "method" && reason.contains("min_points")
-        ));
     }
 
     #[test]
-    fn test_parse_certify() {
+    fn test_parse_options() {
         let base = THREEFOLD.replace("min_points: 20\n", "max_deg: 5\n");
-        assert!(!load_one(&base).unwrap().certify);
-        assert!(load_one(&format!("{base}certify: true\n")).unwrap().certify);
-        assert!(matches!(
-            load_one(&format!("{base}certify: 1\n")),
-            Err(IoError::InvalidField { field, .. }) if field == "certify"
-        ));
+        assert!(!load_one(&base).unwrap().options.certify);
+        let input = load_one(&format!("{base}certify: true\nn_threads: 3\n")).unwrap();
+        assert!(input.options.certify);
+        assert_eq!(input.options.n_threads, Some(3));
+        assert_eq!(field_of(&format!("{base}certify: 1\n")), "certify");
+        assert_eq!(field_of(&format!("{base}n_threads: 0\n")), "n_threads");
     }
 
     #[test]
@@ -1223,8 +1188,8 @@ cones:
         let data = format!("---\n{THREEFOLD}---\n{THREEFOLD}invariants: gw\n");
         let inputs = Input::load_all(&data).unwrap();
         assert_eq!(inputs.len(), 2);
-        assert_eq!(inputs[0].invariant_kind, InvariantKind::GV);
-        assert_eq!(inputs[1].invariant_kind, InvariantKind::GW);
+        assert_eq!(inputs[0].kind, InvariantKind::GV);
+        assert_eq!(inputs[1].kind, InvariantKind::GW);
     }
 
     #[test]
@@ -1234,50 +1199,42 @@ cones:
             "intnums: {\"0,0,0\": 2, \"0 0 1\": 1, \"0,1,1\": -1, \"1,1,1\": 5}",
         );
         let input = load_one(&data).unwrap();
-        assert_eq!(input.intnums, load_one(THREEFOLD).unwrap().intnums);
+        assert_eq!(input.problem, load_one(THREEFOLD).unwrap().problem);
     }
 
     #[test]
     fn test_parse_target_points() {
         let base = THREEFOLD.replace("min_points: 20\n", "");
-        let input = load_one(&format!("{base}target_points: [1, 2]\n")).unwrap();
-        assert_eq!(input.target_points, Some(dmatrix![1; 2]));
-
-        let input = load_one(&format!("{base}target_points: [[1, 2], [3, 4]]\n")).unwrap();
-        assert_eq!(input.target_points, Some(dmatrix![1, 3; 2, 4]));
-
-        // With a maximum degree, which the modular method supports too.
-        let input = load_one(&format!(
-            "{base}target_points: [1, 2]\nmax_deg: 3\nmethod: modular\n"
-        ))
-        .unwrap();
-        assert_eq!(input.max_deg, Some(3));
-
+        let selection =
+            |extra: &str| load_one(&format!("{base}{extra}")).map(|i| i.problem.selection);
         assert_eq!(
-            load_one(&format!("{THREEFOLD}target_points: [1, 2]\n")),
-            Err(IoError::ConflictingTruncations)
+            selection("target_points: [1, 2]\n"),
+            Ok(Selection::TargetPoints {
+                points: dmatrix![1; 2],
+                max_deg: None
+            })
         );
         assert_eq!(
-            load_one(&format!(
-                "{}target_points: [1, 2]\n",
-                THREEFOLD.replace("min_points: 20\n", "max_deg: 3\n")
-            ))
-            .unwrap()
-            .max_deg,
-            Some(3)
+            selection("target_points: [[1, 2], [3, 4]]\nmax_deg: 3\nmethod: modular\n"),
+            Ok(Selection::TargetPoints {
+                points: dmatrix![1, 3; 2, 4],
+                max_deg: Some(3)
+            })
+        );
+        assert_eq!(
+            selection("target_points: [1, 2]\nmin_points: 20\n"),
+            Err(IoError::Conflicting("target_points", "min_points"))
         );
         for bad in ["[[1, 2, 3]]", "[0, 0]", "[[1, 2], [-1, -1]]"] {
-            assert!(matches!(
-                load_one(&format!("{base}target_points: {bad}\n")),
-                Err(IoError::InvalidField { field, .. }) if field == "target_points"
-            ));
+            assert_eq!(
+                field_of(&format!("{base}target_points: {bad}\n")),
+                "target_points"
+            );
         }
     }
 
     #[test]
-    fn test_infer_cy_kind() {
-        assert_eq!(load_one(THREEFOLD).unwrap().cy_kind, CYKind::Threefold);
-
+    fn test_dimension() {
         // Eight rays, two Kähler parameters, and a codimension-two CY, i.e. a fourfold.
         let data = THREEFOLD.replace(
             "q: [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]",
@@ -1285,30 +1242,34 @@ cones:
         );
         let data = format!("{data}nefpart: [[0, 1], [2, 3, 4, 5, 6, 7]]\n");
         let input = load_one(&data).unwrap();
-        assert_eq!(input.nefpart.len(), 2);
-        assert_eq!(input.cy_kind, CYKind::Nfold);
-
-        assert_eq!(
-            load_one(&format!("{data}is_threefold: true\n"))
-                .unwrap()
-                .cy_kind,
-            CYKind::Threefold
-        );
+        assert_eq!(input.problem.geometry.nefpart.len(), 2);
+        assert_eq!(input.problem.geometry.dimension(), 4);
         // The nef partition must split the rays: indices of the rays, each in one part.
         for parts in [
             "[2, 3, 4, 5, 6, 8]",
             "[1, 2, 3, 4, 5, 6, 7]",
             "[2, 3, 4, 5, 6]",
+            "[2, 3, 4, 5, 6, -7]",
         ] {
-            assert!(matches!(
-                load_one(&data.replace("[2, 3, 4, 5, 6, 7]", parts)),
-                Err(IoError::InvalidField { field, .. }) if field == "nefpart"
-            ));
+            assert_eq!(
+                field_of(&data.replace("[2, 3, 4, 5, 6, 7]", parts)),
+                "nefpart",
+                "{parts}"
+            );
         }
         // The resulting CY must be at least three-dimensional.
+        assert_eq!(
+            field_of(&format!("{THREEFOLD}nefpart: [[0, 1], [2, 3, 4, 5]]\n")),
+            "q"
+        );
+        // A transposed q says so.
+        let transposed = THREEFOLD.replace(
+            "q: [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]",
+            "q: [[1, 0], [1, 0], [1, -1], [0, 1], [1, 1], [2, -1]]",
+        );
         assert!(matches!(
-            load_one(&format!("{THREEFOLD}nefpart: [[0, 1], [2, 3, 4, 5]]\n")),
-            Err(IoError::InvalidField { field, .. }) if field == "q"
+            load_one(&transposed),
+            Err(IoError::InvalidField { field, reason }) if field == "q" && reason.contains("transposed")
         ));
     }
 
@@ -1318,77 +1279,116 @@ cones:
         assert_eq!(Input::load_all("- 1"), Err(IoError::NotAMapping));
         assert_eq!(
             load_one("generators: [[1]]"),
-            Err(IoError::MissingField("grading_vector"))
+            Err(IoError::MissingField("q"))
         );
         assert_eq!(
             load_one(&format!("{THREEFOLD}bad_field: 1\n")),
             Err(IoError::UnknownField("bad_field".to_owned()))
         );
-        assert!(matches!(
-            load_one("generators: [[1, 2], [3]]"),
-            Err(IoError::InvalidField { field, .. }) if field == "generators"
-        ));
-        assert!(matches!(
-            load_one(&THREEFOLD.replace("[3, -1]", "[3, -1, 0]")),
-            Err(IoError::InvalidField { field, .. }) if field == "grading_vector"
-        ));
-        assert!(matches!(
-            load_one(&THREEFOLD.replace("[0, 1, 1, -1]", "[0, 1, 1, -1], [1, 0, 1, 2]")),
-            Err(IoError::InvalidField { field, .. }) if field == "intnums"
-        ));
+        assert_eq!(
+            field_of(&THREEFOLD.replace("[[0, -1], [1, 2]]", "[[1, 2], [3]]")),
+            "generators"
+        );
+        assert_eq!(
+            field_of(&THREEFOLD.replace("[[0, -1], [1, 2]]", "[[1, 2, 0]]")),
+            "generators"
+        );
+        assert_eq!(
+            field_of(&THREEFOLD.replace("[3, -1]", "[3, -1, 0]")),
+            "grading_vector"
+        );
+        assert_eq!(
+            field_of(&THREEFOLD.replace("[0, 1, 1, -1]", "[0, 1, 1, -1], [1, 0, 1, 2]")),
+            "intnums"
+        );
         // So must indices that are not those of the divisors.
-        assert!(matches!(
-            load_one(&THREEFOLD.replace("[1, 1, 1, 5]", "[1, 1, 2, 5]")),
-            Err(IoError::InvalidField { field, .. }) if field == "intnums"
-        ));
+        assert_eq!(
+            field_of(&THREEFOLD.replace("[1, 1, 1, 5]", "[1, 1, 2, 5]")),
+            "intnums"
+        );
         // Intersection numbers that are all zero must be rejected, not panic.
-        assert!(matches!(
-            load_one(&THREEFOLD.replace(
+        assert_eq!(
+            field_of(&THREEFOLD.replace(
                 "intnums: [[0, 0, 0, 2], [0, 0, 1, 1], [0, 1, 1, -1], [1, 1, 1, 5]]",
                 "intnums: [[0, 0, 0, 0], [0, 0, 1, 0]]",
             )),
-            Err(IoError::InvalidField { field, .. }) if field == "intnums"
-        ));
+            "intnums"
+        );
         assert!(Input::load_all("generators: [[1]], bad").is_err());
+    }
+
+    /// GV invariants with the given entries.
+    fn gv(entries: Vec<Invariant<Integer>>, dimension: usize) -> Computed {
+        Computed::Gv(Invariants {
+            dimension,
+            grading_vector: vec![3, -1],
+            entries,
+            report: Report {
+                method: Method::Modular,
+                certified: false,
+                grading_vector_derived: false,
+                elapsed: std::time::Duration::ZERO,
+            },
+        })
     }
 
     #[test]
     fn test_write_results() {
         let mut input = load_one(THREEFOLD).unwrap();
-        let results = vec![
-            ((dvector![0, -1], 0), "-4".to_owned()),
-            ((dvector![1, 0], 2), "7524".to_owned()),
-        ];
-
+        let entry = |curve: Vec<i32>, surface, degree, value: i32| Invariant {
+            curve,
+            surface,
+            degree,
+            value: Integer::from(value),
+        };
+        let results = gv(
+            vec![
+                entry(vec![0, -1], None, 1, -4),
+                entry(vec![1, 0], None, 3, 7524),
+            ],
+            3,
+        );
         let mut buf = Vec::new();
         input.write_results(&mut buf, &results).unwrap();
         assert_eq!(
             String::from_utf8(buf).unwrap(),
-            "---\nname: test\ninvariants: gv\nis_threefold: true\n\
-             grading_vector: [3, -1]\nresults:\n  \
+            "---\nname: test\ninvariants: gv\ndimension: 3\ngrading_vector: [3, -1]\n\
+             report: {method: modular, certified: false, grading_vector_derived: false}\n\
+             results:\n  \
              - {curve_class: [0, -1], degree: 1, gv: -4}\n  \
              - {curve_class: [1, 0], degree: 3, gv: 7524}\n"
         );
 
         input.name = None;
-        input.invariant_kind = InvariantKind::GW;
-        input.cy_kind = CYKind::Nfold;
+        let results = Computed::Gw(Invariants {
+            dimension: 4,
+            grading_vector: vec![3, -1],
+            entries: vec![Invariant {
+                curve: vec![0, -1],
+                surface: Some(2),
+                degree: 1,
+                value: Rational::from(-4),
+            }],
+            report: Report {
+                method: Method::Reference,
+                certified: true,
+                grading_vector_derived: true,
+                elapsed: std::time::Duration::ZERO,
+            },
+        });
         let mut buf = Vec::new();
         input.write_results(&mut buf, &results).unwrap();
         assert_eq!(
             String::from_utf8(buf).unwrap(),
-            "---\ninvariants: gw\nis_threefold: false\n\
-             grading_vector: [3, -1]\nresults:\n  \
-             - {curve_class: [0, -1], degree: 1, surface_index: 0, gw: '-4'}\n  \
-             - {curve_class: [1, 0], degree: 3, surface_index: 2, gw: '7524'}\n"
+            "---\ninvariants: gw\ndimension: 4\ngrading_vector: [3, -1]\n\
+             report: {method: reference, certified: true, grading_vector_derived: true}\n\
+             results:\n  \
+             - {curve_class: [0, -1], degree: 1, surface: 2, gw: '-4'}\n"
         );
 
         let mut buf = Vec::new();
-        input.write_results(&mut buf, &[]).unwrap();
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
-            "---\ninvariants: gw\nis_threefold: false\ngrading_vector: [3, -1]\nresults: []\n"
-        );
+        input.write_results(&mut buf, &gv(vec![], 3)).unwrap();
+        assert!(String::from_utf8(buf).unwrap().ends_with("results: []\n"));
     }
 
     #[test]
@@ -1408,24 +1408,19 @@ cones:
     }
 
     #[test]
-    fn test_results_are_sorted() {
-        let input = load_one(THREEFOLD).unwrap();
-        let results = input.compute().unwrap();
-        assert!(results.len() > 1);
-        let degrees: Vec<_> = results.iter().map(|((c, _), _)| input.degree(c)).collect();
-        assert!(degrees.windows(2).all(|w| w[0] <= w[1]));
-        // The curve classes of equal degree are sorted lexicographically.
-        assert!(results
-            .windows(2)
-            .all(|w| input.degree(&w[0].0 .0) < input.degree(&w[1].0 .0)
-                || w[0].0 .0.as_slice() <= w[1].0 .0.as_slice()));
-    }
-
-    #[test]
     fn test_output_is_valid_yaml() {
         let input = load_one(THREEFOLD).unwrap();
         let results = input.compute().unwrap();
-        assert!(!results.is_empty());
+        let Computed::Gv(gv) = &results else {
+            panic!("GW invariants instead of GV")
+        };
+        assert!(gv.entries.len() > 1);
+        assert_eq!(gv.report.method, Method::Reference);
+        // Sorted by degree, and then by curve class.
+        assert!(gv
+            .entries
+            .windows(2)
+            .all(|w| (w[0].degree, &w[0].curve) < (w[1].degree, &w[1].curve)));
 
         let mut buf = Vec::new();
         input.write_results(&mut buf, &results).unwrap();
@@ -1433,20 +1428,22 @@ cones:
         assert_eq!(output.len(), 1);
         assert_eq!(output[0]["name"].as_str(), Some("test"));
         assert_eq!(output[0]["invariants"].as_str(), Some("gv"));
-        assert_eq!(output[0]["is_threefold"].as_bool(), Some(true));
+        assert_eq!(output[0]["dimension"].as_i64(), Some(3));
+        assert_eq!(output[0]["report"]["method"].as_str(), Some("reference"));
+        assert_eq!(output[0]["report"]["certified"].as_bool(), Some(true));
         assert_eq!(
             as_int_vec(&output[0]["grading_vector"], "").unwrap(),
-            input.grading_vector.as_slice()
+            [3, -1]
         );
         let parsed = output[0]["results"].as_vec().unwrap();
-        assert_eq!(parsed.len(), results.len());
-        for (entry, ((curve, _), value)) in parsed.iter().zip(results.iter()) {
+        assert_eq!(parsed.len(), gv.entries.len());
+        for (entry, e) in parsed.iter().zip(&gv.entries) {
+            assert_eq!(as_int_vec(&entry["curve_class"], "").unwrap(), e.curve);
+            assert_eq!(entry["degree"].as_i64(), Some(e.degree as i64));
             assert_eq!(
-                as_int_vec(&entry["curve_class"], "").unwrap(),
-                curve.as_slice()
+                entry["gv"].as_i64().unwrap().to_string(),
+                e.value.to_string()
             );
-            assert_eq!(entry["degree"].as_i64(), Some(input.degree(curve)));
-            assert_eq!(entry["gv"].as_i64().unwrap().to_string(), *value);
         }
     }
 }

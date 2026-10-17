@@ -1,15 +1,18 @@
-//! Tests of the cone data, with which the modular pipeline takes its candidates from the
-//! Hilbert bases of the cones $K_T$.
+//! Tests of the inequalities of the Mori cone and of the Hilbert bases of the cones $K_T$, from
+//! which the modular pipeline takes its candidates.
 //!
-//! The cone data in `tests/data` was computed with Normaliz for `benches/data/h11_9.yaml` (see
-//! the headers of the files), and is appended to its input.
+//! The data in `tests/data` was computed with Normaliz for `benches/data/h11_9.yaml` (see the
+//! headers of the files), and is appended to its input.
 
 #![cfg(feature = "cli")]
 
-use cygv::dispatch::{compute_gvgw_strings, ComputeError};
+use cygv::cone::ConeData;
 use cygv::io::Input;
-use cygv::{CYKind, CandidateCone, ConeData, InvariantKind, Method};
-use nalgebra::{dmatrix, DMatrix, DVector, RowDVector};
+use cygv::{
+    compute, CandidateCone, Computed, Error, Geometry, InvariantKind, Method, MoriCone, Options,
+    Problem, Selection,
+};
+use nalgebra::{dmatrix, DMatrix};
 use std::collections::HashMap;
 
 const H11_8: &str = include_str!("../benches/data/h11_8.yaml");
@@ -19,42 +22,108 @@ const H11_11: &str = include_str!("../benches/data/h11_11.yaml");
 const H11_9_CONES: &str = include_str!("data/h11_9_cones.yaml");
 const H11_9_FACET: &str = include_str!("data/h11_9_facet.yaml");
 
-/// The input of a bench file at `max_deg`, without its generators if `generators` is false,
-/// with `extra` appended.
+/// The text without the top-level fields `keys`, each with the lines below it.
+fn without(text: &str, keys: &[&str]) -> String {
+    let mut res = String::new();
+    let mut skipping = false;
+    for line in text.lines() {
+        if !line.starts_with([' ', '-']) {
+            skipping = keys
+                .iter()
+                .any(|k| line.strip_prefix(k).is_some_and(|r| r.starts_with(':')));
+        }
+        if !skipping {
+            res += line;
+            res.push('\n');
+        }
+    }
+    res
+}
+
+/// The input of a bench file at `max_deg`, with `extra` appended: with the generators of the
+/// bench file as the Mori cone if `generators`, and the inequalities of `extra` otherwise.
 fn input(bench: &str, generators: bool, max_deg: u32, extra: &str) -> Input {
-    let (head, gens) = bench.split_at(bench.find("\ngenerators:").unwrap() + 1);
-    let head: String = head
-        .lines()
-        .filter(|l| !l.starts_with("max_deg:"))
-        .map(|l| format!("{l}\n"))
-        .collect();
-    let gens = if generators { gens } else { "" };
-    let mut inputs =
-        Input::load_all(&format!("{head}max_deg: {max_deg}\n{gens}\n{extra}")).unwrap();
+    let bench = without(bench, &["max_deg"]);
+    let (extra, bench) = if generators {
+        (
+            without(extra, &["generators", "mori_hyperplanes", "mori_equations"]),
+            bench,
+        )
+    } else {
+        (
+            without(extra, &["generators"]),
+            without(&bench, &["generators"]),
+        )
+    };
+    let mut inputs = Input::load_all(&format!("{bench}max_deg: {max_deg}\n{extra}")).unwrap();
     assert_eq!(inputs.len(), 1);
     inputs.remove(0)
 }
 
-type Results = HashMap<(Vec<i32>, usize), String>;
-
-fn results(input: &Input, method: Method) -> Result<Results, ComputeError> {
-    let input = Input {
-        method,
-        ..input.clone()
+/// The generators of a bench file, or of the facet's file.
+fn generators(bench: &str) -> DMatrix<i32> {
+    let base = if bench == H11_9_FACET {
+        format!(
+            "{}{}",
+            without(H11_9, &["generators"]),
+            without(bench, &["mori_hyperplanes", "mori_equations"])
+        )
+    } else {
+        bench.to_owned()
     };
-    Ok(input
-        .compute()?
-        .into_iter()
-        .map(|((c, k), v)| ((c.as_slice().to_vec(), k), v))
-        .collect())
+    match Input::load_all(&base).unwrap().remove(0).problem.cone {
+        MoriCone::Generators(g) => g,
+        cone => panic!("{cone:?}"),
+    }
 }
 
-/// The same input without the cone data.
-fn without_cones(input: &Input) -> Input {
-    Input {
-        cone_data: None,
-        ..input.clone()
+/// The inequalities and the Hilbert bases of an input.
+fn cone_data(input: &Input) -> ConeData {
+    let MoriCone::Inequalities {
+        hyperplanes,
+        equations,
+    } = input.problem.cone.clone()
+    else {
+        panic!("no inequalities")
+    };
+    ConeData {
+        hyperplanes,
+        equations,
+        cones: input.options.hilbert_bases.clone().unwrap(),
     }
+}
+
+fn grading_vector(input: &Input) -> Vec<i32> {
+    input.problem.grading_vector.clone().unwrap()
+}
+
+type Results = HashMap<(Vec<i32>, usize), String>;
+
+fn results(input: &Input, method: Method) -> Result<Results, Error> {
+    let options = Options {
+        method,
+        ..input.options.clone()
+    };
+    let label = |c: Vec<i32>, s: Option<usize>| (c, s.unwrap_or(0));
+    Ok(match compute(&input.problem, input.kind, &options)? {
+        Computed::Gv(gv) => gv
+            .entries
+            .into_iter()
+            .map(|e| (label(e.curve, e.surface), e.value.to_string()))
+            .collect(),
+        Computed::Gw(gw) => gw
+            .entries
+            .into_iter()
+            .map(|e| (label(e.curve, e.surface), e.value.to_string()))
+            .collect(),
+    })
+}
+
+/// The same input without the Hilbert bases.
+fn without_bases(input: &Input) -> Input {
+    let mut input = input.clone();
+    input.options.hilbert_bases = None;
+    input
 }
 
 #[test]
@@ -65,20 +134,25 @@ fn test_h11_9() {
     assert_eq!(results(&input, Method::Modular).unwrap(), expected);
     assert_eq!(results(&input, Method::Auto).unwrap(), expected);
     assert_eq!(
-        results(&without_cones(&input), Method::Modular).unwrap(),
+        results(&without_bases(&input), Method::Modular).unwrap(),
         expected
     );
 
-    // Without the generators both methods take the Mori cone from the cone data.
+    // Without the generators both methods take the Mori cone from its inequalities.
     let input = self::input(H11_9, false, 8, H11_9_CONES);
-    assert_eq!(input.generators.shape(), (9, 0));
+    assert!(matches!(input.problem.cone, MoriCone::Inequalities { .. }));
     assert_eq!(results(&input, Method::Auto).unwrap(), expected);
     assert_eq!(results(&input, Method::Reference).unwrap(), expected);
+    assert_eq!(
+        results(&without_bases(&input), Method::Auto).unwrap(),
+        expected
+    );
 }
 
 /// Without an element of the Hilbert basis of the Mori cone among the generators, their
 /// semigroup has a hole, over which the invariants would not be integers. Both methods use
-/// every lattice point of the cone the generators span instead, with or without cone data.
+/// every lattice point of the cone the generators span instead, with or without the Hilbert
+/// bases.
 #[test]
 fn test_saturation() {
     let missing = "[1,0,0,0,0,0,1,0,0]";
@@ -94,7 +168,7 @@ fn test_saturation() {
     assert_eq!(expected[&(vec![1, 0, 0, 0, 0, 0, 1, 0, 0], 0)], "20");
     assert_eq!(results(&input, Method::Modular).unwrap(), expected);
     for method in [Method::Modular, Method::Reference] {
-        assert_eq!(results(&without_cones(&input), method).unwrap(), expected);
+        assert_eq!(results(&without_bases(&input), method).unwrap(), expected);
     }
 }
 
@@ -102,8 +176,7 @@ fn test_saturation() {
 #[test]
 fn test_facet() {
     let input = input(H11_9, false, 10, H11_9_FACET);
-    let cone_data = input.cone_data.as_ref().unwrap();
-    assert_eq!(cone_data.equations.shape(), (9, 1));
+    assert_eq!(cone_data(&input).equations.shape(), (9, 1));
     let expected = results(&input, Method::Reference).unwrap();
     assert!(expected.len() > 100);
     let facet = [0, 2, 2, 2, 2, 2, 0, 0, 1];
@@ -112,7 +185,7 @@ fn test_facet() {
         .all(|(c, _)| { c.iter().zip(facet).map(|(x, f)| x * f).sum::<i32>() == 0 }));
     assert_eq!(results(&input, Method::Modular).unwrap(), expected);
     assert_eq!(
-        results(&without_cones(&input), Method::Modular).unwrap(),
+        results(&without_bases(&input), Method::Modular).unwrap(),
         expected
     );
 }
@@ -147,20 +220,20 @@ fn test_cone_data() {
         (H11_9, H11_9_FACET, 10),
     ];
     for (bench, cones, max_deg) in cases {
-        let input = input(bench, cones != H11_9_FACET, max_deg, cones);
-        let normaliz = input.cone_data.unwrap();
-        let w = input.grading_vector.as_slice();
+        let input = input(bench, false, max_deg, cones);
+        let normaliz = cone_data(&input);
+        let w = grading_vector(&input);
         let found = cygv::cone::cone_data(
             &normaliz.hyperplanes,
             &normaliz.equations,
-            &input.q,
+            &input.problem.geometry.q,
             &[],
-            w,
+            &w,
             max_deg,
         )
         .unwrap();
         assert_eq!(found.cones.len(), normaliz.cones.len());
-        let degree = |c: &Vec<i32>| -> i32 { c.iter().zip(w).map(|(x, y)| x * y).sum() };
+        let degree = |c: &Vec<i32>| -> i32 { c.iter().zip(&w).map(|(x, y)| x * y).sum() };
         for cone in &found.cones {
             let theirs = normaliz
                 .cones
@@ -190,9 +263,8 @@ fn test_facets() {
         (H11_11, include_str!("../benches/data/cones/h11_11.yaml")),
     ];
     for (bench, cones) in benches {
-        let input = input(bench, true, 8, cones);
-        let normaliz = input.cone_data.unwrap();
-        let found = cygv::cone::facets(&input.generators).unwrap();
+        let normaliz = cone_data(&input(bench, false, 8, cones));
+        let found = cygv::cone::facets(&generators(bench)).unwrap();
         assert_eq!(found.equations.ncols(), 0);
         assert_eq!(
             sorted_columns(&found.hyperplanes),
@@ -203,9 +275,8 @@ fn test_facets() {
     // On the facet, a hyperplane is only defined up to multiples of the equation, so
     // Normaliz's are moved along it to vanish where `facets` makes them vanish, at the
     // equation's first nonzero entry.
-    let input = input(H11_9, false, 10, H11_9_FACET);
-    let normaliz = input.cone_data.unwrap();
-    let found = cygv::cone::facets(&input.generators).unwrap();
+    let normaliz = cone_data(&input(H11_9, false, 10, H11_9_FACET));
+    let found = cygv::cone::facets(&generators(H11_9_FACET)).unwrap();
     assert_eq!(found.equations, normaliz.equations);
     let e: Vec<i32> = normaliz.equations.iter().copied().collect();
     let p = e.iter().position(|&x| x != 0).unwrap();
@@ -262,15 +333,14 @@ fn below(results: &Results, cone_data: &ConeData, targets: &DMatrix<i32>) -> Res
 
 /// The curves of the two highest degrees in `results`, the last of each.
 fn two_targets(input: &Input, results: &Results) -> DMatrix<i32> {
-    let degree =
-        |c: &[i32]| -> i32 { input.grading_vector.iter().zip(c).map(|(w, x)| w * x).sum() };
+    let w = grading_vector(input);
+    let degree = |c: &[i32]| -> i32 { w.iter().zip(c).map(|(w, x)| w * x).sum() };
     let mut curves: Vec<&Vec<i32>> = results.keys().map(|(c, _)| c).collect();
     curves.sort_unstable_by_key(|c| (degree(c), c.to_vec()));
     let top = degree(curves[curves.len() - 1]);
     let lower = curves.iter().rev().find(|c| degree(c) < top).unwrap();
-    let h11 = input.grading_vector.len();
     DMatrix::from_iterator(
-        h11,
+        w.len(),
         2,
         curves[curves.len() - 1].iter().chain(lower.iter()).copied(),
     )
@@ -283,33 +353,28 @@ fn two_targets(input: &Input, results: &Results) -> DMatrix<i32> {
 fn test_target_points() {
     let full = input(H11_9, true, 8, H11_9_CONES);
     let expected_full = results(&full, Method::Modular).unwrap();
-    let cone_data = full.cone_data.clone().unwrap();
+    let cone_data = cone_data(&input(H11_9, false, 8, H11_9_CONES));
     let targets = two_targets(&full, &expected_full);
     let expected = below(&expected_full, &cone_data, &targets);
     assert!(expected.len() < expected_full.len() / 2);
+    let w = grading_vector(&full);
     for generators in [true, false] {
         let mut input = input(H11_9, generators, 8, H11_9_CONES);
-        input.max_deg = None;
-        input.target_points = Some(targets.clone());
+        input.problem.selection = Selection::TargetPoints {
+            points: targets.clone(),
+            max_deg: None,
+        };
         assert_eq!(results(&input, Method::Auto).unwrap(), expected);
         assert_eq!(results(&input, Method::Modular).unwrap(), expected);
-        if generators {
-            assert_eq!(
-                results(&without_cones(&input), Method::Modular).unwrap(),
-                expected
-            );
-        }
+        assert_eq!(
+            results(&without_bases(&input), Method::Modular).unwrap(),
+            expected
+        );
         // With a maximum degree below that of the first target.
-        input.max_deg = Some(7);
+        input.set_max_deg(7).unwrap();
         let lower: Results = expected
             .iter()
-            .filter(|((c, _), _)| {
-                c.iter()
-                    .zip(full.grading_vector.iter())
-                    .map(|(x, w)| x * w)
-                    .sum::<i32>()
-                    <= 7
-            })
+            .filter(|((c, _), _)| c.iter().zip(&w).map(|(x, w)| x * w).sum::<i32>() <= 7)
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         assert!(lower.len() < expected.len());
@@ -317,28 +382,33 @@ fn test_target_points() {
     }
 }
 
-/// Targets on a facet, with its cone data, and off it, where nothing is below them.
+/// Targets on a facet, with its Hilbert bases, and off it, where nothing is below them.
 #[test]
 fn test_facet_target_points() {
     let mut input = input(H11_9, false, 10, H11_9_FACET);
     let expected_full = results(&input, Method::Modular).unwrap();
-    let cone_data = input.cone_data.clone().unwrap();
     let targets = two_targets(&input, &expected_full);
-    let expected = below(&expected_full, &cone_data, &targets);
+    let expected = below(&expected_full, &cone_data(&input), &targets);
     assert!(expected.len() < expected_full.len() / 2);
-    input.max_deg = None;
-    input.target_points = Some(targets);
+    input.problem.selection = Selection::TargetPoints {
+        points: targets,
+        max_deg: None,
+    };
     assert_eq!(results(&input, Method::Modular).unwrap(), expected);
     assert_eq!(results(&input, Method::Reference).unwrap(), expected);
     // (0, 1, 0, ..., 0) has degree 1 and is off the facet's span.
     let mut off = DMatrix::zeros(9, 1);
     off[(1, 0)] = 1;
-    input.target_points = Some(off);
+    input.problem.selection = Selection::TargetPoints {
+        points: off,
+        max_deg: None,
+    };
     assert_eq!(results(&input, Method::Modular).unwrap(), Results::new());
 }
 
-/// The cone data of P(1,1,2,2,2)[8], with the Mori cone spanned by (1, 0) and (0, 1).
-fn p11222_cone_data() -> ConeData {
+/// The Hilbert bases of the cones $K_T$ of P(1,1,2,2,2)[8], with the Mori cone spanned by
+/// (1, 0) and (0, 1).
+fn p11222_bases() -> Vec<CandidateCone> {
     let mut cones = Vec::new();
     for s in 0..6 {
         for t in s..6 {
@@ -355,93 +425,95 @@ fn p11222_cone_data() -> ConeData {
             });
         }
     }
-    ConeData {
-        hyperplanes: dmatrix![1, 0; 0, 1],
-        equations: DMatrix::zeros(2, 0),
-        cones,
-    }
+    cones
 }
 
-/// The invariants of [`compute_gvgw_strings`], labeled by curve class and component.
-type Strings = Vec<((DVector<i32>, usize), String)>;
-
+/// The GV invariants of P(1,1,2,2,2)[8], up to degree 6 or for `min_points`.
 fn p11222(
-    generators: DMatrix<i32>,
-    cone_data: Option<ConeData>,
+    cone: MoriCone,
+    hilbert_bases: Option<Vec<CandidateCone>>,
     min_points: Option<u32>,
     method: Method,
-) -> Result<Strings, ComputeError> {
-    let max_deg = if min_points.is_some() { None } else { Some(6) };
-    let mut res = compute_gvgw_strings(
-        generators,
-        RowDVector::from_row_slice(&[1, 1]),
-        DMatrix::from_row_slice(6, 2, &[0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, -2]),
-        Vec::new(),
-        HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]),
-        Vec::new(),
-        None,
-        cone_data,
-        InvariantKind::GV,
-        CYKind::Threefold,
-        max_deg,
-        min_points,
-        None,
-        None,
-        method,
-        false,
-    )?;
-    res.sort_unstable_by(|a, b| a.0 .0.as_slice().cmp(b.0 .0.as_slice()));
-    Ok(res)
+) -> Result<Results, Error> {
+    let input = Input {
+        name: None,
+        problem: Problem {
+            geometry: Geometry {
+                q: DMatrix::from_row_slice(6, 2, &[0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, -2]),
+                intnums: HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]),
+                ..Geometry::default()
+            },
+            cone,
+            selection: min_points.map_or(Selection::MaxDeg(6), Selection::MinPoints),
+            grading_vector: Some(vec![1, 1]),
+        },
+        kind: InvariantKind::GV,
+        options: Options {
+            hilbert_bases,
+            ..Options::default()
+        },
+    };
+    results(&input, method)
 }
 
 #[test]
 fn test_entry_points() {
-    let gens = dmatrix![1, 0; 0, 1];
-    let none = DMatrix::zeros(2, 0);
-    let cd = p11222_cone_data();
+    let gens = MoriCone::Generators(dmatrix![1, 0; 0, 1]);
+    let ineqs = MoriCone::Inequalities {
+        hyperplanes: dmatrix![1, 0; 0, 1],
+        equations: DMatrix::zeros(2, 0),
+    };
+    let bases = p11222_bases();
     let expected = p11222(gens.clone(), None, None, Method::Reference).unwrap();
-    assert!(expected.contains(&((DVector::from_row_slice(&[0, 1]), 0), "4".to_owned())));
-    for method in [Method::Auto, Method::Modular] {
-        assert_eq!(
-            p11222(gens.clone(), Some(cd.clone()), None, method).unwrap(),
-            expected
-        );
-        assert_eq!(
-            p11222(none.clone(), Some(cd.clone()), None, method).unwrap(),
-            expected
-        );
+    assert_eq!(expected[&(vec![0, 1], 0)], "4");
+    for method in [Method::Auto, Method::Modular, Method::Reference] {
+        for cone in [&gens, &ineqs] {
+            assert_eq!(p11222(cone.clone(), None, None, method).unwrap(), expected);
+            assert_eq!(
+                p11222(cone.clone(), Some(bases.clone()), None, method).unwrap(),
+                expected
+            );
+        }
     }
-
-    // Without generators or cone data there is no Mori cone. With cone data, the requests
-    // that need the reference method take it from there.
+    // The reference method takes the Mori cone from its inequalities too.
     assert_eq!(
-        p11222(none.clone(), None, None, Method::Auto),
-        Err(ComputeError::MissingGenerators)
-    );
-    assert_eq!(
-        p11222(none.clone(), Some(cd.clone()), None, Method::Reference).unwrap(),
-        expected
-    );
-    assert_eq!(
-        p11222(none.clone(), Some(cd.clone()), Some(10), Method::Auto).unwrap(),
+        p11222(ineqs.clone(), None, Some(10), Method::Auto).unwrap(),
         p11222(gens.clone(), None, Some(10), Method::Auto).unwrap()
     );
 
-    // The cone data is checked.
-    let mut bad = cd.clone();
-    bad.cones.pop();
-    assert!(matches!(
-        p11222(gens.clone(), Some(bad), None, Method::Auto),
-        Err(ComputeError::InvalidConeData(_))
-    ));
-    let mut bad = cd.clone();
-    bad.cones[0].hilbert_basis = dmatrix![0; 1];
-    assert!(matches!(
-        p11222(gens.clone(), Some(bad), None, Method::Reference),
-        Err(ComputeError::InvalidConeData(_))
-    ));
-    assert!(matches!(
-        p11222(dmatrix![1, -1; 0, 1], Some(cd), None, Method::Auto),
-        Err(ComputeError::InvalidConeData(_))
-    ));
+    // The Hilbert bases are checked, against the inequalities or the generators.
+    let field = |res: Result<Results, Error>| match res {
+        Err(Error::Input { field, .. }) => field,
+        res => panic!("{res:?}"),
+    };
+    let mut bad = bases.clone();
+    bad.pop();
+    for cone in [&gens, &ineqs] {
+        assert_eq!(
+            field(p11222(cone.clone(), Some(bad.clone()), None, Method::Auto)),
+            "hilbert_bases"
+        );
+    }
+    let mut bad = bases.clone();
+    bad[0].hilbert_basis = dmatrix![0; 1];
+    assert_eq!(
+        field(p11222(ineqs.clone(), Some(bad), None, Method::Reference)),
+        "hilbert_bases"
+    );
+    // The generators span the Mori cone, which (0, 1), in some of the Hilbert bases, is not in
+    // with (2, -1) as a generator.
+    assert_eq!(
+        field(p11222(
+            MoriCone::Generators(dmatrix![1, 2; 0, -1]),
+            Some(bases),
+            None,
+            Method::Auto
+        )),
+        "hilbert_bases"
+    );
+    // Without a fan, there is no Mori cone to derive.
+    assert_eq!(
+        field(p11222(MoriCone::FromFan, None, None, Method::Auto)),
+        "generators"
+    );
 }

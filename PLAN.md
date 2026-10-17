@@ -1068,14 +1068,36 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
   - [ ] The consistency check of 5.2 item 3 in the reference ($\mathrm{inst}_t[C]/C_t$ equal
     across $t$), so that inconsistent input is an error in both methods rather than
     different numbers.
-  - [ ] Decide 6.7's open question (the crate root's re-exports of `Semigroup`, `Polynomial`,
-    `PolynomialProperties` and `PolynomialCoeff`) before publishing.
-  - [ ] Decide on the interface redesign of `INTERFACE.md` (a review of every surface, Rust,
-    Python and YAML/CLI, from 2026-10-13, with a proposed design, a migration plan and a
-    prioritized list) before publishing: nothing added on this branch is released yet, so
-    its renames and restructuring cost no deprecations now and do after the release. At
-    least its quick wins, and whether to do the `Problem`/`Options`/`Invariants`
-    restructuring first.
+  - [x] Decide 6.7's open question: the crate root no longer re-exports `Semigroup`,
+    `Polynomial`, `PolynomialProperties`, `PrettyPrintPolynomial`, `PolynomialCoeff` or
+    `run_hkty`; they are reached through `cygv::reference`. (Making the stage submodules of
+    `reference` and `modular` private or hidden, the rest of L1 in `INTERFACE.md`, is still
+    open.)
+  - [x] The interface redesign of `INTERFACE.md` (a review of every surface from 2026-10-13),
+    decided on 2026-10-17 and implemented: the full restructuring, with the Python `Problem`
+    object as the documented form, no compatibility aliases (a clean break), an error instead
+    of the silent fallback to the reference, and one name per field on every surface (the
+    decisions are at the top of `INTERFACE.md`). In Rust, `Problem` (`Geometry` with an
+    `Ambient` of `Plain`, `Fan` or `Strata`; `MoriCone` of `Generators`, `Inequalities` or
+    `FromFan`; `Selection` of `MaxDeg`, `TargetPoints`, `MinPoints` or `CurveClasses`; an
+    optional grading vector) and `Options` (`method`, `n_threads`, `certify`,
+    `hilbert_bases`, `tuning: modular::Tuning`, split out of `modular::Options`) go into
+    `compute_gv`, `compute_gw` or `compute`, which return `Invariants` (dimension, grading
+    vector, sorted entries with an optional surface, and a `Report`); `Problem::validate`
+    checks up front and names the field at fault (`Error::Input`). The five entry points of
+    14–16 positional arguments, `compute_gvgw_strings`, `ComputeError` and the cone data as an
+    input bundle are gone. Defaults: the grading vector is the primitive sum of the Mori
+    cone's inequalities; results are sorted on every surface. The YAML stays flat with the same
+    names (`hilbert_bases` for `cones`, `curve_classes` for untruncated `generators`,
+    `dimension` and `surface` in the output, a `report` line, no `is_threefold`), and the CLI
+    gains `--max-deg`, `--invariants` and `--no-certify`. In Python, `cygv.Problem(...)` with
+    `.gv()`/`.gw()`, `compute_gv(q, intnums, **kwargs)` as a wrapper, `intnums` as a dict or a
+    list, an `Invariants` list with a `Report`, and `cygv.ComputationError` for failed
+    computations. The reference pipeline ignores Hilbert bases rather than refusing them, so
+    `--method reference` works on any document. Not done: the rest of the `Report` (primes,
+    passes, timings per stage; 4.1.7, below), L2 (`Problem.from_cytools`), L3 (both kinds in
+    one call), and the CYTools PR (keywords now only `q` and `intnums` positionally, a
+    selection required, `curve_classes` for its no-truncation path).
   - [ ] Run the rewritten CI workflows (5b) on a pushed branch.
   - [ ] README, CLAUDE.md and docs updated.
   - [ ] Release notes and a version bump (`Cargo.toml` is still 0.3.0, and the branch has
@@ -1259,7 +1281,8 @@ Not scheduled; each can be done after the wrap-up. First those from PR #102:
 - [ ] **Structure-of-arrays level tables** on CPUs with a large L2 (the C chooses at run
   time); needs a machine with one to measure.
 
-- [ ] **A default grading vector without a fan**, as #102's `2f60687` does without CYTools:
+- [x] **A default grading vector without a fan** (done with the interface redesign of phase
+  9), as #102's `2f60687` does without CYTools:
   the primitive sum of the Mori cone's facet normals (from the cone data or
   `cone::facets` of the generators), which is positive on the cone because it is pointed.
   `Fan::mori_cone` already uses that rule; without a fan an empty grading vector is
@@ -1393,10 +1416,13 @@ Other follow-ups, not from #102:
 
 - [ ] **Certifying vex phases** (`Error::CertifyStrata` today, as in the C): the stratum
   terms need bounds of their own in the majorant run.
-- [ ] **Reporting as data** (4.1.7): a stats struct (passes, primes, timings per stage,
-  table sizes) returned next to the results instead of nothing; never built.
-- [ ] **An opt-out of the saturation** (6.2, still open): what "too large" means, whether
-  skipping it warns or errors, and its name.
+- [ ] **Reporting as data** (4.1.7): `Report` (phase 9) has the method that ran, whether the
+  results are certified, whether the grading vector was derived and the elapsed time; still
+  missing are the passes, the primes, the timings per stage and the table sizes, which need
+  `modular::run` to return them. `Report` is `#[non_exhaustive]`, so adding them breaks
+  nothing.
+- [x] **An opt-out of the saturation** (6.2): `Selection::CurveClasses` (`curve_classes`)
+  computes on exactly the classes given, which is what the untruncated `generators` did.
 
 ## 6. Decisions needed
 
@@ -1677,10 +1703,9 @@ Other follow-ups, not from #102:
    - Consequences to put in the release notes: results can change on incomplete generator
      lists (the default now saturates, 6.2), and the Rust module paths moved.
 
-   Still open: whether the crate root keeps re-exporting `Semigroup`, `Polynomial`,
-   `PolynomialProperties` and `PolynomialCoeff`, or those are reached through
-   `cygv::reference`, to decide in phase 9. (The question of what `auto` does with `prec` went
-   away with phase 0c.)
+   Decided in phase 9: the crate root no longer re-exports `Semigroup`, `Polynomial`,
+   `PolynomialProperties` and `PolynomialCoeff`; they are reached through `cygv::reference`.
+   (The question of what `auto` does with `prec` went away with phase 0c.)
 8. **Features of the C that are not ported now (decided): future options, not ruled out.** The
    GPU extraction stage, the distributed mode (one run split by primes across machines), the
    low-memory switch and the C's tuning knobs are not part of this work, but the Rust code is

@@ -712,7 +712,7 @@ mod tests {
         // Truncated, and with a stratum on the divisors 0, 1 and 5.
         let strata = [Stratum {
             divisors: [5, 1, 0],
-            class: vec![(1, 1), (0, 1)],
+            class: vec![1.into(), 0.into()],
         }];
         let cd = cone_data(&mori, &none, &q, &strata, &[1, 1], 2).unwrap();
         assert_eq!(cd.cones.len(), 22);

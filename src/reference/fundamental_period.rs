@@ -2,10 +2,11 @@
 
 pub mod error;
 
+use super::polynomial::properties::PolynomialProperties;
 use crate::reference::factorial::{factorial_prod, harmonic};
 use crate::reference::polynomial::{coefficient::PolynomialCoeff, Polynomial};
 use crate::reference::semigroup::Semigroup;
-use crate::{check_strata, CYKind, PolynomialProperties, Stratum};
+use crate::{check_strata, CYKind, Stratum};
 use error::FundamentalPeriodError;
 use nalgebra::{DMatrix, DMatrixView, DVector};
 use rayon::prelude::*;
@@ -352,7 +353,7 @@ where
         u0 *= -1;
     }
     stratum
-        .class
+        .class_i64()
         .iter()
         .enumerate()
         .filter(|(_, &(num, _))| num != 0)
@@ -673,7 +674,7 @@ mod tests {
         let dq0 = DMatrix::from_row_slice(1, 6, &m);
         let strata = [Stratum {
             divisors: [2, 0, 1],
-            class: vec![(1, 1)],
+            class: crate::class(&[(1, 1)]),
         }];
         let groups = group_by_neg_int(dq.as_view(), dq0.as_view(), &strata).unwrap();
         assert_eq!(
@@ -704,7 +705,7 @@ mod tests {
         let dq0 = DMatrix::from_row_slice(1, 1, &[-1]);
         let stratum = Stratum {
             divisors: [0, 1, 2],
-            class: vec![(1, 2), (0, 1), (-3, 1)],
+            class: crate::class(&[(1, 2), (0, 1), (-3, 1)]),
         };
         let res = compute_c_vex(0, &stratum, &Rational::new(), dq.as_view(), dq0.as_view());
         assert_eq!(

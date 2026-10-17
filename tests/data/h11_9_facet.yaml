@@ -5,7 +5,7 @@
 # computed with Normaliz 3.11.0. The generators and the Hilbert bases leave out the elements of
 # degree above 10 under the grading vector of the file, so the data is only complete up to
 # max_deg 10.
-cones:
+hilbert_bases:
 - divisors: [0]
   hilbert_basis: []
 - divisors: [1]

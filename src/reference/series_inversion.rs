@@ -2,9 +2,10 @@
 
 pub mod error;
 
+use super::polynomial::{properties::PolynomialProperties, Polynomial};
 use crate::reference::instanton::InstantonData;
 use crate::reference::polynomial::{coefficient::PolynomialCoeff, error::PolynomialError};
-use crate::{CYKind, InvariantKind, Polynomial, PolynomialProperties};
+use crate::{CYKind, InvariantKind};
 use core::cmp::Ordering;
 use error::SeriesInversionError;
 use nalgebra::DVector;

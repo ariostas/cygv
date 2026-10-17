@@ -1,20 +1,55 @@
-use crate::dispatch::compute_gvgw_strings;
-use crate::{CYKind, CandidateCone, ConeData, InvariantKind, Method, Stratum};
-use nalgebra::{DMatrix, DVector, RowDVector};
+//! The Python bindings: one function, `_compute`, that takes the keywords of
+//! `cygv.Problem` and of its `gv` and `gw` methods as a dictionary, which the Python wrapper
+//! (`python/cygv/hkty.py`) has already turned into lists, integers and strings.
+
+use crate::cone::ConeError;
+use crate::modular::Error as ModularError;
+use crate::{
+    compute, Ambient, CandidateCone, Computed, Error, Geometry, InvariantKind, Invariants, Method,
+    MoriCone, Options, Problem, Selection, Stratum,
+};
+use malachite::Rational;
+use nalgebra::DMatrix;
+use pyo3::conversion::FromPyObjectOwned;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use std::collections::HashMap;
 use std::sync::Once;
+
+pyo3::create_exception!(
+    cygv,
+    ComputationError,
+    PyRuntimeError,
+    "A valid request whose computation failed, e.g. because the invariants did not stabilize \
+     as integers or the cones were too large."
+);
 
 /// Installing a ctrl-c handler can only be done once per process, so guard it.
 static CTRLC_HANDLER: Once = Once::new();
 
-/// Turn a list of columns into a matrix, requiring the columns to have equal
-/// lengths.
-fn to_matrix(m: Vec<Vec<i32>>, name: &str) -> PyResult<DMatrix<i32>> {
-    let n_rows = m.first().map_or(0, Vec::len);
+fn value_error(msg: impl Into<String>) -> PyErr {
+    PyValueError::new_err(msg.into())
+}
+
+/// The value of a keyword, treating `None` as left out.
+fn get<'py, T: FromPyObjectOwned<'py>>(
+    args: &Bound<'py, PyDict>,
+    key: &str,
+) -> PyResult<Option<T>> {
+    match args.get_item(key)? {
+        Some(v) if !v.is_none() => v.extract::<T>().map(Some).map_err(Into::into),
+        _ => Ok(None),
+    }
+}
+
+/// Turn a list of columns into a matrix, requiring the columns to have equal lengths. An
+/// empty list gives `n_rows` rows and no columns.
+fn to_matrix(m: Vec<Vec<i32>>, name: &str, n_rows: usize) -> PyResult<DMatrix<i32>> {
+    let n_rows = m.first().map_or(n_rows, Vec::len);
     if m.iter().any(|col| col.len() != n_rows) {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "the vectors of \"{name}\" must all have the same length"
+        return Err(value_error(format!(
+            "the vectors of {name} must all have the same length"
         )));
     }
     Ok(DMatrix::from_iterator(
@@ -24,131 +59,206 @@ fn to_matrix(m: Vec<Vec<i32>>, name: &str) -> PyResult<DMatrix<i32>> {
     ))
 }
 
-/// Compute GV or GW invariants
-#[pyfunction]
-#[pyo3(name = "_compute_gvgw")]
-#[pyo3(signature = (generators, grading_vector, q, intnums, find_gv, is_threefold, max_deg=None, min_points=None, target_points=None, nefpart=None, n_threads=None, method=None, strata=None, mori_hyperplanes=None, mori_equations=None, cones=None, fan=None, certify=false))]
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-pub fn compute_gvgw(
-    generators: Vec<Vec<i32>>,
-    grading_vector: Vec<i32>,
-    q: Vec<Vec<i32>>,
-    intnums: HashMap<(usize, usize, usize), i32>,
-    find_gv: bool,
-    is_threefold: bool,
-    max_deg: Option<u32>,
-    min_points: Option<u32>,
-    target_points: Option<Vec<Vec<i32>>>,
-    nefpart: Option<Vec<Vec<i32>>>,
-    n_threads: Option<u32>,
-    method: Option<&str>,
-    strata: Option<Vec<(Vec<usize>, Vec<(i64, i64)>)>>,
-    mori_hyperplanes: Option<Vec<Vec<i32>>>,
-    mori_equations: Option<Vec<Vec<i32>>>,
-    cones: Option<Vec<(Vec<usize>, Vec<Vec<i32>>)>>,
-    fan: Option<Vec<Vec<usize>>>,
-    certify: bool,
-) -> PyResult<Vec<((Vec<i32>, usize), String)>> {
-    CTRLC_HANDLER.call_once(|| {
-        ctrlc::set_handler(|| std::process::exit(1)).expect("failed to install ctrl-c handler");
-    });
-    let generators = to_matrix(generators, "generators")?;
-    let grading_vector = RowDVector::from_vec(grading_vector);
-    let q = to_matrix(q, "q")?;
-    let target_points = target_points
-        .map(|m| to_matrix(m, "target_points"))
-        .transpose()?;
-    let nefpart: Vec<_> = nefpart
-        .unwrap_or_default()
-        .into_iter()
-        .map(DVector::from_vec)
-        .collect();
-    let invariant_kind = if find_gv {
-        InvariantKind::GV
-    } else {
-        InvariantKind::GW
-    };
-    let cy_kind = CYKind::from_is_threefold(is_threefold);
-    let strata = strata
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(divisors, class)| {
-            let divisors = divisors.try_into().map_err(|_| {
-                pyo3::exceptions::PyValueError::new_err(
-                    "the divisors of a stratum must be three indices",
-                )
-            })?;
-            Ok(Stratum { divisors, class })
-        })
-        .collect::<PyResult<_>>()?;
+/// The problem, the options and the kind of invariants from the keywords.
+fn parse(args: &Bound<'_, PyDict>) -> PyResult<(Problem, Options)> {
+    let q: Vec<Vec<i32>> = get(args, "q")?.ok_or_else(|| value_error("q is required"))?;
+    let q = to_matrix(q, "q", 0)?;
     let h11 = q.ncols();
-    // An empty list of vectors has no length to give its matrix, so it gets h11 rows.
-    let to_matrix_h11 = |m: Vec<Vec<i32>>, name| {
-        if m.is_empty() {
-            Ok(DMatrix::zeros(h11, 0))
-        } else {
-            to_matrix(m, name)
-        }
+    let matrix = |key: &str| -> PyResult<Option<DMatrix<i32>>> {
+        get::<Vec<Vec<i32>>>(args, key)?
+            .map(|m| to_matrix(m, key, h11))
+            .transpose()
     };
-    let cone_data = match (mori_hyperplanes, cones) {
-        (None, None) if mori_equations.is_none() => None,
-        (Some(hyperplanes), Some(cones)) => Some(ConeData {
-            hyperplanes: to_matrix_h11(hyperplanes, "mori_hyperplanes")?,
-            equations: to_matrix_h11(mori_equations.unwrap_or_default(), "mori_equations")?,
-            cones: cones
+    let intnums: HashMap<(usize, usize, usize), i32> =
+        get(args, "intnums")?.ok_or_else(|| value_error("intnums is required"))?;
+    let nefpart: Vec<Vec<usize>> = get(args, "nefpart")?.unwrap_or_default();
+    let fan: Option<Vec<Vec<usize>>> = get(args, "fan")?;
+    let strata: Option<Vec<(Vec<usize>, Vec<(i64, i64)>)>> = get(args, "strata")?;
+    let ambient = match (fan, strata) {
+        (Some(_), Some(_)) => {
+            return Err(value_error(
+                "give either the fan or the strata, which the fan gives, not both",
+            ))
+        }
+        (Some(fan), None) => Ambient::Fan(fan),
+        (None, Some(strata)) => Ambient::Strata(
+            strata
                 .into_iter()
-                .map(|(divisors, basis)| {
-                    Ok(CandidateCone {
-                        divisors,
-                        hilbert_basis: to_matrix_h11(basis, "cones")?,
-                    })
+                .map(|(divisors, class)| {
+                    let divisors = divisors.try_into().map_err(|_| {
+                        value_error("the divisors of a stratum must be three indices")
+                    })?;
+                    let class = class
+                        .into_iter()
+                        .map(|(n, d)| {
+                            if d == 0 {
+                                return Err(value_error(
+                                    "the class of a stratum has a zero denominator",
+                                ));
+                            }
+                            Ok(Rational::from(n) / Rational::from(d))
+                        })
+                        .collect::<PyResult<_>>()?;
+                    Ok(Stratum { divisors, class })
                 })
                 .collect::<PyResult<_>>()?,
-        }),
-        _ => {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "the cone data needs both mori_hyperplanes and cones",
+        ),
+        (None, None) => Ambient::Plain,
+    };
+    let cone = match (
+        matrix("generators")?,
+        matrix("mori_hyperplanes")?,
+        matrix("mori_equations")?,
+    ) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+            return Err(value_error(
+                "give either the generators or the inequalities of the Mori cone \
+                 (mori_hyperplanes and mori_equations), not both",
+            ))
+        }
+        (Some(g), None, None) => MoriCone::Generators(g),
+        (None, Some(hyperplanes), equations) => MoriCone::Inequalities {
+            hyperplanes,
+            equations: equations.unwrap_or_else(|| DMatrix::zeros(h11, 0)),
+        },
+        (None, None, Some(_)) => return Err(value_error("mori_equations needs mori_hyperplanes")),
+        (None, None, None) if matches!(ambient, Ambient::Fan(_)) => MoriCone::FromFan,
+        (None, None, None) => {
+            return Err(value_error(
+                "the Mori cone is needed: give generators or mori_hyperplanes, or a fan",
             ))
         }
     };
-    let method = match method {
+    let max_deg: Option<u32> = get(args, "max_deg")?;
+    let selection =
+        match (
+            matrix("target_points")?,
+            get::<u32>(args, "min_points")?,
+            matrix("curve_classes")?,
+        ) {
+            (Some(points), None, None) => Selection::TargetPoints { points, max_deg },
+            (None, None, None) => Selection::MaxDeg(max_deg.ok_or_else(|| {
+                value_error(
+                    "which curve classes: give max_deg, target_points, min_points or curve_classes",
+                )
+            })?),
+            (None, Some(n), None) if max_deg.is_none() => Selection::MinPoints(n),
+            (None, None, Some(classes)) if max_deg.is_none() => Selection::CurveClasses(classes),
+            _ => return Err(value_error(
+                "give only one of max_deg, target_points, min_points and curve_classes (max_deg \
+                 may accompany target_points)",
+            )),
+        };
+    let method = match get::<String>(args, "method")? {
         None => Method::default(),
-        Some(name) => Method::from_name(name).ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err(format!(
+        Some(name) => Method::from_name(&name).ok_or_else(|| {
+            value_error(format!(
                 "unknown method \"{name}\", expected \"auto\", \"modular\" or \"reference\""
             ))
         })?,
     };
-
-    let res = compute_gvgw_strings(
-        generators,
-        grading_vector,
-        q,
-        nefpart,
-        intnums,
-        strata,
-        fan,
-        cone_data,
-        invariant_kind,
-        cy_kind,
-        max_deg,
-        min_points,
-        target_points,
-        n_threads,
+    let hilbert_bases: Option<Vec<(Vec<usize>, Vec<Vec<i32>>)>> = get(args, "hilbert_bases")?;
+    let hilbert_bases = hilbert_bases
+        .map(|bases| {
+            bases
+                .into_iter()
+                .map(|(divisors, basis)| {
+                    Ok(CandidateCone {
+                        divisors,
+                        hilbert_basis: to_matrix(basis, "hilbert_bases", h11)?,
+                    })
+                })
+                .collect::<PyResult<_>>()
+        })
+        .transpose()?;
+    let problem = Problem {
+        geometry: Geometry {
+            q,
+            intnums,
+            nefpart,
+            ambient,
+        },
+        cone,
+        selection,
+        grading_vector: get(args, "grading_vector")?,
+    };
+    let options = Options {
         method,
-        certify,
-    )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        n_threads: get(args, "n_threads")?,
+        certify: get(args, "certify")?.unwrap_or(false),
+        hilbert_bases,
+        ..Options::default()
+    };
+    Ok((problem, options))
+}
 
-    Ok(res
-        .into_iter()
-        .map(|((v, c), gvgw)| ((v.as_slice().to_vec(), c), gvgw))
-        .collect())
+/// The Python exception for an error: a `ValueError` for invalid or unsupported input, and a
+/// `ComputationError` for a valid request whose computation failed.
+fn to_py_err(e: Error) -> PyErr {
+    let computation = matches!(
+        e,
+        Error::MoriCone(ConeError::TooLarge)
+            | Error::Modular(ModularError::NotStable | ModularError::NotInvertible)
+    );
+    if computation {
+        ComputationError::new_err(e.to_string())
+    } else {
+        value_error(e.to_string())
+    }
+}
+
+/// The entries of the invariants, with their values as strings, the dimension, the grading
+/// vector and the report.
+type Output = (
+    Vec<((Vec<i32>, Option<usize>), String)>,
+    usize,
+    Vec<i32>,
+    (String, bool, bool, f64),
+);
+
+fn output<T: ToString>(inv: Invariants<T>) -> Output {
+    let report = &inv.report;
+    (
+        inv.entries
+            .into_iter()
+            .map(|e| ((e.curve, e.surface), e.value.to_string()))
+            .collect(),
+        inv.dimension,
+        inv.grading_vector,
+        (
+            report.method.as_str().to_owned(),
+            report.certified,
+            report.grading_vector_derived,
+            report.elapsed.as_secs_f64(),
+        ),
+    )
+}
+
+/// Compute GV or GW invariants.
+#[pyfunction]
+#[pyo3(name = "_compute")]
+pub fn compute_py(kind: &str, args: &Bound<'_, PyDict>) -> PyResult<Output> {
+    CTRLC_HANDLER.call_once(|| {
+        ctrlc::set_handler(|| std::process::exit(1)).expect("failed to install ctrl-c handler");
+    });
+    let kind = match kind {
+        "gv" => InvariantKind::GV,
+        "gw" => InvariantKind::GW,
+        _ => return Err(value_error("the kind must be \"gv\" or \"gw\"")),
+    };
+    let (problem, options) = parse(args)?;
+    Ok(
+        match compute(&problem, kind, &options).map_err(to_py_err)? {
+            Computed::Gv(gv) => output(gv),
+            Computed::Gw(gw) => output(gw),
+        },
+    )
 }
 
 /// A Python module implemented in Rust.
 #[pymodule(gil_used = false)]
 pub fn cygv(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(compute_gvgw, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_py, m)?)?;
+    m.add("ComputationError", m.py().get_type::<ComputationError>())?;
     Ok(())
 }

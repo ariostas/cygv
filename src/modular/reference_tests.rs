@@ -8,7 +8,7 @@
 //! not.
 //!
 //! End to end: [`compute_gv`] and `run_hkty` must give the same GV invariants, and the two
-//! methods of [`compute_gvgw_strings`] the same GW invariants. This only holds for consistent
+//! methods of [`crate::compute`] the same GW invariants. This only holds for consistent
 //! geometries: on others the reference reads each invariant off the first nonzero coordinate
 //! of the curve, and the modular pipeline off the grading-weighted sum, which disagree.
 
@@ -18,15 +18,16 @@ use super::instanton::instanton;
 use super::key::{coordinate_bounds, KeyLayout, PackedKey, PackedLayout};
 use super::period::period;
 use super::table::SparsePoly;
-use super::{compute_gv, residue, CandidateSource, Geometry, Options};
-use crate::dispatch::compute_gvgw_strings;
+use super::{compute_gv, residue, CandidateSource, Geometry, Options, Tuning};
+use crate::cone::ConeData;
 use crate::reference::fundamental_period::compute_omega;
 use crate::reference::instanton::compute_instanton_data;
 use crate::reference::misc::process_int_nums;
 use crate::reference::polynomial::properties::PolynomialProperties;
 use crate::reference::semigroup::Semigroup;
 use crate::reference::{run_hkty, Rational as Coeff};
-use crate::{CYKind, ConeData, InvariantKind, Method, Stratum};
+use crate::{Ambient, CandidateCone, Computed, Geometry as Toric, MoriCone, Problem, Selection};
+use crate::{CYKind, InvariantKind, Method, Stratum};
 use malachite::Rational;
 use nalgebra::{DMatrix, DVector, RowDVector};
 use std::collections::HashMap;
@@ -166,7 +167,7 @@ fn check(case: &Case) {
         "{name}: candidates"
     );
 
-    let at = |p: &crate::Polynomial<Coeff>, e: usize| {
+    let at = |p: &crate::reference::polynomial::Polynomial<Coeff>, e: usize| {
         p.coeffs
             .get(&e)
             .map_or_else(Rational::default, |x| x.0.clone())
@@ -263,28 +264,13 @@ fn check_gv(case: &Case, options: &Options) {
 /// Checks that both methods give the same GW invariants, formatted the same way.
 fn check_gw(case: &Case) {
     let gw = |method| {
-        let res = compute_gvgw_strings(
-            case.generators.clone(),
-            RowDVector::from_row_slice(&case.grading_vector),
-            case.q.clone(),
-            case.nefpart.clone(),
-            case.intnums.clone(),
-            case.strata.clone(),
-            None,
-            None,
+        computed(
+            case,
             InvariantKind::GW,
-            case.cy_kind,
-            Some(case.max_deg),
-            None,
-            None,
-            None,
+            Selection::MaxDeg(case.max_deg),
             method,
-            false,
+            None,
         )
-        .unwrap();
-        res.into_iter()
-            .map(|((c, k), gw)| ((c.as_slice().to_vec(), k), gw))
-            .collect::<HashMap<_, _>>()
     };
     let expected = gw(Method::Reference);
     assert!(
@@ -342,16 +328,22 @@ fn test_quintic_gv() {
 #[test]
 fn test_several_passes() {
     let options = Options {
-        lanes: Some(2),
-        min_primes: 6,
+        tuning: Tuning {
+            lanes: Some(2),
+            min_primes: 6,
+            ..Tuning::default()
+        },
         ..Options::default()
     };
     check_gv(&quintic(12), &options);
     check_gv(&p11222(8), &options);
     // Two check primes, with three lanes.
     let options = Options {
-        lanes: Some(3),
-        check_primes: 2,
+        tuning: Tuning {
+            lanes: Some(3),
+            check_primes: 2,
+            ..Tuning::default()
+        },
         ..Options::default()
     };
     check_gv(&quintic(12), &options);
@@ -376,15 +368,24 @@ fn test_invalid_options() {
     let gens: Vec<&[i32]> = case.generators.as_slice().chunks(2).collect();
     for options in [
         Options {
-            check_primes: 0,
+            tuning: Tuning {
+                check_primes: 0,
+                ..Tuning::default()
+            },
             ..Options::default()
         },
         Options {
-            lanes: Some(5),
+            tuning: Tuning {
+                lanes: Some(5),
+                ..Tuning::default()
+            },
             ..Options::default()
         },
         Options {
-            lanes: Some(1),
+            tuning: Tuning {
+                lanes: Some(1),
+                ..Tuning::default()
+            },
             ..Options::default()
         },
         Options {
@@ -410,8 +411,11 @@ fn test_invalid_options() {
     let geometry = Geometry::from_toric(&case.q, &[], &case.intnums, case.cy_kind, &[1]).unwrap();
     let gens: Vec<&[i32]> = case.generators.as_slice().chunks(1).collect();
     let options = Options {
-        lanes: Some(2),
-        max_passes: 1,
+        tuning: Tuning {
+            lanes: Some(2),
+            max_passes: 1,
+            ..Tuning::default()
+        },
         ..Options::default()
     };
     assert_eq!(
@@ -457,15 +461,23 @@ fn test_toy_threefold() {
 /// Loads one of the inputs that the command line interface reads.
 #[cfg(feature = "cli")]
 fn load(name: &'static str, yaml: &str, max_deg: u32) -> Case {
-    let input = crate::io::Input::load_all(yaml).unwrap().remove(0);
+    let problem = crate::io::Input::load_all(yaml).unwrap().remove(0).problem;
+    let MoriCone::Generators(generators) = problem.cone else {
+        panic!("{name} has no generators")
+    };
+    let geometry = problem.geometry;
     Case {
         name,
-        generators: input.generators,
-        grading_vector: input.grading_vector.iter().copied().collect(),
-        q: input.q,
-        nefpart: input.nefpart,
-        intnums: input.intnums,
-        cy_kind: input.cy_kind,
+        generators,
+        grading_vector: problem.grading_vector.unwrap(),
+        cy_kind: geometry.cy_kind(),
+        q: geometry.q,
+        nefpart: geometry
+            .nefpart
+            .iter()
+            .map(|p| DVector::from_iterator(p.len(), p.iter().map(|&r| r as i32)))
+            .collect(),
+        intnums: geometry.intnums,
         max_deg,
         strata: Vec::new(),
     }
@@ -571,7 +583,10 @@ fn test_threads() {
             ] {
                 let options = Options {
                     threads: Some(threads),
-                    extraction,
+                    tuning: super::Tuning {
+                        extraction,
+                        ..super::Tuning::default()
+                    },
                     ..Options::default()
                 };
                 check_gv(case, &options);
@@ -604,21 +619,104 @@ fn test_h11_8_gw() {
 #[cfg(feature = "cli")]
 #[test]
 fn test_cone_candidates() {
+    let bench = include_str!("../../benches/data/h11_9.yaml");
+    let case = load("h11_9", bench, 8);
+    // The cone data replaces the generators.
+    let head = &bench[..bench.find("\ngenerators:").unwrap() + 1];
     let data = format!(
-        "{}{}",
-        include_str!("../../benches/data/h11_9.yaml"),
+        "{head}{}",
         include_str!("../../tests/data/h11_9_cones.yaml")
     );
     let input = crate::io::Input::load_all(&data).unwrap().remove(0);
-    let w = input.grading_vector.as_slice();
-    let geometry = Geometry::from_toric(&input.q, &[], &input.intnums, input.cy_kind, w).unwrap();
-    let gens: Vec<&[i32]> = input.generators.as_slice().chunks(w.len()).collect();
-    let cone_data = input.cone_data.as_ref().unwrap();
-    assert!(super::candidates::tests::check_cones(cone_data, &gens, w, 8, &geometry) > 0);
+    let MoriCone::Inequalities {
+        hyperplanes,
+        equations,
+    } = input.problem.cone
+    else {
+        panic!("the cone data has no inequalities")
+    };
+    let cone_data = ConeData {
+        hyperplanes,
+        equations,
+        cones: input.options.hilbert_bases.unwrap(),
+    };
+    let w = &case.grading_vector;
+    let geometry = Geometry::from_toric(&case.q, &[], &case.intnums, case.cy_kind, w).unwrap();
+    let gens: Vec<&[i32]> = case.generators.as_slice().chunks(w.len()).collect();
+    assert!(super::candidates::tests::check_cones(&cone_data, &gens, w, 8, &geometry) > 0);
 }
 
-/// The invariants that [`compute_gvgw_strings`] gives with `method`, up to `case.max_deg` or
-/// below `targets`.
+/// The invariants that [`crate::compute`] gives for `case` with `selection` and `method`, and
+/// the cone data if given, labeled by curve class and component (zero for a threefold).
+fn computed(
+    case: &Case,
+    kind: InvariantKind,
+    selection: Selection,
+    method: Method,
+    cone_data: Option<ConeData>,
+) -> HashMap<(Vec<i32>, usize), String> {
+    let (cone, hilbert_bases) = match cone_data {
+        Some(cd) => (
+            MoriCone::Inequalities {
+                hyperplanes: cd.hyperplanes,
+                equations: cd.equations,
+            },
+            Some::<Vec<CandidateCone>>(cd.cones),
+        ),
+        None => (MoriCone::Generators(case.generators.clone()), None),
+    };
+    let problem = Problem {
+        geometry: Toric {
+            q: case.q.clone(),
+            intnums: case.intnums.clone(),
+            nefpart: case
+                .nefpart
+                .iter()
+                .map(|p| p.iter().map(|&r| r as usize).collect())
+                .collect(),
+            ambient: if case.strata.is_empty() {
+                Ambient::Plain
+            } else {
+                Ambient::Strata(case.strata.clone())
+            },
+        },
+        cone,
+        selection,
+        grading_vector: Some(case.grading_vector.clone()),
+    };
+    let options = crate::Options {
+        method,
+        hilbert_bases,
+        ..crate::Options::default()
+    };
+    let label = |curve: Vec<i32>, surface: Option<usize>| (curve, surface.unwrap_or(0));
+    match crate::compute(&problem, kind, &options).unwrap() {
+        Computed::Gv(gv) => gv
+            .entries
+            .into_iter()
+            .map(|e| (label(e.curve, e.surface), e.value.to_string()))
+            .collect(),
+        Computed::Gw(gw) => gw
+            .entries
+            .into_iter()
+            .map(|e| (label(e.curve, e.surface), e.value.to_string()))
+            .collect(),
+    }
+}
+
+/// The selection of the curves up to `max_deg`, or below `targets` (and `max_deg`).
+fn selection(max_deg: Option<u32>, targets: Option<&DMatrix<i32>>) -> Selection {
+    match targets {
+        Some(points) => Selection::TargetPoints {
+            points: points.clone(),
+            max_deg,
+        },
+        None => Selection::MaxDeg(max_deg.expect("a maximum degree or targets")),
+    }
+}
+
+/// The invariants that [`crate::compute`] gives with `method`, up to `case.max_deg` or below
+/// `targets`.
 fn strings(
     case: &Case,
     kind: InvariantKind,
@@ -626,28 +724,7 @@ fn strings(
     targets: Option<&DMatrix<i32>>,
     method: Method,
 ) -> HashMap<(Vec<i32>, usize), String> {
-    compute_gvgw_strings(
-        case.generators.clone(),
-        RowDVector::from_row_slice(&case.grading_vector),
-        case.q.clone(),
-        case.nefpart.clone(),
-        case.intnums.clone(),
-        case.strata.clone(),
-        None,
-        None,
-        kind,
-        case.cy_kind,
-        max_deg,
-        None,
-        targets.cloned(),
-        None,
-        method,
-        false,
-    )
-    .unwrap()
-    .into_iter()
-    .map(|((c, k), v)| ((c.as_slice().to_vec(), k), v))
-    .collect()
+    computed(case, kind, selection(max_deg, targets), method, None)
 }
 
 /// Checks that both methods give the same invariants below the targets that `pick` chooses
@@ -757,7 +834,7 @@ fn h2_vex(max_deg: u32) -> Case {
         max_deg,
         strata: vec![Stratum {
             divisors: [1, 2, 4],
-            class: vec![(1, 1), (-1, 1)],
+            class: crate::class(&[(1, 1), (-1, 1)]),
         }],
     }
 }
@@ -804,7 +881,7 @@ fn h4_vex(max_deg: u32) -> Case {
         max_deg,
         strata: vec![Stratum {
             divisors: [3, 5, 6],
-            class: vec![(0, 1), (1, 1), (0, 1), (-1, 1)],
+            class: crate::class(&[(0, 1), (1, 1), (0, 1), (-1, 1)]),
         }],
     }
 }
@@ -818,7 +895,7 @@ fn test_vex() {
         assert!(
             case.strata
                 .iter()
-                .all(|s| s.class.iter().any(|&(n, _)| n != 0)),
+                .all(|s| s.class.iter().any(|n| *n != 0u32)),
             "{}",
             case.name
         );
@@ -870,27 +947,15 @@ fn check_vex_cones(case: &Case) {
         } else {
             Some(case.max_deg)
         };
-        let mut res: Vec<_> = compute_gvgw_strings(
-            case.generators.clone(),
-            RowDVector::from_row_slice(w),
-            case.q.clone(),
-            case.nefpart.clone(),
-            case.intnums.clone(),
-            case.strata.clone(),
-            None,
-            cone_data,
+        let mut res: Vec<_> = computed(
+            case,
             InvariantKind::GV,
-            case.cy_kind,
-            max_deg,
-            None,
-            targets,
-            None,
+            selection(max_deg, targets.as_ref()),
             method,
-            false,
+            cone_data,
         )
-        .unwrap()
         .into_iter()
-        .map(|((c, k), v)| (c.as_slice().to_vec(), k, v))
+        .map(|((c, k), v)| (c, k, v))
         .collect();
         res.sort_unstable();
         res

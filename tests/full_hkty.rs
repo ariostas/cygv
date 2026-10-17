@@ -1,11 +1,47 @@
-use cygv::dispatch::{
-    compute_gv_rat_nfold, compute_gv_rat_threefold, compute_gw_rat_nfold, compute_gw_rat_threefold,
-    ComputeError,
+use cygv::malachite::{Integer, Rational};
+use cygv::{
+    compute_gv, compute_gw, Error, Geometry, Invariants, Method, MoriCone, Options, Problem,
+    Selection,
 };
-use cygv::malachite::Rational;
-use cygv::Method;
-use nalgebra::{dmatrix, dvector, DMatrix, DVector, RowDVector};
+use nalgebra::{dmatrix, DMatrix};
 use std::collections::HashMap;
+
+/// A problem on a hypersurface or complete intersection with the given generators.
+fn problem(
+    q: &DMatrix<i32>,
+    nefpart: &[Vec<usize>],
+    intnums: &HashMap<(usize, usize, usize), i32>,
+    generators: &DMatrix<i32>,
+    grading_vector: &[i32],
+    selection: Selection,
+) -> Problem {
+    Problem {
+        geometry: Geometry {
+            q: q.clone(),
+            intnums: intnums.clone(),
+            nefpart: nefpart.to_vec(),
+            ..Geometry::default()
+        },
+        cone: MoriCone::Generators(generators.clone()),
+        selection,
+        grading_vector: Some(grading_vector.to_vec()),
+    }
+}
+
+fn method(method: Method) -> Options {
+    Options {
+        method,
+        ..Options::default()
+    }
+}
+
+/// The curve classes, surfaces and values of the invariants.
+fn values<T: Clone>(inv: &Invariants<T>) -> Vec<(Vec<i32>, Option<usize>, T)> {
+    inv.entries
+        .iter()
+        .map(|e| (e.curve.clone(), e.surface, e.value.clone()))
+        .collect()
+}
 
 #[test]
 fn test_threefold() {
@@ -13,8 +49,6 @@ fn test_threefold() {
          0, 1;
         -1, 2;
     ];
-    let grading_vector = RowDVector::from_row_slice(&[3, -1]);
-
     let q = dmatrix![
         1,  0;
         1,  0;
@@ -23,50 +57,27 @@ fn test_threefold() {
         1,  1;
         2, -1;
     ];
-    let nefpart = Vec::new();
-
     let intnums = HashMap::from([
         ((0, 0, 0), 2),
         ((0, 0, 1), 1),
         ((0, 1, 1), -1),
         ((1, 1, 1), -5),
     ]);
+    let problem = problem(
+        &q,
+        &[],
+        &intnums,
+        &generators,
+        &[3, -1],
+        Selection::MinPoints(100),
+    );
 
     // For now, these are just smoke tests
-    compute_gv_rat_threefold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        None,
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        Vec::new(),
-        None,
-        None,
-        None,
-        Method::Reference,
-        false,
-    )
-    .unwrap();
-    compute_gw_rat_threefold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        None,
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        Vec::new(),
-        None,
-        None,
-        None,
-        Method::Reference,
-        false,
-    )
-    .unwrap();
+    let gv = compute_gv(&problem, &Options::default()).unwrap();
+    assert_eq!(gv.dimension, 3);
+    assert_eq!(gv.report.method, Method::Reference);
+    assert!(gv.entries.iter().all(|e| e.surface.is_none()));
+    compute_gw(&problem, &Options::default()).unwrap();
 }
 
 #[test]
@@ -79,7 +90,7 @@ fn test_fourfold() {
         3,0,0,1,0,-2;
         0,0,0,-2,2,1;
     ];
-    let grading_vector = RowDVector::from_row_slice(&[73, -30, 18, -17, -11, -21]);
+    let grading_vector = vec![73, -30, 18, -17, -11, -21];
 
     let q = dmatrix![
         1,0,0,0,0,0;
@@ -95,7 +106,7 @@ fn test_fourfold() {
         0,0,0,0,1,0;
         0,0,0,0,0,1;
     ];
-    let nefpart = vec![dvector![0, 1, 2, 3], dvector![4, 5, 6, 7, 8, 9, 10, 11]];
+    let nefpart = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7, 8, 9, 10, 11]];
 
     let intnums = HashMap::from([
         ((0, 0, 2), 1),
@@ -177,84 +188,30 @@ fn test_fourfold() {
     ]);
 
     // For now, these are just smoke tests
-    compute_gv_rat_nfold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        None,
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        Vec::new(),
-        None,
-        None,
-        None,
-        Method::Reference,
-        false,
-    )
-    .unwrap();
-    compute_gw_rat_nfold(
-        generators.clone(),
-        grading_vector.clone(),
-        None,
-        Some(100),
-        None,
-        q.clone(),
-        nefpart.clone(),
-        intnums.clone(),
-        Vec::new(),
-        None,
-        None,
-        None,
-        Method::Reference,
-        false,
-    )
-    .unwrap();
+    let min_points = problem(
+        &q,
+        &nefpart,
+        &intnums,
+        &generators,
+        &grading_vector,
+        Selection::MinPoints(100),
+    );
+    let gv = compute_gv(&min_points, &Options::default()).unwrap();
+    assert_eq!(gv.dimension, 4);
+    assert!(gv.entries.iter().all(|e| e.surface.is_some()));
+    compute_gw(&min_points, &Options::default()).unwrap();
 
     // Both methods give the same invariants of this complete intersection.
-    let gv = |method| {
-        let mut res = compute_gv_rat_nfold(
-            generators.clone(),
-            grading_vector.clone(),
-            Some(8),
-            None,
-            None,
-            q.clone(),
-            nefpart.clone(),
-            intnums.clone(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            method,
-            false,
-        )
-        .unwrap();
-        res.sort_unstable_by(|a, b| (a.0 .0.as_slice(), a.0 .1).cmp(&(b.0 .0.as_slice(), b.0 .1)));
-        res
-    };
-    let gw = |method| {
-        let mut res = compute_gw_rat_nfold(
-            generators.clone(),
-            grading_vector.clone(),
-            Some(8),
-            None,
-            None,
-            q.clone(),
-            nefpart.clone(),
-            intnums.clone(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            method,
-            false,
-        )
-        .unwrap();
-        res.sort_unstable_by(|a, b| (a.0 .0.as_slice(), a.0 .1).cmp(&(b.0 .0.as_slice(), b.0 .1)));
-        res
-    };
+    let max_deg = problem(
+        &q,
+        &nefpart,
+        &intnums,
+        &generators,
+        &grading_vector,
+        Selection::MaxDeg(8),
+    );
+    let gv = |m| values(&compute_gv(&max_deg, &method(m)).unwrap());
+    let gw = |m| values(&compute_gw(&max_deg, &method(m)).unwrap());
     let expected = gv(Method::Reference);
     assert!(!expected.is_empty());
     assert_eq!(gv(Method::Modular), expected);
@@ -267,159 +224,112 @@ fn test_fourfold() {
 /// The quintic, through the entry points with each method.
 #[test]
 fn test_methods() {
-    let generators = dmatrix![1];
-    let grading_vector = RowDVector::from_row_slice(&[1]);
     let q = DMatrix::from_element(5, 1, 1);
     let intnums = HashMap::from([((0, 0, 0), 5)]);
-    let gv = |method, max_deg, min_points| {
-        compute_gv_rat_threefold(
-            generators.clone(),
-            grading_vector.clone(),
-            max_deg,
-            min_points,
-            None,
-            q.clone(),
-            Vec::new(),
-            intnums.clone(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            method,
-            false,
-        )
-        .map(|mut res| {
-            res.sort_unstable_by(|a, b| a.0.as_slice().cmp(b.0.as_slice()));
-            res
-        })
-    };
-    let gw = |method| {
-        let mut res = compute_gw_rat_threefold(
-            generators.clone(),
-            grading_vector.clone(),
-            Some(6),
-            None,
-            None,
-            q.clone(),
-            Vec::new(),
-            intnums.clone(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            method,
-            false,
-        )
-        .unwrap();
-        res.sort_unstable_by(|a, b| a.0.as_slice().cmp(b.0.as_slice()));
-        res
-    };
+    let quintic = |selection| problem(&q, &[], &intnums, &dmatrix![1], &[1], selection);
+    let gv = |m, selection| compute_gv(&quintic(selection), &method(m)).map(|gv| values(&gv));
+    let gw = |m| values(&compute_gw(&quintic(Selection::MaxDeg(6)), &method(m)).unwrap());
 
-    let expected = gv(Method::Reference, Some(6), None).unwrap();
+    let expected = gv(Method::Reference, Selection::MaxDeg(6)).unwrap();
     assert_eq!(expected.len(), 6);
-    assert_eq!(expected[0], (dvector![1], 2875.into()));
-    assert_eq!(gv(Method::Modular, Some(6), None).unwrap(), expected);
-    assert_eq!(gv(Method::Auto, Some(6), None).unwrap(), expected);
+    assert_eq!(expected[0], (vec![1], None, Integer::from(2875)));
+    assert_eq!(gv(Method::Modular, Selection::MaxDeg(6)).unwrap(), expected);
+    assert_eq!(gv(Method::Auto, Selection::MaxDeg(6)).unwrap(), expected);
     let expected = gw(Method::Reference);
     // GV_2 + GV_1 / 8
-    assert_eq!(expected[1].1, Rational::from_signeds(609250 * 8 + 2875, 8));
+    assert_eq!(expected[1].2, Rational::from_signeds(609250 * 8 + 2875, 8));
     assert_eq!(gw(Method::Modular), expected);
 
-    // The modular method only supports max_deg; auto falls back to the reference one.
-    assert_eq!(
-        gv(Method::Modular, None, Some(4)),
-        Err(ComputeError::Unsupported("min_points"))
+    // The report says which method ran.
+    let auto = compute_gv(&quintic(Selection::MaxDeg(3)), &Options::default()).unwrap();
+    assert_eq!(auto.report.method, Method::Modular);
+    assert!(!auto.report.certified);
+    let certified = Options {
+        certify: true,
+        ..Options::default()
+    };
+    assert!(
+        compute_gv(&quintic(Selection::MaxDeg(3)), &certified)
+            .unwrap()
+            .report
+            .certified
     );
-    let expected = gv(Method::Reference, None, Some(4)).unwrap();
+
+    // The modular method only supports max_deg and target_points; auto runs the reference
+    // one for the others.
+    assert!(matches!(
+        gv(Method::Modular, Selection::MinPoints(4)),
+        Err(Error::Unsupported(r)) if r.contains("min_points")
+    ));
+    let expected = gv(Method::Reference, Selection::MinPoints(4)).unwrap();
     assert!(!expected.is_empty());
-    assert_eq!(gv(Method::Auto, None, Some(4)).unwrap(), expected);
+    assert_eq!(gv(Method::Auto, Selection::MinPoints(4)).unwrap(), expected);
+    let reference = compute_gv(&quintic(Selection::MinPoints(4)), &Options::default()).unwrap();
+    assert_eq!(reference.report.method, Method::Reference);
+    assert!(reference.report.certified);
 }
 
-/// Invalid nef partitions, intersection numbers and untruncated generators are errors with
-/// each method, rather than panics of the reference, and untruncated generators get zero.
+/// Invalid nef partitions, intersection numbers and curve classes are errors with each
+/// method, rather than panics of the reference, and the curve classes get zero.
 #[test]
 fn test_invalid_input() {
     let q = DMatrix::from_element(5, 1, 1);
     let quintic = HashMap::from([((0, 0, 0), 5)]);
-    let gv = |generators: DMatrix<i32>,
-              max_deg,
-              nefpart: Vec<DVector<i32>>,
-              intnums: &HashMap<(usize, usize, usize), i32>,
-              method| {
-        compute_gv_rat_threefold(
-            generators,
-            RowDVector::from_row_slice(&[1]),
-            max_deg,
-            None,
-            None,
-            q.clone(),
-            nefpart,
-            intnums.clone(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            method,
-            false,
-        )
-        .map(|mut res| {
-            res.sort_unstable_by(|a, b| a.0.as_slice().cmp(b.0.as_slice()));
-            res
-        })
+    let gv = |selection, nefpart: &[Vec<usize>], intnums: &HashMap<_, _>, m| {
+        let problem = problem(&q, nefpart, intnums, &dmatrix![1], &[1], selection);
+        compute_gv(&problem, &method(m)).map(|gv| values(&gv))
     };
-    for method in [Method::Auto, Method::Modular, Method::Reference] {
-        let run =
-            |nefpart, intnums: &HashMap<_, _>| gv(dmatrix![1], Some(3), nefpart, intnums, method);
+    let field = |res: Result<_, Error>| match res {
+        Err(Error::Input { field, reason }) => (field, reason),
+        res => panic!("{res:?}"),
+    };
+    for m in [Method::Auto, Method::Modular, Method::Reference] {
+        let run = |nefpart: &[Vec<usize>], intnums: &HashMap<_, _>| {
+            gv(Selection::MaxDeg(3), nefpart, intnums, m)
+        };
         for (nefpart, reason) in [
-            (vec![dvector![0, 1, 2, 3]], "include every row"),
-            (vec![dvector![0, 1, 2, 3, 4, 4]], "disjoint"),
-            (vec![dvector![0, 1, 2, 3, 7]], "indices of rows"),
-            (vec![dvector![0, 1, 2, 3, 4], dvector![]], "not be empty"),
+            (vec![vec![0, 1, 2, 3]], "include every row"),
+            (vec![vec![0, 1, 2, 3, 4, 4]], "disjoint"),
+            (vec![vec![0, 1, 2, 3, 7]], "indices of rows"),
+            (vec![vec![0, 1, 2, 3, 4], vec![]], "not be empty"),
         ] {
-            match run(nefpart, &quintic) {
-                Err(ComputeError::InvalidNefPartition(r)) => assert!(r.contains(reason), "{r}"),
-                res => panic!("{method:?}, {reason}: {res:?}"),
-            }
+            let (f, r) = field(run(&nefpart, &quintic));
+            assert_eq!(f, "nefpart");
+            assert!(r.contains(reason), "{m:?}: {r}");
         }
-        assert_eq!(
-            run(vec![dvector![0, 1], dvector![2, 3, 4]], &quintic),
-            Err(ComputeError::InvalidDimension(2))
-        );
+        let (f, r) = field(run(&[vec![0, 1], vec![2, 3, 4]], &quintic));
+        assert_eq!(f, "q");
+        assert!(r.contains("but it is 2"), "{r}");
         // A partition into one part is the hypersurface.
-        assert_eq!(
-            run(vec![dvector![4, 0, 1, 2, 3]], &quintic),
-            run(Vec::new(), &quintic)
-        );
+        assert_eq!(run(&[vec![4, 0, 1, 2, 3]], &quintic), run(&[], &quintic));
         for intnums in [
             HashMap::from([((0, 0, 0), 5), ((0, 0, 1), 1)]),
             HashMap::from([((0, 0, 0), 0)]),
         ] {
-            assert!(
-                matches!(
-                    run(Vec::new(), &intnums),
-                    Err(ComputeError::InvalidIntersectionNumbers(_))
-                ),
-                "{method:?}: {intnums:?}"
-            );
+            assert_eq!(field(run(&[], &intnums)).0, "intnums", "{m:?}: {intnums:?}");
         }
     }
 
-    // Without truncation the generators are the classes, with zero added, each once.
-    let expected = gv(
-        dmatrix![1],
-        Some(2),
-        Vec::new(),
-        &quintic,
-        Method::Reference,
-    )
-    .unwrap();
+    // The curve classes are used as given, with zero added, each once.
+    let expected = gv(Selection::MaxDeg(2), &[], &quintic, Method::Reference).unwrap();
     assert_eq!(expected.len(), 2);
-    for generators in [dmatrix![1, 2], dmatrix![2, 0, 1], dmatrix![1, 2, 1]] {
-        let res = gv(generators, None, Vec::new(), &quintic, Method::Auto);
+    for classes in [dmatrix![1, 2], dmatrix![2, 0, 1], dmatrix![1, 2, 1]] {
+        let res = gv(
+            Selection::CurveClasses(classes),
+            &[],
+            &quintic,
+            Method::Auto,
+        );
         assert_eq!(res.unwrap(), expected);
     }
-    assert!(matches!(
-        gv(dmatrix![1, -1], None, Vec::new(), &quintic, Method::Auto),
-        Err(ComputeError::InvalidGenerators(_))
-    ));
+    assert_eq!(
+        field(gv(
+            Selection::CurveClasses(dmatrix![1, -1]),
+            &[],
+            &quintic,
+            Method::Auto
+        ))
+        .0,
+        "curve_classes"
+    );
 }

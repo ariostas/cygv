@@ -4,6 +4,22 @@
 
 This project implements an efficient algorithm to perform the HKTY procedure [[1], [2]] to compute Gopakumar-Vafa (GV) and Gromov-Witten (GW) invariants of Calabi-Yau (CY) manifolds obtained as hypersurfaces or complete intersections in toric varieties. This project is based on the work presented in the paper "[Computational Mirror Symmetry]", but written in the Rust programming language and with some additional improvements.
 
+Every computation needs three things:
+
+- **the Calabi-Yau**: its GLSM charges `q` and its intersection numbers `intnums`, the nef
+  partition `nefpart` of a complete intersection, and for a vex phase of the ambient toric
+  variety either its `fan` or its `strata`;
+- **its Mori cone**: vectors that span it (`generators`), or the inequalities that cut it out
+  (`mori_hyperplanes`, with `mori_equations` for a face), or nothing when the `fan` gives it;
+- **which curve classes**: those up to a degree (`max_deg`), those below some classes
+  (`target_points`), the lowest degrees holding a number of them (`min_points`), or exactly the
+  ones listed (`curve_classes`).
+
+Everything else has a default: the degree is taken with the `grading_vector`, by default the
+primitive sum of the inequalities of the Mori cone; the computation picks its method; and every
+lattice point of the Mori cone is used, even when the generators do not generate them all. The
+names are the same in Python, in the YAML input of the command line interface, and in Rust.
+
 ## Python package
 
 The `cygv` package on PyPI ships prebuilt wheels, so no Rust toolchain is needed to install it.
@@ -12,47 +28,57 @@ The `cygv` package on PyPI ships prebuilt wheels, so no Rust toolchain is needed
 pip install cygv
 ```
 
-It exposes two functions, `compute_gv` and `compute_gw`, which take the data describing the CY and
-return the corresponding invariants. Every vector argument is given as a list of vectors, or as any
+A `Problem` holds the Calabi-Yau and its Mori cone, and its `gv` and `gw` methods compute the
+invariants of the selected curve classes. Every vector argument is a list of vectors, or any
 array-like that numpy accepts.
 
 ```python
-from cygv import compute_gv, compute_gw
+from cygv import Problem
 
 # The CY threefold hypersurface in P(1,1,2,2,2), resolved, with h^{1,1} = 2.
-# The generators of the Mori cone.
-generators = [[1, 0], [0, 1]]
-# A vector that has a positive inner product with every generator.
-grading_vector = [1, 1]
-# The GLSM charge matrix, given as one charge vector per Kähler parameter.
-q = [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]]
-# The triple intersection numbers. Only one ordering of each triplet may be given.
-intnums = {(0, 0, 0): 8, (0, 0, 1): 4}
+problem = Problem(
+    # The GLSM charges, one charge vector per Kähler parameter.
+    q=[[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]],
+    # The intersection numbers, one ordering of each triple (or a list of [i, j, k, value]).
+    intnums={(0, 0, 0): 8, (0, 0, 1): 4},
+    # Vectors that span the Mori cone.
+    generators=[[1, 0], [0, 1]],
+)
 
-compute_gv(generators, grading_vector, q, intnums, max_deg=3)
-# [((1, 0), 640), ((0, 1), 4), ((2, 0), 10032), ((1, 1), 640), ((3, 0), 288384), ...]
+gv = problem.gv(max_deg=3)
+# [((0, 1), 4), ((1, 0), 640), ((1, 1), 640), ((2, 0), 10032), ((2, 1), 72224), ...]
+dict(gv)[(1, 0)]
+# 640
+gv.grading_vector, gv.report
+# ((1, 1), Report(method='modular', certified=False, grading_vector_derived=True, seconds=0.003))
 
-compute_gw(generators, grading_vector, q, intnums, max_deg=3)
+problem.gw(max_deg=3)
 # [((0, 1), Fraction(4, 1)), ((1, 0), Fraction(640, 1)), ((0, 2), Fraction(1, 2)), ...]
 ```
 
-How many curve classes are computed is controlled by `max_deg`, `min_points`, or `target_points`.
-`target_points` computes the backward lightcones of the given curve classes $P$, i.e. the curve
-classes $C$ with $P - C$ in the Mori cone, up to the largest degree of the $P$, or up to `max_deg`
-if it is given too. `min_points` cannot be combined with the other two. When none of them is
-given, the generators are taken to be the complete list of curve classes to use (zero is added
-if it is missing). Complete intersections are specified by passing the nef partition as
-`nefpart`, which must split the rows of the charges into parts, each row in exactly one. A vex phase of the ambient toric variety (MacFadden–Sheridan,
-arXiv:2512.14817), whose curves of negative anticanonical degree need the class of the stratum
-they force into the CY, is specified by passing those strata as `strata`, a list of
-`(divisors, class)` pairs: the three toric divisors (indices of the rays) and the class of the
-stratum, whose entries may be `Fraction`s. Strata are only supported for threefold
-hypersurfaces. They can instead be derived from the fan of the ambient toric variety, passed as
-`fan`, its maximal cones as lists of four divisors, which must be a fine regular fan on the
-boundary points of a reflexive polytope that are not interior to facets (FRST or vex): then the
-Mori cone (spanned by the classes of the walls) and a grading vector (the sum of its facets) are
-derived too, so `generators` and `grading_vector` can be `None`, and `intnums` is checked against
-the fan's intersection ring. The computation is exact.
+The results are `(curve_class, invariant)` pairs sorted by degree and then by curve class, with
+GV invariants as `int`s and GW invariants as `fractions.Fraction`s. For CYs of dimension greater
+than three, an invariant is labeled by a curve class and by a reference surface (the first index
+of the intersection numbers), as in `(((1, 0, -4, 0, 0, 0), 2), 80)`. They also carry the
+`dimension`, the `grading_vector` and a `report` of how they were computed.
+
+`compute_gv` and `compute_gw` do the same in one call, taking the arguments of `Problem` and of
+`gv` or `gw` together: `compute_gv(q, intnums, generators=..., max_deg=3)`.
+
+`target_points` selects the curve classes $C$ with $P - C$ in the Mori cone for one of the given
+classes $P$, up to the largest degree of the $P$, or up to `max_deg` if it is given too. A
+complete intersection takes its nef partition as `nefpart`, lists of divisor indices (positions
+in the charge vectors) that split the divisors, each into exactly one part.
+
+A vex phase of the ambient toric variety (MacFadden–Sheridan, arXiv:2512.14817), whose curves of
+negative anticanonical degree need the class of the stratum they force into the CY, needs those
+strata, as `strata`: `(divisors, class)` pairs of the three divisors and the class of the
+stratum, whose entries may be `Fraction`s. They can instead be derived from the fan of the
+ambient toric variety, as `fan`: its maximal cones, lists of four divisors, which must form a
+fine regular fan on the boundary points of a reflexive polytope that are not interior to facets
+(FRST or vex). The fan also gives the Mori cone (spanned by the classes of its walls) and the
+default grading vector, and `intnums` is checked against its intersection ring. Both are only
+supported for threefold hypersurfaces.
 
 ```python
 fan = [
@@ -66,15 +92,17 @@ fan = [
     (2, 3, 4, 5),
 ]
 q = [[1, 0, -1, 1, 0, 1], [0, 1, 1, 1, 1, 0]]
-compute_gv(None, None, q, {(0, 1, 1): 4, (1, 1, 1): 2}, max_deg=3, fan=fan)
-# [((0, 1), 640), ((1, -1), 1), ((1, 0), 20), ((0, 2), 10032), ...]
+Problem(q, {(0, 1, 1): 4, (1, 1, 1): 2}, fan=fan).gv(max_deg=3)
+# [((0, 1), 640), ((1, -1), 1), ((0, 2), 10032), ((1, 0), 20), ...]
 ```
 
 Two implementations of the computation are available, selected with `method`. The `modular` one
-computes modulo word-sized primes and recovers the exact integers by the Chinese remainder theorem,
-which is much faster, but it does not support `min_points`. The `reference` one is a faithful
-implementation of the HKTY procedure with exact rational arithmetic, and supports everything. The
-default, `auto`, uses the modular one whenever it can. `n_threads` sets the number of threads,
+computes modulo word-sized primes and recovers the exact integers by the Chinese remainder
+theorem, which is much faster, but only supports `max_deg` and `target_points`, and curve classes
+whose coordinates fit its keys. The `reference` one is a faithful implementation of the HKTY
+procedure with exact rational arithmetic. The default, `auto`, uses the modular one for `max_deg`
+and `target_points` and the reference one otherwise; curve classes too large for the modular one
+are an error rather than a slow run of the reference. `n_threads` sets the number of threads,
 which defaults to one per core.
 
 The modular implementation accepts its result once one more prime agrees with it, which makes a
@@ -83,27 +111,45 @@ result instead: it bounds every invariant from above, by running the computation
 upward-rounded reals, and takes more primes until every bound is below half their product, which
 costs about as much as the computation itself. Vex phases cannot be certified yet.
 
-The curve classes are all the lattice points of the Mori cone that the generators span, even when
-the generators miss some (as a sample of lattice points can), except when none of `max_deg`,
-`min_points` and `target_points` is given, where the generators are used as given. The modular
-implementation takes them from the Hilbert bases of the cones $K_T$ of the curve classes in the
-Mori cone that only meet the divisors in $T$ negatively, which it computes itself. These can also
-be given as *cone data*, computed by a program such as
-[Normaliz](https://www.normaliz.uni-osnabrueck.de/): the inequalities $h \cdot C \ge 0$ of the
-Mori cone as `mori_hyperplanes` (plus `mori_equations` when it is a face), and, as `cones`, a list
-of `(divisors, hilbert_basis)` pairs with the Hilbert basis of $K_T$ for every set $T$ of one or
-two divisors, and in a vex phase also for the three divisors of every stratum. Hilbert basis
-elements of degree above `max_deg` can be left out. The data is trusted, so a missing element
-silently drops curve classes. With it the generators can be `None`, unless none of `max_deg`,
-`min_points` and `target_points` is given.
+The modular implementation takes the curve classes from the Hilbert bases of the cones $K_T$ of
+the classes in the Mori cone that only meet the divisors in $T$ negatively, which it computes
+itself. A program such as [Normaliz](https://www.normaliz.uni-osnabrueck.de/) can compute them
+instead, passed as `hilbert_bases`: `(divisors, hilbert_basis)` pairs for every set $T$ of one or
+two divisors, and in a vex phase also for the three divisors of every stratum. Elements of degree
+above `max_deg` can be left out. They are trusted, so a missing element silently drops curve
+classes.
 
-The results are returned as a list of `(curve_class, invariant)` pairs, in no particular order. GV
-invariants are Python `int`s, and GW invariants are `fractions.Fraction`s. For CYs of dimension greater than three the invariants are labeled by a curve
-class and by the index of a reference surface, which is the first index of the intersection
-numbers, so each entry looks like `(((1, 0, -4, 0, 0, 0), 2), 80)` instead.
-
+Invalid input raises a `ValueError`, and a computation that fails (for instance because the
+invariants are not integers, which usually means inconsistent input) a `cygv.ComputationError`.
 The computation runs in a subprocess, so it can be interrupted with ctrl+c without losing the
 Python session.
+
+## Rust crate
+
+The same model, as types: a `Problem` of a `Geometry`, a `MoriCone` and a `Selection`, computed
+by `compute_gv` or `compute_gw` with `Options`.
+
+```rust
+use cygv::{compute_gv, Geometry, MoriCone, Options, Problem, Selection};
+use nalgebra::dmatrix;
+use std::collections::HashMap;
+
+let problem = Problem {
+    geometry: Geometry {
+        // One row per toric divisor, one column per Kähler parameter.
+        q: dmatrix![0, 1; 0, 1; 1, 0; 1, 0; 1, 0; 1, -2],
+        intnums: HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]),
+        ..Geometry::default()
+    },
+    // One generator per column.
+    cone: MoriCone::Generators(dmatrix![1, 0; 0, 1]),
+    selection: Selection::MaxDeg(3),
+    grading_vector: None,
+};
+let gv = compute_gv(&problem, &Options::default()).unwrap();
+assert_eq!(gv.grading_vector, [1, 1]);
+assert_eq!((gv.entries[1].curve.as_slice(), gv.entries[1].value.clone()), (&[1, 0][..], 640.into()));
+```
 
 ## Command line interface
 
@@ -119,17 +165,17 @@ cygv --file input.yaml --output invariants.yaml
 It is part of the default `cli` feature. Library users that do not need it can depend on this
 crate with `default-features = false` to avoid pulling in the argument and YAML parsers.
 
-The input is a stream of YAML documents, each of which specifies a single CY manifold.
+The input is a stream of YAML documents, each of which specifies a single computation, with the
+same names as the Python arguments.
 
 ```yaml
 ---
 name: an example threefold
-generators: [[1, 0], [0, 1]]
-grading_vector: [1, 1]
 q: [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]]
 intnums:
   - [0, 0, 0, 8]
   - [0, 0, 1, 4]
+generators: [[1, 0], [0, 1]]
 invariants: gv
 max_deg: 3
 ```
@@ -150,8 +196,9 @@ the curve classes under the grading vector.
 ---
 name: an example threefold
 invariants: gv
-is_threefold: true
+dimension: 3
 grading_vector: [1, 1]
+report: {method: modular, certified: false, grading_vector_derived: true}
 results:
   - {curve_class: [0, 1], degree: 1, gv: 4}
   - {curve_class: [1, 0], degree: 1, gv: 640}
@@ -161,9 +208,9 @@ results:
   - {curve_class: [3, 0], degree: 3, gv: 288384}
 ```
 
-Run `cygv --help` for the full list of input fields and options, such as `method` (which can also
-be set for every document with `--method`) and `certify` (`--certify`), and see the `examples`
-directory for complete inputs.
+Run `cygv --help` for the full list of input fields and options. `--method`, `--threads`,
+`--max-deg`, `--invariants` and `--certify` set those for every document, and the `examples`
+directory has complete inputs.
 
 ## License
 

@@ -1,8 +1,8 @@
 # The user-facing interface of `cygv`: review and redesign proposal
 
-Status: design document for review, written against branch `gv-modular-rust` at `fbc6ea6`
-(40 commits ahead of `main`, which is the released `v0.3.0`). Nothing here is implemented.
-File and line references are to that revision.
+Status: design document, written against branch `gv-modular-rust` at `fbc6ea6` (40 commits
+ahead of `main`, which is the released `v0.3.0`), and being implemented with the decisions
+below. File and line references are to that revision.
 
 The question asked was whether the interface "got a little convoluted" over the modular,
 cone, vex-phase and certifier work, and how to make it as clear as possible for users. The
@@ -12,6 +12,32 @@ interface now exposes implementation structure (two pipelines, two Mori cone des
 plus an acceleration structure, three truncation modes with different pipeline support,
 threefold/n-fold variants, fans vs strata) rather than the three things a user actually has:
 a Calabi-Yau, a cone of curve classes, and a choice of which classes to compute.
+
+**Decisions (2026-10-17).** The full redesign of section 3 is being implemented before the
+release (`PLAN.md` phase 9), with these changes to the proposal:
+
+- *Python*: the `Problem` object is the documented form,
+  `cygv.Problem(q=..., intnums=..., generators=...).gv(max_deg=...)`; `compute_gv` and
+  `compute_gw` stay as thin keyword wrappers over it.
+- *No compatibility aliases.* The next release breaks cleanly: the 0.3.0 positional order,
+  `generators` without any selection (now `curve_classes`) and `is_threefold` are errors
+  that say what to write instead, not deprecated spellings.
+- *No silent fallback.* When `auto` (or `modular`) meets curve classes too large for the
+  modular keys, the request is an error that names `method: reference`, rather than a run of
+  the reference pipeline the user did not ask for.
+- *One spelling per name.* The Rust fields take the names the Python keywords and YAML keys
+  already have (`q`, `intnums`, `nefpart`, `n_threads`, ...), and the YAML document stays
+  flat, options included, like the keywords of the Python call.
+
+**Implemented (2026-10-17)**, as `PLAN.md` phase 9 summarizes, with these further departures
+from section 3: the reference pipeline ignores `hilbert_bases` instead of refusing them (they
+never change the answer, and `--method reference` should work on any document); the `Report`
+has the method, `certified`, `grading_vector_derived` and the elapsed time so far, not yet the
+primes, passes and per-stage timings (M4); the YAML output has a `report` line without timings,
+so that outputs stay comparable; `Problem::validate` takes the `Options` too; the Python
+`Invariants` is a `list` subclass; `n_threads: 0` is an error rather than one thread; and
+`MoriCone::FromFan` stays explicit in Rust while Python and YAML infer it from a fan without a
+cone. L1 is done for the root re-exports only, and L2 and L3 are not done.
 
 Sections: 1 what exists today; 2 assessment (good, convoluted, per surface);
 3 the redesign (concepts, then Rust, Python, YAML/CLI); 4 compatibility and migration;

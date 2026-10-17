@@ -38,6 +38,15 @@ fn run(args: &[&str], stdin: &str) -> Output {
     child.wait_with_output().expect("failed to read the output")
 }
 
+/// The output without its report lines, which say how the results were computed.
+fn without_report(output: &[u8]) -> String {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter(|l| !l.starts_with("report:"))
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
 /// Check that the given documents contain results for the expected invariants.
 fn check_results(docs: &[Yaml], expected: &[&str]) {
     assert_eq!(docs.len(), expected.len());
@@ -101,10 +110,11 @@ fn test_file_to_file() {
     let docs = YamlLoader::load_from_str(&std::fs::read_to_string(&out_path).unwrap()).unwrap();
     check_results(&docs, &["gv"]);
     assert_eq!(docs[0]["name"].as_str(), Some("fourfold"));
-    assert_eq!(docs[0]["is_threefold"].as_bool(), Some(false));
+    assert_eq!(docs[0]["dimension"].as_i64(), Some(4));
+    assert_eq!(docs[0]["report"]["method"].as_str(), Some("reference"));
     // The invariants of CYs that are not threefolds carry a reference surface index.
     let first = &docs[0]["results"][0];
-    assert_eq!(first["surface_index"].as_i64(), Some(4));
+    assert_eq!(first["surface"].as_i64(), Some(4));
     // These are the invariants of the complete intersection; read as a hypersurface, the
     // same data gives 79 instead, starting with a class that has none here.
     let class: Vec<i64> = first["curve_class"]
@@ -123,7 +133,15 @@ fn test_invalid_input() {
     let output = run(&[], "generators: [[1, 0], [0, 1]]\n");
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("grading_vector"), "{stderr}");
+    assert!(stderr.contains("\"q\""), "{stderr}");
+    assert!(output.stdout.is_empty());
+
+    // Every document is checked before any is computed.
+    let quintic = "q: [[1, 1, 1, 1, 1]]\nintnums: [[0, 0, 0, 5]]\ngenerators: [[1]]\n";
+    let output = run(&[], &format!("---\n{quintic}max_deg: 3\n---\n{quintic}"));
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("max_deg"), "{stderr}");
     assert!(output.stdout.is_empty());
 }
 
@@ -155,7 +173,9 @@ max_deg: 6
                 "{}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            String::from_utf8(output.stdout).unwrap()
+            let report = format!("report: {{method: {}", method.replace("auto", "modular"));
+            assert!(String::from_utf8_lossy(&output.stdout).contains(&report));
+            without_report(&output.stdout)
         })
         .collect();
     assert!(outputs[0].contains("{curve_class: [1], degree: 1, gv: 2875}"));
@@ -166,13 +186,31 @@ max_deg: 6
     // Certified, as the flag or in the input, the results are the same.
     let certified = run(&["--certify"], &input);
     assert!(certified.status.success());
-    assert_eq!(String::from_utf8(certified.stdout).unwrap(), outputs[0]);
-    let certified = run(
-        &[],
-        &input.replace("max_deg: 6\n", "max_deg: 6\ncertify: true\n"),
-    );
+    let out = String::from_utf8_lossy(&certified.stdout);
+    assert!(out.contains("certified: true"), "{out}");
+    assert_eq!(without_report(&certified.stdout), outputs[0]);
+    let in_input = input.replace("max_deg: 6\n", "max_deg: 6\ncertify: true\n");
+    let certified = run(&[], &in_input);
     assert!(certified.status.success());
-    assert_eq!(String::from_utf8(certified.stdout).unwrap(), outputs[0]);
+    assert_eq!(without_report(&certified.stdout), outputs[0]);
+    let uncertified = run(&["--no-certify"], &in_input);
+    let out = String::from_utf8_lossy(&uncertified.stdout);
+    assert!(out.contains("certified: false"), "{out}");
+
+    // The maximum degree and the invariants can be set for every document.
+    let output = run(&["--max-deg", "2", "--invariants", "gw"], &input);
+    assert!(output.status.success());
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(!out.contains("gv:") && !out.contains("degree: 3"), "{out}");
+    assert!(
+        out.contains("{curve_class: [2], degree: 2, gw: '4876875/8'}"),
+        "{out}"
+    );
+    let output = run(
+        &["--max-deg", "2"],
+        &quintic.replace("max_deg: 6", "min_points: 4"),
+    );
+    assert!(!output.status.success());
 
     // The modular method needs max_deg, whether it is asked for in the input or with
     // the flag, which overrides the input.
@@ -210,11 +248,15 @@ fn test_cone_data() {
         &format!("{head}generators: [[1, 0], [0, 1]]\n"),
     );
     assert!(reference.status.success());
-    assert_eq!(with_cones.stdout, reference.stdout);
+    assert_eq!(
+        without_report(&with_cones.stdout),
+        without_report(&reference.stdout)
+    );
     let docs = YamlLoader::load_from_str(&String::from_utf8(with_cones.stdout).unwrap()).unwrap();
     check_results(&docs, &["gv"]);
 
-    // Without generators the reference method takes the Mori cone from the cone data.
+    // The reference method takes the Mori cone from its inequalities, and has no use for the
+    // Hilbert bases.
     let output = run(&["--method", "reference"], &input);
     assert!(output.status.success());
     assert_eq!(output.stdout, reference.stdout);
@@ -237,7 +279,10 @@ fn test_vex_cone_data() {
         &format!("{head}generators: [[0, 1], [1, -1]]\n"),
     );
     assert!(reference.status.success());
-    assert_eq!(with_cones.stdout, reference.stdout);
+    assert_eq!(
+        without_report(&with_cones.stdout),
+        without_report(&reference.stdout)
+    );
     let out = String::from_utf8(with_cones.stdout).unwrap();
     assert!(
         out.contains("{curve_class: [1, -1], degree: 1, gv: 1}"),
@@ -267,7 +312,12 @@ fn test_fan() {
         String::from_utf8_lossy(&with_fan.stderr)
     );
     let with_cones = run(&["--file", example("vex.yaml").to_str().unwrap()], "");
-    assert_eq!(with_fan.stdout, with_cones.stdout);
+    assert_eq!(
+        without_report(&with_fan.stdout),
+        without_report(&with_cones.stdout)
+    );
+    let out = String::from_utf8_lossy(&with_fan.stdout);
+    assert!(out.contains("grading_vector_derived: true"), "{out}");
 
     // A vex phase cannot be certified.
     let certified = run(

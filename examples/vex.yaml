@@ -19,7 +19,7 @@ strata:
 # The inequalities h . C >= 0 of the Mori cone, which is spanned by (0, 1) and (1, -1).
 mori_hyperplanes: [[1, 0], [1, 1]]
 # The cones K_T of every set T of one or two divisors, and of the stratum.
-cones:
+hilbert_bases:
   - {divisors: [0], hilbert_basis: [[0, 1], [1, 1]]}
   - {divisors: [1], hilbert_basis: [[0, 1], [1, 1]]}
   - {divisors: [2], hilbert_basis: [[0, 1], [1, 0]]}

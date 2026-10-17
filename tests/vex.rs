@@ -5,12 +5,18 @@
 //! strata that `cgv/tools/cgv_phase.py` derives from the fans. The tests only check properties
 //! of the results, not the stored tables.
 
-use cygv::dispatch::{compute_gv_rat_threefold, ComputeError};
-use cygv::malachite::Integer;
+use cygv::malachite::{Integer, Rational};
 use cygv::modular;
-use cygv::{Method, Stratum};
-use nalgebra::{DMatrix, DVector, RowDVector};
+use cygv::{
+    compute_gv, Ambient, Error, Geometry, Method, MoriCone, Options, Problem, Selection, Stratum,
+};
+use nalgebra::{DMatrix, DVector};
 use std::collections::HashMap;
+
+/// A class of integers.
+fn class(entries: &[i64]) -> Vec<Rational> {
+    entries.iter().map(|&x| Rational::from(x)).collect()
+}
 
 /// The data of a threefold hypersurface, with the vectors as rows.
 struct Phase {
@@ -22,7 +28,7 @@ struct Phase {
 }
 
 impl Phase {
-    fn gv(&self, max_deg: u32, method: Method) -> Result<HashMap<Vec<i32>, Integer>, ComputeError> {
+    fn gv(&self, max_deg: u32, method: Method) -> Result<HashMap<Vec<i32>, Integer>, Error> {
         let columns = |rows: &[&[i32]]| {
             DMatrix::from_iterator(
                 rows[0].len(),
@@ -30,28 +36,34 @@ impl Phase {
                 rows.iter().flat_map(|r| r.iter().copied()),
             )
         };
-        let res = compute_gv_rat_threefold(
-            columns(self.generators),
-            RowDVector::from_row_slice(self.grading_vector),
-            Some(max_deg),
-            None,
-            None,
-            columns(self.q),
-            Vec::new(),
-            self.intnums
-                .iter()
-                .map(|&[a, b, c, v]| ((a as usize, b as usize, c as usize), v))
-                .collect(),
-            self.strata.clone(),
-            None,
-            None,
-            None,
+        let problem = Problem {
+            geometry: Geometry {
+                q: columns(self.q),
+                intnums: self
+                    .intnums
+                    .iter()
+                    .map(|&[a, b, c, v]| ((a as usize, b as usize, c as usize), v))
+                    .collect(),
+                nefpart: Vec::new(),
+                ambient: if self.strata.is_empty() {
+                    Ambient::Plain
+                } else {
+                    Ambient::Strata(self.strata.clone())
+                },
+            },
+            cone: MoriCone::Generators(columns(self.generators)),
+            selection: Selection::MaxDeg(max_deg),
+            grading_vector: Some(self.grading_vector.to_vec()),
+        };
+        let options = Options {
             method,
-            false,
-        )?;
+            ..Options::default()
+        };
+        let res = compute_gv(&problem, &options)?;
         Ok(res
+            .entries
             .into_iter()
-            .map(|(c, gv)| (c.as_slice().to_vec(), gv))
+            .map(|e| (e.curve, e.value))
             .collect())
     }
 }
@@ -66,7 +78,7 @@ fn h2_vex() -> Phase {
         intnums: &[[0, 1, 1, 4], [1, 1, 1, 2]],
         strata: vec![Stratum {
             divisors: [1, 2, 4],
-            class: vec![(1, 1), (-1, 1)],
+            class: class(&[1, -1]),
         }],
     }
 }
@@ -90,7 +102,7 @@ fn test_h2_vex() {
     phase.strata.clear();
     assert_eq!(
         phase.gv(6, Method::Auto),
-        Err(ComputeError::Modular(modular::Error::NotStable))
+        Err(Error::Modular(modular::Error::NotStable))
     );
 
     // Both methods give the same invariants, and the strata are checked.
@@ -100,7 +112,10 @@ fn test_h2_vex() {
     phase.strata[0].divisors = [1, 2, 6];
     assert!(matches!(
         phase.gv(6, Method::Auto),
-        Err(ComputeError::InvalidStrata(_))
+        Err(Error::Input {
+            field: "strata",
+            ..
+        })
     ));
 }
 
@@ -141,7 +156,7 @@ fn test_vex_and_frst_agree() {
         ],
         strata: vec![Stratum {
             divisors: [3, 5, 6],
-            class: vec![(0, 1), (1, 1), (0, 1), (-1, 1)],
+            class: class(&[0, 1, 0, -1]),
         }],
     };
     let frst = Phase {

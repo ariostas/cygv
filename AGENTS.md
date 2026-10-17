@@ -82,15 +82,17 @@ PR titles must follow conventional commits (enforced by `.github/workflows/pr_ti
 The modules split into the pipeline and the front end shared by everything that calls it.
 There are two pipelines. `src/reference.rs` and `src/reference/` hold a faithful implementation
 of the HKTY procedure in exact rationals (named *reference* because the faster, differently
-structured `modular` pipeline sits beside it; see `PLAN.md`). `src/dispatch.rs` holds the public
-entry points, which pick a pipeline by the `Method` enum of `src/lib.rs`, and `src/io.rs`, the
-CLI and `src/python.rs` sit on top of those. `src/cone.rs` holds the optional *cone data*
+structured `modular` pipeline sits beside it; see `PLAN.md`). `src/problem.rs` holds the public
+input (`Problem`, `Options`) and `src/dispatch.rs` the public entry points, which pick a
+pipeline by the `Method` enum of `src/lib.rs`, and `src/io.rs`, the CLI and `src/python.rs` sit
+on top of those (see "One problem, one dispatch" below). `src/cone.rs` holds the *cone data*
 (`ConeData`: the Mori cone's inequalities and equations, and the Hilbert basis of each cone
 $K_T$, the curve classes in the Mori cone that only meet the divisors in $T$ negatively, for
 every $T$ of one or two divisors and, in a vex phase, the three divisors of every stratum) and
 its validation (`check_cone_data`), and the native cone computations of `PLAN.md` phase 7,
-shared by both pipelines. Callers may still supply cone data, computed with an external
-program such as Normaliz, and it is used as given. `src/cone/hull.rs` (phase 7a):
+shared by both pipelines. Callers may still supply the Hilbert bases, computed with an
+external program such as Normaliz (`Options::hilbert_bases`, with the cone given by
+`MoriCone::Inequalities` or generators), and they are used as given. `src/cone/hull.rs` (phase 7a):
 `cone::facets` and `cone::rays` convert between generators and inequalities by the double
 description method, in `i128` with overflow checks (`TooLarge`), with a canonical output
 (equations in reduced row echelon form, each hyperplane reduced to vanish at their pivots).
@@ -230,46 +232,44 @@ indices differently (the first index is a reference surface in the n-fold case).
 
 ### Key cross-cutting patterns
 
-- **One dispatch, several entry points.** Every entry point — the four
-  `compute_g{v,w}_rat_{threefold,nfold}` wrappers in `src/dispatch.rs`, and
-  `compute_gvgw_strings` in the same file, which is the runtime dispatch used by both
-  `src/python.rs` and the CLI — goes through the private `dispatch::compute`, which picks the
-  pipeline from the `Method`: `Auto` (the default) runs `modular` when the request has
-  `max_deg` or `target_points` and no `min_points` (see `modular_unsupported`), and falls back
-  to `reference` otherwise or when the curve classes do not fit `modular`'s keys; `Modular`
-  makes an unsupported request a `ComputeError::Unsupported`; `Reference` always runs
-  `run_hkty`. The entry points return `Result<_, ComputeError>`: `modular`'s errors, and invalid input,
-  which `compute` checks up front for both pipelines because `run_hkty` still panics on it
-  (the nef partition, which must split the rows of the charges, by `check_nefpart`; the
-  dimension of the CY; the intersection numbers, by `check_intnums`, indices below $h^{1,1}$
-  but the reference surface of an n-fold, one ordering each, not all zero; the strata, cone
-  data and target points, by `check_strata`, `check_cone_data` and `check_target_points`;
-  the untruncated generators, by `untruncated_classes`). `max_deg` may come with `target_points` (the reference then truncates its results by
-  degree, since its semigroup only takes the targets). Both give only the nonzero invariants.
-  Both pipelines use every lattice point of the Mori cone (decision 6.2, phases 7b and 7d):
-  the Mori cone is described by the cone data's inequalities, or else by `cone::facets` of
-  the generators; `modular` takes its candidates from the cone data, or from
-  `cone::cone_data` of those inequalities (truncated at `max_deg`, lowered to the targets'
-  largest degree); the reference runs on `cone::hilbert_basis` of them instead of the
-  generators. The exception is a request with none of `max_deg`, `min_points` and
-  `target_points`, where the reference's semigroup is the generators as given
-  (`Semigroup::from_data`), so they are passed unchanged but for zero, which is added first
-  if it is missing, and duplicates, which are dropped (`untruncated_classes`; the others
-  must have positive degree). With cone data the generators may
-  have no columns, except for such a request (`ComputeError::MissingGenerators`). Failures of
-  the cone computations are `ComputeError::MoriCone`. The optional `fan` (threefold
-  hypersurfaces only) is read first: its strata replace the `strata` argument, which must
-  then be empty, its Mori cone is the cone when the generators have no columns and there is
-  no cone data, and its grading vector is used when `grading_vector` is empty
-  (`ComputeError::MissingGradingVector` without a fan), the Mori cone being computed only
-  for those; the intersection numbers and a given grading vector are checked against it,
-  and its errors are `ComputeError::InvalidFan`. `certify` (the last argument, YAML
-  `certify`, `--certify`, Python `certify=`) sets `modular::Options::certify`; the reference
-  is exact anyway.
-  `run_hkty<T>` is generic over the coefficient type, which is only ever `reference::Rational`
-  (`src/reference/rational.rs`) today, and takes the `InvariantKind` and `CYKind` enums at runtime. Adding an option means touching
-  all of the dispatch sites. The computation is always exact: floating-point arithmetic (the old
-  `prec` option) was removed.
+- **One problem, one dispatch.** The public input is `src/problem.rs` (decided in
+  `INTERFACE.md`, phase 9): a `Problem` of a `Geometry` (`q` with one row per divisor,
+  `intnums`, `nefpart` as divisor indices, and `ambient`: `Plain`, `Fan(cones)` or
+  `Strata(list)`), a `MoriCone` (`Generators`, `Inequalities { hyperplanes, equations }` or
+  `FromFan`), a `Selection` (`MaxDeg`, `TargetPoints { points, max_deg }`, `MinPoints`,
+  `CurveClasses`) and an optional `grading_vector`, plus `Options` (`method`, `n_threads`,
+  `certify`, `hilbert_bases`, and `tuning: modular::Tuning`). Every field has the name of the
+  Python keyword and YAML key that set it, and every choice is an enum, so conflicting input
+  cannot be built. `compute_gv`, `compute_gw` and the runtime-kind `compute` (returning
+  `Computed::Gv` or `Computed::Gw`, for Python and the CLI) in `src/dispatch.rs` (a private
+  module, re-exported at the root) take `&Problem` and `&Options` and return `Invariants<T>`:
+  the `dimension`, the `grading_vector` used, the nonzero `entries` (`Invariant { curve,
+  surface: Option<usize>, degree, value }`, sorted by degree, curve, surface) and a `Report`
+  (`#[non_exhaustive]`: the method that ran, `certified`, `grading_vector_derived`,
+  `elapsed`). `Problem::validate` (also run by `compute`, through `Problem::check`) checks
+  everything that is cheap before computing — `check_nefpart`, the dimension (with a hint
+  when `q` looks transposed), `check_intnums`, `check_strata`, the fan (`Fan::new`, its
+  intersection ring, its strata), the shapes of the cone and the selection, a given grading
+  vector against the fan and the generators, the target degrees, the Hilbert bases when the
+  cone is given by inequalities, `method: modular` with a selection it does not support, and
+  certify in a vex phase — and returns `Error::Input { field, reason }` naming the field
+  (`Error::Unsupported`, `Error::MoriCone`, `Error::Modular` otherwise). `compute` then
+  resolves the cone's inequalities (given, `cone::facets` of the generators, or
+  `Fan::mori_cone`) and the default grading vector (the primitive sum of those inequalities),
+  and picks the pipeline: `Auto` runs `modular` for `MaxDeg` and `TargetPoints` and the
+  reference otherwise; curve classes too wide for the modular keys are `Error::Unsupported`
+  naming `method: reference`, never a silent fallback. `modular` takes its candidates from
+  `Options::hilbert_bases` (checked by `check_cone_data`) or from `cone::cone_data` of the
+  inequalities, truncated at the maximum degree lowered to the targets'; the reference runs on
+  `cone::hilbert_basis` of the inequalities, or for `CurveClasses` on those classes as given
+  (checked to lie in the cone, zero added, duplicates dropped, `Semigroup::from_data`), and
+  ignores the Hilbert bases. With `TargetPoints` and `max_deg` the reference's results are
+  truncated by degree, since its semigroup only takes the targets. `run_hkty<T>` is generic over
+  the coefficient type, which is only ever `reference::Rational` (`src/reference/rational.rs`)
+  today, takes the `InvariantKind` and `CYKind` enums at runtime, and still panics on invalid
+  input, which is why the checks come first. Adding an option means a field of `Options` (or
+  `Problem`), its key in `src/io.rs` and its keyword in `src/python.rs` and `hkty.py`. The
+  computation is always exact: floating-point arithmetic (the old `prec` option) was removed.
 - **`PolynomialCoeff<T>`** (`src/reference/polynomial/coefficient.rs`) is the compound trait the
   pipeline is written against, so that the exact number type can be swapped. It is built almost
   entirely from `*Assign` traits (`Assign` itself is ours): coefficient arithmetic is done in
@@ -303,7 +303,7 @@ indices differently (the first index is a reference surface in the n-fold case).
   `for_each_init`, which builds it once per rayon job instead of once per item (see `CScratch` in
   `src/reference/fundamental_period.rs`).
 - **Threading in `modular`** follows the same pattern: `modular::run` builds a private pool with
-  `Options::threads` workers (the dispatch passes `n_threads`, zero meaning one) and installs
+  `Options::threads` workers (the dispatch passes `n_threads`, which must be positive) and installs
   candidates, passes and lift in it. The candidates enumerate the cones in parallel, the period
   splits the candidates into chunks, and the products of `instanton` and the extraction use
   shards: a `table::ShardedMap` (or the extraction's own shards, which also carry a degree heap)
@@ -337,23 +337,24 @@ indices differently (the first index is a reference surface in the n-fold case).
 ### Command line interface
 
 `src/bin/cygv/main.rs` is a thin clap front end: it reads YAML from a file or stdin, parses it with
-`io::Input::load_all`, and writes one YAML document of results per input document to a file or
-stdout, flushing after each one. `--threads` and `--method` override the `n_threads` and
-`method` fields of every document. All of the parsing, validation, and formatting lives in
-`src/io.rs`, whose `Input` struct mirrors the arguments of `run_hkty` and whose field conventions
-match the Python API (each inner list is a *column*). `Input::from_yaml` rejects unknown fields and
-validates shapes eagerly — including the nef partition and the intersection numbers (the
-`check_nefpart` and `check_intnums` of the dispatch), `method: modular` without
-`max_deg` or `target_points`, the cone data, the target points, the fan (from which it derives the
-grading vector when `grading_vector` is left out, since the output needs it), and leaving out
-`generators` without cone data or a fan, or without any of `max_deg`, `min_points` and
-`target_points` — because
-`run_hkty` itself still unwraps its errors. `Input::compute` sorts the results by degree and then lexicographically by
-curve class, since the order in which curve classes of equal degree come out of `run_hkty` is not
-deterministic. Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
-`tests/data/*.yaml` holds cone data computed with Normaliz for `benches/data/h11_9.yaml` (the
-whole Mori cone, and a facet with its generators), which `tests/cones.rs` and the modular
-pipeline's comparison tests append to that file; it is excluded from the published crate.
+`io::Input::load_all`, applies the overrides (`--threads`, `--method`, `--max-deg` through
+`Input::set_max_deg`, `--invariants`, `--certify`/`--no-certify`) and validates every document
+before computing any, and writes one YAML document of results per input document to a file or
+stdout, flushing after each one. All of the parsing and formatting lives in `src/io.rs`, whose
+`Input` holds a `Problem`, the `InvariantKind` and the `Options`, with the field names of the
+Python API (each inner list is a *column*), in a flat document. `Input::from_yaml` rejects
+unknown fields (with what replaced the removed `cones` and `is_threefold`), parses the one-of
+groups (`fan`/`strata`; `generators`/`mori_hyperplanes`(+`mori_equations`)/nothing with a fan;
+`max_deg`/`target_points`(+`max_deg`)/`min_points`/`curve_classes`) into their enums
+(`IoError::Conflicting`, `IoError::MissingOneOf`), and calls `Problem::validate`, mapping
+`Error::Input { field, .. }` to `IoError::InvalidField`; it does not check anything itself. The
+output carries `dimension`, the `grading_vector` and a `report` line (method, certified,
+grading_vector_derived; no timing, so outputs stay comparable), and `surface` for n-folds.
+Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
+`tests/data/*.yaml` holds the inequalities and Hilbert bases computed with Normaliz for
+`benches/data/h11_9.yaml` (the whole Mori cone, and a facet with its generators), which
+`tests/cones.rs` and the modular pipeline's comparison tests append to that file in place of
+its generators; it is excluded from the published crate.
 
 The whole CLI sits behind the default `cli` feature: `clap` and `yaml-rust2` are optional
 dependencies, `[[bin]]` declares `required-features = ["cli"]`, and both `io` (in `src/lib.rs`) and
@@ -363,17 +364,24 @@ dependencies, `[[bin]]` declares `required-features = ["cli"]`, and both `io` (i
 
 ### Python layer
 
-`src/python.rs` exposes a single `_compute_gvgw` PyO3 function (module built with `gil_used =
-false`) that forwards to `dispatch::compute_gvgw_strings`; results are returned as **strings** and
-parsed on the Python side into `int` or `fractions.Fraction` depending on `find_gv`.
+`src/python.rs` exposes a single `_compute(kind, args)` PyO3 function (module built with `gil_used =
+false`) taking the keywords as one dict of plain lists and ints, which it parses into a `Problem`
+and `Options` (the one-of groups as in the YAML layer) and passes to `compute`; it returns the
+entries with their values as **strings**, the dimension, the grading vector and the report, and
+the Python side parses the values into `int` or `fractions.Fraction`. A new field is one key there
+and one keyword in `hkty.py`.
 
-`python/cygv/hkty.py` wraps it: `compute_gv` / `compute_gw` normalize inputs to numpy arrays, infer
-`is_threefold` from the shape of `q` and the nef partition, and run the Rust call in a
-`multiprocessing.Process` so Ctrl-C interrupts the computation without killing the interpreter
-(the Rust side installs a ctrlc handler that calls `exit(1)`). They take `method` (a name, or
-`None` for the Rust default), `n_threads` and `certify`, and `generators` and `grading_vector` may be
-`None` (with cone data or a `fan`; `None` becomes an empty list). Exceptions raised in the subprocess keep their type
-(an invalid `method` or a `ComputeError` is a `ValueError`), except panics, which become a
+`python/cygv/hkty.py` wraps it: `Problem` is a dataclass of the geometry and the Mori cone (`q`,
+`intnums` as a dict or `[i, j, k, value]` entries, `nefpart`, `fan`, `strata`, `generators`,
+`mori_hyperplanes`, `mori_equations`, `grading_vector`) whose `gv` and `gw` methods take the
+selection and the options as keywords; `compute_gv(q, intnums, **kwargs)` and `compute_gw` split
+their keywords between the two. The result, `Invariants`, is a `list` of `(key, value)` pairs (the
+key a curve tuple, or `(curve, surface)` for an n-fold) with `kind`, `dimension`,
+`grading_vector` and a `Report` dataclass attached. The call runs in a `multiprocessing.Process`
+so Ctrl-C interrupts the computation without killing the interpreter (the Rust side installs a
+ctrlc handler that calls `exit(1)`). Exceptions raised in the subprocess keep their type: invalid
+or unsupported input is a `ValueError`, a failed computation (`NotStable`, cones too large) a
+`cygv.ComputationError` (a `RuntimeError` created in `src/python.rs`), and panics a
 `RuntimeError`. The subprocess's stderr is redirected to a temp file and surfaced in the raised
 `RuntimeError` when the process dies.
 
@@ -388,7 +396,8 @@ like `fourfold/deg15/gw-rational` (the suffix predates the removal of the floati
 and is kept so that saved criterion baselines still match), and any argument after `--` that is
 not a flag filters on it. Adding a model or a degree means adding a row to `scenarios()`; nothing else has to
 change. Each row also names a `Pipeline`: the reference (`Method::Reference`, explicitly, since
-the default is `Auto`), or the modular one without or with the supplied cone data. The modular
+the default is `Auto`), or the modular one without or with the supplied cone data (the
+inequalities as the cone, and the Hilbert bases as `Options::hilbert_bases`). The modular
 ids end in `/modular` or `/modular-cones` (the reference ones have no suffix, so that older
 baselines still match), so `cargo bench -- modular` runs only those. The modular scenarios go
 to much higher degrees, mostly with the cone data. Those without it compute the cone data from

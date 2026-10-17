@@ -6,11 +6,12 @@
 //! classes), grading vectors and strata are what `cgv_phase.prepare` derives from them.
 
 use cygv::cone::facets;
-use cygv::dispatch::{compute_gv_rat_nfold, compute_gv_rat_threefold, ComputeError};
-use cygv::malachite::Integer;
+use cygv::malachite::{Integer, Rational};
 use cygv::phase::{Fan, FanError};
-use cygv::{Method, Stratum};
-use nalgebra::{DMatrix, RowDVector};
+use cygv::{
+    compute_gv, Ambient, Error, Geometry, Method, MoriCone, Options, Problem, Selection, Stratum,
+};
+use nalgebra::DMatrix;
 use std::collections::HashMap;
 
 /// A stratum: its three divisors and its class, as fractions.
@@ -1111,7 +1112,10 @@ fn test_phases() {
             .iter()
             .map(|(divisors, class)| Stratum {
                 divisors: *divisors,
-                class: class.to_vec(),
+                class: class
+                    .iter()
+                    .map(|&(n, d)| Rational::from(n) / Rational::from(d))
+                    .collect(),
             })
             .collect();
         assert_eq!(fan.strata(), Ok(strata), "{}", case.name);
@@ -1135,34 +1139,42 @@ fn test_phases() {
     }
 }
 
-/// The GV invariants of a case up to `max_deg` from its fan, with the given strata, without
-/// generators and with the default grading vector.
-fn gv_from_fan(
-    case: &Case,
-    max_deg: Option<u32>,
-    strata: Vec<Stratum>,
-    method: Method,
-) -> Result<HashMap<Vec<i32>, Integer>, ComputeError> {
-    let res = compute_gv_rat_threefold(
-        DMatrix::zeros(0, 0),
-        RowDVector::zeros(0),
-        max_deg,
-        None,
-        None,
-        columns(case.q),
-        Vec::new(),
-        case.intnums(),
-        strata,
-        Some(case.cones.iter().map(|c| c.to_vec()).collect()),
-        None,
-        None,
+/// The problem of a case up to `max_deg` from its fan, without generators and with the default
+/// grading vector.
+fn from_fan(case: &Case, max_deg: u32) -> Problem {
+    Problem {
+        geometry: Geometry {
+            q: columns(case.q),
+            intnums: case.intnums(),
+            nefpart: Vec::new(),
+            ambient: Ambient::Fan(case.cones.iter().map(|c| c.to_vec()).collect()),
+        },
+        cone: MoriCone::FromFan,
+        selection: Selection::MaxDeg(max_deg),
+        grading_vector: None,
+    }
+}
+
+/// The GV invariants of a problem.
+fn gv(problem: &Problem, method: Method) -> Result<HashMap<Vec<i32>, Integer>, Error> {
+    let options = Options {
         method,
-        false,
-    )?;
+        ..Options::default()
+    };
+    let res = compute_gv(problem, &options)?;
     Ok(res
+        .entries
         .into_iter()
-        .map(|(c, gv)| (c.as_slice().to_vec(), gv))
+        .map(|e| (e.curve, e.value))
         .collect())
+}
+
+/// The field of an input error.
+fn field(res: Result<HashMap<Vec<i32>, Integer>, Error>) -> &'static str {
+    match res {
+        Err(Error::Input { field, .. }) => field,
+        res => panic!("{res:?}"),
+    }
 }
 
 #[test]
@@ -1170,7 +1182,11 @@ fn test_compute_from_fan() {
     // The vex phase of P(1,1,2,2,2)[8] of tests/vex.rs, whose stratum and generators are
     // derived here.
     let case = CASES.iter().find(|c| c.name == "liam_h2_fan1").unwrap();
-    let gv = gv_from_fan(case, Some(6), Vec::new(), Method::Auto).unwrap();
+    let problem = from_fan(case, 6);
+    let res = compute_gv(&problem, &Options::default()).unwrap();
+    assert_eq!(res.grading_vector, [2, 1]);
+    assert!(res.report.grading_vector_derived);
+    let gv_auto = gv(&problem, Method::Auto).unwrap();
     for (c, expected) in [
         ([0, 1], 640),
         ([0, 2], 10032),
@@ -1179,96 +1195,36 @@ fn test_compute_from_fan() {
         ([1, 0], 20),
         ([1, 1], 6474),
     ] {
-        assert_eq!(gv[&c[..]], expected, "{c:?}");
+        assert_eq!(gv_auto[&c[..]], expected, "{c:?}");
     }
-    assert_eq!(
-        gv_from_fan(case, Some(6), Vec::new(), Method::Reference).unwrap(),
-        gv
-    );
+    assert_eq!(gv(&problem, Method::Reference).unwrap(), gv_auto);
 
-    // The strata cannot also be given, a computation without truncation needs the
-    // generators, and the intersection numbers are checked.
-    let stratum = Stratum {
-        divisors: [1, 2, 4],
-        class: vec![(1, 1), (-1, 1)],
-    };
-    assert!(matches!(
-        gv_from_fan(case, Some(6), vec![stratum], Method::Auto),
-        Err(ComputeError::InvalidStrata(_))
-    ));
-    assert_eq!(
-        gv_from_fan(case, None, Vec::new(), Method::Reference),
-        Err(ComputeError::MissingGenerators)
-    );
+    // The intersection numbers are checked.
     let mut wrong = Case { ..*case };
     wrong.kappa = &[[0, 1, 1, 4], [1, 1, 1, 3]];
-    assert_eq!(
-        gv_from_fan(&wrong, Some(6), Vec::new(), Method::Auto),
-        Err(ComputeError::InvalidFan(FanError::IntnumsMismatch([
-            1, 1, 1
-        ])))
-    );
+    assert_eq!(field(gv(&from_fan(&wrong, 6), Method::Auto)), "intnums");
 
     // A grading vector that is given is checked against the Mori cone, which contains the
     // class (1, -1).
-    let negative = compute_gv_rat_threefold(
-        DMatrix::zeros(0, 0),
-        RowDVector::from_row_slice(&[0, 1]),
-        Some(6),
-        None,
-        None,
-        columns(case.q),
-        Vec::new(),
-        case.intnums(),
-        Vec::new(),
-        Some(case.cones.iter().map(|c| c.to_vec()).collect()),
-        None,
-        None,
-        Method::Auto,
-        false,
-    );
-    assert_eq!(
-        negative,
-        Err(ComputeError::InvalidFan(FanError::NonpositiveGrading))
-    );
+    let negative = Problem {
+        grading_vector: Some(vec![0, 1]),
+        ..problem.clone()
+    };
+    assert_eq!(field(gv(&negative, Method::Auto)), "grading_vector");
 
-    // A fan is only supported for threefold hypersurfaces, and without one the grading
-    // vector is needed.
-    let nfold = compute_gv_rat_nfold(
-        DMatrix::zeros(0, 0),
-        RowDVector::zeros(0),
-        Some(6),
-        None,
-        None,
-        columns(case.q),
-        Vec::new(),
-        case.intnums(),
-        Vec::new(),
-        Some(case.cones.iter().map(|c| c.to_vec()).collect()),
-        None,
-        None,
-        Method::Auto,
-        false,
-    );
-    assert_eq!(
-        nfold,
-        Err(ComputeError::InvalidFan(FanError::NotHypersurface))
-    );
-    let without = compute_gv_rat_threefold(
-        DMatrix::zeros(0, 0),
-        RowDVector::zeros(0),
-        Some(6),
-        None,
-        None,
-        columns(case.q),
-        Vec::new(),
-        case.intnums(),
-        Vec::new(),
-        None,
-        None,
-        None,
-        Method::Auto,
-        false,
-    );
-    assert_eq!(without, Err(ComputeError::MissingGradingVector));
+    // Without a fan, the Mori cone cannot come from it.
+    let plain = Problem {
+        geometry: Geometry {
+            ambient: Ambient::Plain,
+            ..problem.geometry.clone()
+        },
+        ..problem.clone()
+    };
+    assert_eq!(field(gv(&plain, Method::Auto)), "generators");
+    // With generators, they span the cone instead of the walls of the fan.
+    let generators = Problem {
+        cone: MoriCone::Generators(DMatrix::from_row_slice(2, 2, &[0, 1, 1, -1])),
+        ..problem.clone()
+    };
+    assert_eq!(gv(&generators, Method::Auto).unwrap(), gv_auto);
 }

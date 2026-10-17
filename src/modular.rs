@@ -13,7 +13,7 @@
 //! passes with new primes until the lift of the residues ([`crt`]) is stable, and
 //! [`compute_gw`] derives the GW invariants from the result.
 //!
-//! The entry points of [`dispatch`](crate::dispatch) reach it through
+//! The entry points ([`crate::compute`] and the others) reach it through
 //! [`Method`](crate::Method). The candidates come either from the Hilbert bases of the cones
 //! of [`crate::cone`] (always, through the entry points) or from the enumeration of the
 //! semigroup of the generators. With [`Options::certify`] the results are proven by bounds
@@ -220,7 +220,7 @@ impl Geometry {
             let mut divisors = stratum.divisors;
             divisors.sort_unstable();
             let weighted_class = stratum
-                .class
+                .class_i64()
                 .iter()
                 .zip(grading_vector)
                 .filter(|&(&(num, _), &w)| num != 0 && w != 0)
@@ -420,8 +420,22 @@ impl Geometry {
 }
 
 /// The options of [`compute_gv`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Options {
+    /// The number of worker threads, at least one, or `None` for one per core. The run
+    /// builds a thread pool of its own rather than use rayon's global one.
+    pub threads: Option<usize>,
+    /// Whether to prove the lift right (`PLAN.md` phase 8): the invariants are bounded by
+    /// [`bound_gv`], and more primes are taken until every bound is below half their product,
+    /// so that, by induction on degree, every invariant is the one its residues determine.
+    pub certify: bool,
+    /// How many primes the run takes, and how the extraction parallelizes.
+    pub tuning: Tuning,
+}
+
+/// The tuning of [`compute_gv`], which does not change its results.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tuning {
     /// The number of primes that only check the lift, at least one: the lift from the other
     /// primes is accepted when it agrees with these at every curve.
     pub check_primes: usize,
@@ -434,27 +448,18 @@ pub struct Options {
     pub min_primes: usize,
     /// The number of passes after which an unstable lift is an error.
     pub max_passes: usize,
-    /// The number of worker threads, at least one, or `None` for one per core. The run
-    /// builds a thread pool of its own rather than use rayon's global one.
-    pub threads: Option<usize>,
     /// How the extraction parallelizes.
     pub extraction: extraction::Tuning,
-    /// Whether to prove the lift right (`PLAN.md` phase 8): the invariants are bounded by
-    /// [`bound_gv`], and more primes are taken until every bound is below half their product,
-    /// so that, by induction on degree, every invariant is the one its residues determine.
-    pub certify: bool,
 }
 
-impl Default for Options {
+impl Default for Tuning {
     fn default() -> Self {
         Self {
             check_primes: 1,
             lanes: None,
             min_primes: 0,
             max_passes: 8,
-            threads: None,
             extraction: extraction::Tuning::default(),
-            certify: false,
         }
     }
 }
@@ -637,7 +642,7 @@ fn run<T>(
     }
     let run = prep.run(geometry, options);
     let gv = prep.pool.install(|| {
-        let lanes = match options.lanes {
+        let lanes = match options.tuning.lanes {
             Some(lanes) => lanes,
             None => choose_lanes(&run, options)?,
         };
@@ -688,7 +693,7 @@ impl Prepared {
             cands: &self.cands,
             max_deg: self.max_deg,
             lightcone: &self.lightcone,
-            tuning: &options.extraction,
+            tuning: &options.tuning.extraction,
         }
     }
 }
@@ -702,8 +707,8 @@ fn prepare(
     geometry: &Geometry,
     options: &Options,
 ) -> Result<Prepared, Error> {
-    if options.check_primes == 0
-        || options.lanes.is_some_and(|l| !(2..=4).contains(&l))
+    if options.tuning.check_primes == 0
+        || options.tuning.lanes.is_some_and(|l| !(2..=4).contains(&l))
         || options.threads == Some(0)
     {
         return Err(Error::InvalidOptions);
@@ -761,7 +766,10 @@ fn choose_lanes<L: KeyLayout>(run: &Run<'_, L>, options: &Options) -> Result<usi
         ..*run
     };
     let probe_options = Options {
-        min_primes: 0,
+        tuning: Tuning {
+            min_primes: 0,
+            ..options.tuning.clone()
+        },
         ..options.clone()
     };
     let width = run.geometry.n_forms();
@@ -809,7 +817,7 @@ fn choose_lanes<L: KeyLayout>(run: &Run<'_, L>, options: &Options) -> Result<usi
     while 62.0 * k as f64 - 2.0 < predicted {
         k += 1;
     }
-    Ok((k + options.check_primes).clamp(2, 4))
+    Ok((k + options.tuning.check_primes).clamp(2, 4))
 }
 
 /// What the passes of one run share.
@@ -825,7 +833,7 @@ struct Run<'a, L: KeyLayout> {
 
 /// Adds passes over `NL` primes each to `residues`, taking the primes that follow theirs in
 /// [`field::primes`], until there are at least `min_primes` and the lift is stable, within
-/// `options.max_passes` passes in all.
+/// `options.tuning.max_passes` passes in all.
 ///
 /// A pass whose primes divide a denominator of the strata, which they cannot invert, is
 /// skipped, and counts towards the passes.
@@ -840,7 +848,7 @@ fn passes<const NL: usize, L: KeyLayout>(
         primes.find(|&p| p == last);
     }
     let mut skipped = 0;
-    while residues.primes().len() + skipped * NL < options.max_passes * NL {
+    while residues.primes().len() + skipped * NL < options.tuning.max_passes * NL {
         let ring = LaneField::<NL>::new(core::array::from_fn(|_| primes.next().unwrap()));
         match pass(&ring, run, None) {
             Ok(gv) => residues.add_pass(&ring, &gv),
@@ -850,7 +858,8 @@ fn passes<const NL: usize, L: KeyLayout>(
             }
             Err(e) => return Err(e),
         }
-        if residues.primes().len() >= min_primes && residues.is_stable(options.check_primes) {
+        if residues.primes().len() >= min_primes && residues.is_stable(options.tuning.check_primes)
+        {
             return Ok(residues);
         }
     }
@@ -864,7 +873,12 @@ fn lifted<const NL: usize>(
     options: &Options,
 ) -> Result<Vec<(PackedKey, u32, Vec<Integer>)>, Error> {
     let width = run.geometry.n_forms();
-    let mut residues = passes::<NL, _>(run, options, Residues::new(width), options.min_primes)?;
+    let mut residues = passes::<NL, _>(
+        run,
+        options,
+        Residues::new(width),
+        options.tuning.min_primes,
+    )?;
     loop {
         let lift = residues.lift();
         if !options.certify {
@@ -1180,6 +1194,24 @@ mod tests {
         check_bounds("P11222", &p11222, &[1, 1], &DMatrix::identity(2, 2), 20);
     }
 
+    /// The geometry, grading vector and generators of an input of the command line interface.
+    #[cfg(feature = "cli")]
+    fn load(yaml: &str) -> (Geometry, Vec<i32>, DMatrix<i32>) {
+        let problem = crate::io::Input::load_all(yaml).unwrap().remove(0).problem;
+        let w = problem.grading_vector.unwrap();
+        let g = &problem.geometry;
+        let nefpart: Vec<DVector<i32>> = g
+            .nefpart
+            .iter()
+            .map(|p| DVector::from_iterator(p.len(), p.iter().map(|&r| r as i32)))
+            .collect();
+        let geometry = Geometry::from_toric(&g.q, &nefpart, &g.intnums, g.cy_kind(), &w).unwrap();
+        let crate::MoriCone::Generators(generators) = problem.cone else {
+            panic!("the input has no generators")
+        };
+        (geometry, w, generators)
+    }
+
     /// A realistic threefold, and the fourfold of the examples, an n-fold with fourteen
     /// components.
     #[test]
@@ -1189,12 +1221,8 @@ mod tests {
             ("h11_9", include_str!("../benches/data/h11_9.yaml"), 7),
             ("fourfold", include_str!("../examples/fourfold.yaml"), 8),
         ] {
-            let input = crate::io::Input::load_all(yaml).unwrap().remove(0);
-            let w: Vec<i32> = input.grading_vector.iter().copied().collect();
-            let geometry =
-                Geometry::from_toric(&input.q, &input.nefpart, &input.intnums, input.cy_kind, &w)
-                    .unwrap();
-            check_bounds(name, &geometry, &w, &input.generators, max_deg);
+            let (geometry, w, generators) = load(yaml);
+            check_bounds(name, &geometry, &w, &generators, max_deg);
         }
     }
 
@@ -1204,19 +1232,18 @@ mod tests {
     #[cfg(feature = "cli")]
     fn test_bounds_threads() {
         let yaml = include_str!("../benches/data/h11_9.yaml");
-        let input = crate::io::Input::load_all(yaml).unwrap().remove(0);
-        let w: Vec<i32> = input.grading_vector.iter().copied().collect();
-        let geometry =
-            Geometry::from_toric(&input.q, &input.nefpart, &input.intnums, input.cy_kind, &w)
-                .unwrap();
-        let gens: Vec<&[i32]> = input.generators.as_slice().chunks(w.len()).collect();
+        let (geometry, w, generators) = load(yaml);
+        let gens: Vec<&[i32]> = generators.as_slice().chunks(w.len()).collect();
         let source = || CandidateSource::Generators(&gens);
         let max_deg = 8;
         let gv = compute_gv(source(), &w, max_deg, &[], &geometry, &Options::default()).unwrap();
         let bounds = |threads, extraction| {
             let options = Options {
                 threads: Some(threads),
-                extraction,
+                tuning: Tuning {
+                    extraction,
+                    ..Tuning::default()
+                },
                 ..Options::default()
             };
             bound_gv(source(), &w, max_deg, &[], &geometry, &options, &gv).unwrap()
@@ -1267,8 +1294,11 @@ mod tests {
         let source = || CandidateSource::Generators(&gens);
         let run = |max_deg, certify| {
             let options = Options {
-                lanes: Some(2),
                 certify,
+                tuning: Tuning {
+                    lanes: Some(2),
+                    ..Tuning::default()
+                },
                 ..Options::default()
             };
             compute_gv(source(), &[1], max_deg, &[], &geometry, &options)
@@ -1309,7 +1339,7 @@ mod tests {
         let w = [2, 1];
         let strata = [Stratum {
             divisors: [1, 2, 4],
-            class: vec![(1, 1), (-1, 1)],
+            class: crate::class(&[(1, 1), (-1, 1)]),
         }];
         let geometry = Geometry::from_toric(&q, &[], &intnums, CYKind::Threefold, &w)
             .unwrap()
@@ -1340,26 +1370,33 @@ mod tests {
         let w = [2, 1];
         let gens: [&[i32]; 2] = [&[0, 1], &[1, -1]];
         let p = field::primes().next().unwrap() as i64;
-        let run = |class| {
-            let strata = [Stratum {
-                divisors: [1, 2, 4],
-                class,
-            }];
-            let geometry = Geometry::from_toric(&q, &[], &intnums, CYKind::Threefold, &w)
-                .unwrap()
-                .with_strata(&strata, &w)
-                .unwrap();
+        let strata = [Stratum {
+            divisors: [1, 2, 4],
+            class: crate::class(&[(1, 1), (-1, 1)]),
+        }];
+        let geometry = Geometry::from_toric(&q, &[], &intnums, CYKind::Threefold, &w)
+            .unwrap()
+            .with_strata(&strata, &w)
+            .unwrap();
+        let run = |geometry: &Geometry| {
             let options = Options {
-                lanes: Some(2),
+                tuning: Tuning {
+                    lanes: Some(2),
+                    ..Tuning::default()
+                },
                 ..Options::default()
             };
             let source = CandidateSource::Generators(&gens);
-            compute_gv(source, &w, 8, &[], &geometry, &options).unwrap()
+            compute_gv(source, &w, 8, &[], geometry, &options).unwrap()
         };
-        let expected = run(vec![(1, 1), (-1, 1)]);
+        let expected = run(&geometry);
         assert!(!expected.is_empty());
         // The same class, with the first prime as a denominator (where the grading is one,
-        // since the numerators are multiplied by it).
-        assert_eq!(run(vec![(1, 1), (-p, p)]), expected);
+        // since the numerators are multiplied by it), which the classes of the input, being
+        // reduced, cannot have, but which the computation must not depend on.
+        let mut unreduced = geometry.clone();
+        assert_eq!(unreduced.strata[0].weighted_class, [(2, 1), (-1, 1)]);
+        unreduced.strata[0].weighted_class[1] = (-p, p);
+        assert_eq!(run(&unreduced), expected);
     }
 }

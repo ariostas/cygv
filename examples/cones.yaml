@@ -18,7 +18,7 @@ mori_hyperplanes: [[1, 0], [0, 1]]
 # the cone K_T of the curve classes in the Mori cone that only meet the divisors in T
 # negatively. Here only the last divisor can be negative, on the classes (x, y) with
 # x < 2y.
-cones:
+hilbert_bases:
   - {divisors: [0], hilbert_basis: [[1, 0], [2, 1]]}
   - {divisors: [0, 1], hilbert_basis: [[1, 0], [2, 1]]}
   - {divisors: [0, 2], hilbert_basis: [[1, 0], [2, 1]]}

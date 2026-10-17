@@ -57,7 +57,7 @@ pub enum FanError {
     /// An entry of the result, or an intermediate one, does not fit its integer type.
     TooLarge,
     /// A fan was given for something other than a threefold hypersurface (returned by the
-    /// entry points of [`crate::dispatch`]).
+    /// entry points, such as [`crate::compute`]).
     NotHypersurface,
 }
 
@@ -433,11 +433,10 @@ impl Fan {
                 [a, b, c] => [a, b, c],
                 _ => unreachable!(),
             };
-            let class = self
-                .wall_class(divisors)
-                .iter()
-                .map(fraction)
-                .collect::<Result<_, _>>()?;
+            let class = self.wall_class(divisors);
+            if class.iter().any(|x| crate::fraction_i64(x).is_none()) {
+                return Err(FanError::TooLarge);
+            }
             strata.push(Stratum { divisors, class });
         }
         Ok(strata)
