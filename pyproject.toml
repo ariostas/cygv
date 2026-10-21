@@ -73,8 +73,6 @@ testpaths = [
 
 [tool.ruff]
 src = ["python"]
-# see the comment at the top of .pre-commit-config.yaml
-extend-exclude = ["cgv"]
 
 [tool.ruff.lint]
 extend-select = [

@@ -1,9 +1,11 @@
-//! Tests of the phases derived from fans, against `cgv/tools/cgv_phase.py`.
+//! Tests of the phases derived from fans, against `cgv/tools/cgv_phase.py` of the C program of
+//! PR #94.
 //!
-//! The fans are those of the vex references of the C program of PR #94 (`cgv/tests/refs_vex`):
-//! every fine regular fan of two small polytopes, and both sides of the pairs of a vex phase
-//! and an FRST of a different polytope with the same CY. The expected Mori cones (the wall
-//! classes), grading vectors and strata are what `cgv_phase.prepare` derives from them.
+//! The fans are those of its vex references (`tests/data/refs_vex.yaml`, whose invariants
+//! `tests/fixtures.rs` checks): every fine regular fan of two small polytopes, and both sides
+//! of the pairs of a vex phase and an FRST of a different polytope with the same CY. The
+//! expected Mori cones (the wall classes), grading vectors and strata are what
+//! `cgv_phase.prepare` derived from them.
 
 use cygv::cone::facets;
 use cygv::malachite::{Integer, Rational};

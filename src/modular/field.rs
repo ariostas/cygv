@@ -275,8 +275,8 @@ pub fn is_prime(n: u64) -> bool {
 /// The primes that passes take their lanes from: the primes below $2^{62}$, counting down.
 ///
 /// The sequence is fixed, so a pass is identified by the indices of its primes in it. It is
-/// the same sequence as `nth_prime` in the C oracle (`cgv/gv.c`), so residues can be compared
-/// with it lane for lane.
+/// the same sequence as `nth_prime` in the C program of PR #94 (`cgv/gv.c` there), so residues
+/// can be compared with it lane for lane.
 pub fn primes() -> impl Iterator<Item = u64> {
     core::iter::successors(Some((1u64 << 62) - 1), |n| Some(n - 2)).filter(|&n| is_prime(n))
 }

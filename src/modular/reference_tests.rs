@@ -819,7 +819,7 @@ fn test_target_points_realistic() {
 }
 
 /// A vex phase with $h^{1,1} = 2$, a flop of the resolved $\mathbb{P}(1,1,2,2,2)[8]$
-/// (`liam_h2_fan1` of `cgv/tests/refs_vex`), whose stratum gives the curves of negative
+/// (`liam_h2_fan1` of `tests/data/refs_vex.yaml`), whose stratum gives the curves of negative
 /// anticanonical degree their period data. The generators are the Hilbert basis of its Mori
 /// cone.
 fn h2_vex(max_deg: u32) -> Case {
@@ -839,7 +839,7 @@ fn h2_vex(max_deg: u32) -> Case {
     }
 }
 
-/// A vex phase with $h^{1,1} = 4$ (`pair_h4_1` of `cgv/tests/refs_vex`), whose stratum class
+/// A vex phase with $h^{1,1} = 4$ (`pair_h4_1_vex` of `tests/data/refs_vex.yaml`), whose stratum class
 /// has entries of both signs.
 fn h4_vex(max_deg: u32) -> Case {
     Case {

@@ -1059,12 +1059,24 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     24.4 / 27.5 / 4.5 s; `h11_10` at 20, one thread – / 647 / 51 s, 8 threads – / 244 /
     29 s. Certified runs: `h11_8` 14.3 → 3.5 s, `h11_11` 12.4 → 5.0 s (8 threads).
 - [ ] **9. Wrap up.**
-  - [ ] Confirm with the PR author that the provenance of `refs_vex` allows shipping it as
-    fixtures (5.2).
-  - [ ] The selected oracle references converted into Rust fixtures (5.2), *before* `cgv/` is
-    removed.
-  - [ ] `cgv/` removed, and with it its three excludes (`.pre-commit-config.yaml`,
-    `[tool.ruff]` in `pyproject.toml`, `exclude` in `Cargo.toml`).
+  - [x] Confirm with the PR author that the provenance of `refs_vex` allows shipping it as
+    fixtures (5.2): confirmed on 2026-10-21.
+  - [x] The selected oracle references converted into Rust fixtures (5.2), *before* `cgv/` is
+    removed: `tests/data/refs.yaml` and `refs_vex.yaml`, CLI inputs, with the expected results
+    in the output format in `refs_gv.yaml` and `refs_vex_gv.yaml` (0.99 MB together), checked
+    by `tests/fixtures.rs` (11 s in a debug build, the reference method too on 16 of the cheap
+    ones). From `cgv/tests/refs` (cygv 0.2.3): the quintic at 10, `2d7b127a` (`h11_9`) at 10
+    and under its sparse grading at 300, and one degree of each of the ten $h^{1,1} = 10$
+    geometries (5 or 8 times the lowest degree of a generator) plus the sparse grading at 7
+    times for the four that have one; the cones as their inequalities, computed from the
+    generators by `cone::facets`. From `refs_vex`: all 12 phases at 20 or 14, and both sides
+    of the 4 pairs at 20, the FRST side's values mapped from the vex side by $T$. Before the
+    removal, all 38 references of `refs` (up to degree 22 for `2d7b127a`, 397,775 invariants)
+    and all 20 of `refs_vex` matched the CLI exactly, and the reference method matched on the
+    pairs, the quintic, `2d7b127a` at 10 and three small $h^{1,1} = 10$ ones.
+  - [x] `cgv/` removed (2026-10-21; the last commit with it is 77fbbd9), and with it its three
+    excludes (`.pre-commit-config.yaml`, `[tool.ruff]` in `pyproject.toml`, `exclude` in
+    `Cargo.toml`).
   - [ ] The consistency check of 5.2 item 3 in the reference ($\mathrm{inst}_t[C]/C_t$ equal
     across $t$), so that inconsistent input is an error in both methods rather than
     different numbers.
@@ -1236,14 +1248,15 @@ Layers, from cheapest to most independent:
    `Cargo.toml`). Gap: there is no independent reference for complete intersections or n-folds;
    look for published tables to use as fixtures. (`examples/fourfold.yaml` used to describe
    itself as a hypersurface; it is the complete intersection of the `fourfold` bench model,
-   and has its nef partition since phase 3b.) And before shipping `refs_vex` as fixtures,
-   confirm with the PR author that their provenance allows it.
+   and has its nef partition since phase 3b.) Done in phase 9: `tests/fixtures.rs`, as plain
+   YAML rather than compressed files (git compresses them anyway, and they stay readable).
 5. *Stress test*, in the spirit of `cgv/tests/stress.py`: repeated runs at several thread
    counts, outputs compared with each other, to catch races in phase 5's parallel code. Marked
    `#[ignore]` and run before releases and on parallelism changes, not on every CI run.
-6. *The C oracle*, until phase 9: development-time comparisons through `cgv/tools`, never in
-   CI (it needs a C toolchain and normaliz). Same prime sequence, so residues can be compared
-   one for one when narrowing a mismatch down.
+6. *The C oracle*, until phase 9 (removed; 77fbbd9 is the last commit with it):
+   development-time comparisons through `cgv/tools`, never in CI (it needs a C toolchain and
+   normaliz). Same prime sequence, so residues can be compared one for one when narrowing a
+   mismatch down.
 
 ### 5.3 Follow-ups
 
@@ -1680,8 +1693,8 @@ Other follow-ups, not from #102:
    not committed.
 
    `cgv/` is built with its own Makefile (`make -C cgv cgv`) and driven through
-   `cgv/tools/cgv_run.py`, which needs `numpy`, and `normaliz` for the cone path. It is removed
-   in phase 9. Synced to the version in #100 (d794626, phase 0d), so the oracle covers
+   `cgv/tools/cgv_run.py`, which needs `numpy`, and `normaliz` for the cone path. It was removed
+   in phase 9 (77fbbd9 is the last commit with it). Synced to the version in #100 (d794626, phase 0d), so the oracle covers
    lightcones and vex phases and carries `tests/refs_vex`. Its input format is "cgv 2" and it
    always needs normaliz (development machines only). After the sync, `tests/regress.py` (38
    frozen cygv outputs) and `tests/vex_regress.py` (16 phase references, with lightcone

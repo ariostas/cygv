@@ -1,9 +1,10 @@
 //! Tests of vex phases of the ambient toric variety, which need strata.
 //!
-//! The geometries come from the vex references of the C program of PR #94 (`cgv/tests/refs_vex`):
-//! the charges and intersection numbers there, and the Hilbert basis of the Mori cone and the
-//! strata that `cgv/tools/cgv_phase.py` derives from the fans. The tests only check properties
-//! of the results, not the stored tables.
+//! The geometries come from the vex references of the C program of PR #94
+//! (`tests/data/refs_vex.yaml`): the charges and intersection numbers there, and the Hilbert
+//! basis of the Mori cone and the strata that its `cgv_phase.py` derived from the fans. The
+//! tests check properties of the results; `tests/fixtures.rs` compares them with the stored
+//! tables.
 
 use cygv::malachite::{Integer, Rational};
 use cygv::modular;

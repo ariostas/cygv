@@ -109,10 +109,10 @@ left out, at most two left out, three for a stratum), dropping sums above `max_d
 is sound because every cone is then inside the Mori cone. Errors are `ConeError`. Phase 7b
 also tried enumerating the lattice points of each $K_T$ directly (`PLAN.md`); both matched
 Normaliz, and the Hilbert bases won because they feed the existing cone path unchanged.
-`src/phase.rs` (phase 7c, a port of `cgv/tools/cgv_phase.py`): `phase::Fan` takes the maximal
-cones of the fan of the ambient toric fourfold and the charges, with the rays as the integer
-Gale dual of the charges (`kernel_basis` of `src/cone/hilbert.rs`), and checks the paper's
-assumptions as far as the fan shows them (simplicial, complete, a reflexive polytope of rays
+`src/phase.rs` (phase 7c, a port of `cgv_phase.py` of the C program of PR #94): `phase::Fan`
+takes the maximal cones of the fan of the ambient toric fourfold and the charges, with the
+rays as the integer Gale dual of the charges (`kernel_basis` of `src/cone/hilbert.rs`), and
+checks the paper's assumptions as far as the fan shows them (simplicial, complete, a reflexive polytope of rays
 none of which is interior to a facet, regular through a pointed Mori cone, no vex 2-cones;
 that every boundary point not interior to a facet is a ray is not checked). `Fan::strata`
 gives the strata (the 3-cones whose rays share no facet of the polytope, from
@@ -126,7 +126,8 @@ inverse of the charges computed once (`left_inverse`, free for CYTools' identity
 Everything but `mori_cone`, a double description in dimension $h^{1,1}$, takes about a
 second at $h^{1,1} = 491$, so the dispatch only calls it for a default it needs. Exact
 `malachite::Rational` arithmetic; errors are `FanError`.
-`tests/phase.rs` compares it with `cgv_phase.prepare` on the 20 fans of `cgv/tests/refs_vex`.
+`tests/phase.rs` compares it with what `cgv_phase.prepare` derived for the 20 fans of
+`tests/data/refs_vex.yaml`.
 
 `src/modular.rs` and `src/modular/` hold the faster pipeline, which is still being extended and
 tuned. It computes modulo word-sized primes and lifts the results with the CRT, and shares no
@@ -351,10 +352,16 @@ groups (`fan`/`strata`; `generators`/`mori_hyperplanes`(+`mori_equations`)/nothi
 output carries `dimension`, the `grading_vector` and a `report` line (method, certified,
 grading_vector_derived; no timing, so outputs stay comparable), and `surface` for n-folds.
 Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
-`tests/data/*.yaml` holds the inequalities and Hilbert bases computed with Normaliz for
+`tests/data/h11_9_*.yaml` holds the inequalities and Hilbert bases computed with Normaliz for
 `benches/data/h11_9.yaml` (the whole Mori cone, and a facet with its generators), which
 `tests/cones.rs` and the modular pipeline's comparison tests append to that file in place of
-its generators; it is excluded from the published crate.
+its generators. `tests/data/refs.yaml` and `refs_vex.yaml` are the frozen fixtures (`PLAN.md`
+5.2, layer 4): CLI inputs whose GV invariants neither pipeline computed (cygv 0.2.3 for
+threefolds up to $h^{1,1} = 10$, the C program of PR #94 for vex phases and FRSTs, with the
+FRST side of each pair mapped from its vex phase), with the expected results in the output
+format in the matching `*_gv.yaml`, compared by `tests/fixtures.rs` (the reference method too,
+on the cheap ones). The files say where each geometry comes from, and adding a fixture is a
+document in each. `tests/data/` is excluded from the published crate.
 
 The whole CLI sits behind the default `cli` feature: `clap` and `yaml-rust2` are optional
 dependencies, `[[bin]]` declares `required-features = ["cli"]`, and both `io` (in `src/lib.rs`) and
