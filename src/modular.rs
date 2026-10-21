@@ -29,6 +29,7 @@ pub mod extraction;
 pub mod field;
 pub mod instanton;
 pub mod key;
+pub mod lattice;
 pub mod level;
 pub mod lightcone;
 pub mod multicover;
@@ -38,13 +39,14 @@ pub mod table;
 #[cfg(test)]
 mod reference_tests;
 
+use crate::cone::ConeData;
 use crate::{check_strata, CYKind, Stratum, NON_INTEGER_CAUSES};
 use bound::{Bound, BoundRing};
 pub use candidates::CandidateSource;
 use core::fmt;
 use crt::Residues;
 use field::{LaneField, Ring};
-use key::{KeyError, KeyLayout, PackedKey, PackedLayout};
+use key::{field_widths, KeyError, KeyLayout, PackedKey, PackedLayout, Wide, Word};
 use lightcone::Lightcone;
 use malachite::base::num::logic::traits::SignificantBits;
 use malachite::{Integer, Natural, Rational};
@@ -79,6 +81,9 @@ pub enum Error {
     /// Certification was asked for in a vex phase, which the bounds do not cover yet (nor
     /// those of the C program).
     CertifyStrata,
+    /// A basis of the lattice the curve classes span, or the coordinates in it, overflow
+    /// their integers.
+    LatticeTooLarge,
 }
 
 impl fmt::Display for Error {
@@ -99,6 +104,10 @@ impl fmt::Display for Error {
             Self::NotInvertible => write!(f, "a value is not invertible modulo one of the primes"),
             Self::InvalidOptions => write!(f, "the options are out of range"),
             Self::CertifyStrata => write!(f, "the invariants of a vex phase cannot be certified"),
+            Self::LatticeTooLarge => write!(
+                f,
+                "the basis of the lattice that the curve classes span has entries too large"
+            ),
             Self::InvalidStrata => write!(
                 f,
                 "the strata must be on three distinct divisors of a threefold hypersurface"
@@ -138,6 +147,13 @@ impl From<KeyError> for Error {
 ///
 /// The kind of the Calabi-Yau also decides how the invariants are read off the instanton
 /// series (see [`multicover`]).
+///
+/// The curve classes may be in the coordinates of a basis of a sublattice of rank below
+/// $h^{1,1}$ instead (see [`lattice`] and [`Geometry::in_lattice`]). The charges then have two
+/// sides: as functions on the curve classes, [`Geometry::q`] and [`Geometry::q0`], in those
+/// coordinates, and as divisor classes, [`Geometry::divisor_q`] and
+/// [`Geometry::divisor_q0`], in the $h^{1,1}$ coordinates of the forms and of the derivatives
+/// of the period.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Geometry {
     kind: CYKind,
@@ -146,6 +162,19 @@ pub struct Geometry {
     q0: Vec<i32>,
     forms: Vec<i64>,
     strata: Vec<VexStratum>,
+    curves: Option<CurveSide>,
+}
+
+/// The curve side of a [`Geometry`] whose curve classes are in the coordinates of a lattice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CurveSide {
+    /// The rank of the lattice.
+    dim: usize,
+    /// The charges and the anticanonical charges on its basis, with rows of `dim` entries.
+    q: Vec<i32>,
+    q0: Vec<i32>,
+    /// The basis, one row of $h^{1,1}$ entries per basis vector.
+    basis: Vec<i64>,
 }
 
 /// A stratum of a vex phase, as the period step uses it.
@@ -191,6 +220,34 @@ impl Geometry {
             q0,
             forms,
             strata: Vec::new(),
+            curves: None,
+        })
+    }
+
+    /// The same geometry with the curve classes in the coordinates of the reduced basis of
+    /// `lattice`.
+    pub fn in_lattice(&self, lattice: &lattice::Lattice) -> Result<Self, Error> {
+        if lattice.h11() != self.h11 || self.curves.is_some() {
+            return Err(Error::DimensionMismatch);
+        }
+        let restrict = |rows: &[i32]| -> Result<Vec<i32>, Error> {
+            Ok(rows
+                .chunks_exact(self.h11)
+                .map(|r| lattice.restrict(r))
+                .collect::<Result<Vec<_>, _>>()?
+                .concat())
+        };
+        let dim = lattice.rank();
+        Ok(Self {
+            curves: Some(CurveSide {
+                dim,
+                q: restrict(&self.q)?,
+                q0: restrict(&self.q0)?,
+                basis: (0..dim)
+                    .flat_map(|j| lattice.basis_vector(j).iter().copied())
+                    .collect(),
+            }),
+            ..self.clone()
         })
     }
 
@@ -337,10 +394,25 @@ impl Geometry {
         self.kind
     }
 
-    /// The dimension of the space of curve classes.
+    /// $h^{1,1}$, the dimension of the space of divisor classes, and of curve classes unless
+    /// they are in the coordinates of a lattice.
     #[inline]
     pub fn h11(&self) -> usize {
         self.h11
+    }
+
+    /// The number of coordinates of a curve class: $h^{1,1}$, or the rank of the lattice the
+    /// curve classes are in.
+    #[inline]
+    pub fn dim(&self) -> usize {
+        self.curves.as_ref().map_or(self.h11, |c| c.dim)
+    }
+
+    /// The basis of the lattice the curve classes are in, as rows of $h^{1,1}$ entries, if
+    /// any.
+    #[inline]
+    pub fn curve_basis(&self) -> Option<&[i64]> {
+        self.curves.as_ref().map(|c| &c.basis[..])
     }
 
     /// The number of toric divisors.
@@ -349,9 +421,18 @@ impl Geometry {
         self.q.len() / self.h11
     }
 
-    /// The charges of divisor `r`.
+    /// The charges of divisor `r`, as a function on the curve classes.
     #[inline]
     pub fn q(&self, r: usize) -> &[i32] {
+        match &self.curves {
+            Some(c) => &c.q[r * c.dim..(r + 1) * c.dim],
+            None => self.divisor_q(r),
+        }
+    }
+
+    /// The charges of divisor `r`, as a divisor class.
+    #[inline]
+    pub fn divisor_q(&self, r: usize) -> &[i32] {
         &self.q[r * self.h11..(r + 1) * self.h11]
     }
 
@@ -361,9 +442,18 @@ impl Geometry {
         self.q0.len() / self.h11
     }
 
-    /// The anticanonical charges of part `j`.
+    /// The anticanonical charges of part `j`, as a function on the curve classes.
     #[inline]
     pub fn q0(&self, j: usize) -> &[i32] {
+        match &self.curves {
+            Some(c) => &c.q0[j * c.dim..(j + 1) * c.dim],
+            None => self.divisor_q0(j),
+        }
+    }
+
+    /// The anticanonical charges of part `j`, as a divisor class.
+    #[inline]
+    pub fn divisor_q0(&self, j: usize) -> &[i32] {
         &self.q0[j * self.h11..(j + 1) * self.h11]
     }
 
@@ -442,12 +532,21 @@ pub struct Tuning {
     /// The number of primes per pass, from 2 to 4, or `None` to choose it from the size of the
     /// invariants: up to degree 12 two, and above that as many as the largest invariant needs,
     /// predicted from a run at 3/4 of the degree, plus the check primes, as the C program's
-    /// driver does, but at most four (passes are added if they are not enough).
+    /// driver does, but at most four (passes are added if they are not enough). Keys wider
+    /// than 128 bits always take four.
     pub lanes: Option<usize>,
     /// The minimum number of primes, even if fewer give a stable lift.
     pub min_primes: usize,
     /// The number of passes after which an unstable lift is an error.
     pub max_passes: usize,
+    /// The least number of bits of the keys, at most 512: they take the narrowest of 128, 256
+    /// and 512 bits that holds the curve classes and is at least this wide. For testing the
+    /// wider keys.
+    pub min_key_bits: u32,
+    /// Whether to key the curve classes by their coordinates in a reduced basis of the
+    /// lattice they span, when it has a lower rank than $h^{1,1}$ (see [`lattice`]), which
+    /// takes far fewer bits on a face of the Mori cone.
+    pub lattice: bool,
     /// How the extraction parallelizes.
     pub extraction: extraction::Tuning,
 }
@@ -459,6 +558,8 @@ impl Default for Tuning {
             lanes: None,
             min_primes: 0,
             max_passes: 8,
+            min_key_bits: 0,
+            lattice: true,
             extraction: extraction::Tuning::default(),
         }
     }
@@ -553,39 +654,50 @@ pub fn bound_gv(
     if !geometry.strata().is_empty() {
         return Err(Error::CertifyStrata);
     }
-    let prep = prepare(source, grading_vector, max_deg, targets, geometry, options)?;
+    let setup = Setup::new(source, grading_vector, max_deg, targets, geometry, options)?;
+    with_word!(setup.word, W => bound_gv_in::<W>(setup, source, targets, geometry, options, candidates))
+}
+
+/// [`bound_gv`] with keys of `W`.
+fn bound_gv_in<W: Word>(
+    setup: Setup,
+    source: CandidateSource<'_>,
+    targets: &[&[i32]],
+    geometry: &Geometry,
+    options: &Options,
+    candidates: &[CurveInvariants],
+) -> Result<Vec<CurveInvariants<Bound>>, Error> {
+    let prep = setup.prepare::<W>(source, targets, geometry)?;
     if prep.cands.first().is_none_or(|&(_, deg)| deg != 0) {
         return Ok(Vec::new());
     }
     let layout = &prep.layout;
     let known: HashMap<_, Vec<Bound>> = candidates
         .iter()
-        .filter(|c| layout.fits(&c.curve))
-        .map(|c| {
+        .filter_map(|c| {
+            let curve = prep.coords(&c.curve)?;
             let vals = c.values.iter().map(Bound::from_integer).collect();
-            (layout.pack(&c.curve), vals)
+            layout.fits(&curve).then(|| (layout.pack(&curve), vals))
         })
         .collect();
     let run = prep.run(geometry, options);
     let bounds = prep.pool.install(|| bounds(&run, &known))?;
-    let mut curve = vec![0; layout.dim()];
-    Ok((0..bounds.len())
+    (0..bounds.len())
         .map(|i| {
-            layout.unpack(bounds.keys()[i], &mut curve);
-            CurveInvariants {
-                curve: curve.clone(),
+            Ok(CurveInvariants {
+                curve: prep.curve(bounds.keys()[i])?,
                 degree: bounds.degs()[i],
                 values: bounds.values(i).to_vec(),
-            }
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// The majorant pass of [`bound_gv`], with the candidates as bounds on their absolute values.
-fn bounds(
-    run: &Run<'_, PackedLayout>,
-    candidates: &HashMap<PackedKey, Vec<Bound>>,
-) -> Result<SparsePoly<PackedKey, Bound>, Error> {
+fn bounds<L: KeyLayout>(
+    run: &Run<'_, L>,
+    candidates: &HashMap<L::Key, Vec<Bound>>,
+) -> Result<SparsePoly<L::Key, Bound>, Error> {
     if !run.geometry.strata().is_empty() {
         return Err(Error::CertifyStrata);
     }
@@ -634,7 +746,62 @@ fn run<T>(
     options: &Options,
     finish: impl FnOnce(Vec<CurveInvariants>, u32, &dyn Fn(&[i32]) -> bool) -> T,
 ) -> Result<T, Error> {
-    let prep = prepare(source, grading_vector, max_deg, targets, geometry, options)?;
+    let setup = Setup::new(source, grading_vector, max_deg, targets, geometry, options)?;
+    with_word!(setup.word, W => run_in::<W, T>(setup, source, targets, geometry, options, finish))
+}
+
+/// The lift of a run: the key, degree and invariants of each curve.
+type Lifted<K> = Vec<(K, u32, Vec<Integer>)>;
+
+/// How the passes of a run with keys of a [`Word`] take their primes.
+///
+/// Keys of 128 bits take as many per pass as the options say, or [`choose_lanes`] predicts.
+/// Wider ones always take four: they only come with large geometries, and leaving out the
+/// passes of two and three primes for them keeps the build from compiling the pipeline for
+/// every number of primes and every key width.
+trait Lift: Word {
+    fn lift(
+        run: &Run<'_, PackedLayout<Self>>,
+        options: &Options,
+    ) -> Result<Lifted<PackedKey<Self>>, Error>;
+}
+
+impl Lift for u128 {
+    fn lift(
+        run: &Run<'_, PackedLayout<Self>>,
+        options: &Options,
+    ) -> Result<Lifted<PackedKey<Self>>, Error> {
+        let lanes = match options.tuning.lanes {
+            Some(lanes) => lanes,
+            None => choose_lanes(run, options)?,
+        };
+        match lanes {
+            2 => lifted::<2, _>(run, options),
+            3 => lifted::<3, _>(run, options),
+            _ => lifted::<4, _>(run, options),
+        }
+    }
+}
+
+impl<const N: usize> Lift for Wide<N> {
+    fn lift(
+        run: &Run<'_, PackedLayout<Self>>,
+        options: &Options,
+    ) -> Result<Lifted<PackedKey<Self>>, Error> {
+        lifted::<4, _>(run, options)
+    }
+}
+
+/// [`run`] with keys of `W`.
+fn run_in<W: Lift, T>(
+    setup: Setup,
+    source: CandidateSource<'_>,
+    targets: &[&[i32]],
+    geometry: &Geometry,
+    options: &Options,
+    finish: impl FnOnce(Vec<CurveInvariants>, u32, &dyn Fn(&[i32]) -> bool) -> T,
+) -> Result<T, Error> {
+    let prep = setup.prepare::<W>(source, targets, geometry)?;
     let in_lightcone = |c: &[i32]| prep.in_lightcone(c);
     // Without zero, which is the only class of degree zero, nothing is below the targets.
     if prep.cands.first().is_none_or(|&(_, deg)| deg != 0) {
@@ -642,54 +809,70 @@ fn run<T>(
     }
     let run = prep.run(geometry, options);
     let gv = prep.pool.install(|| {
-        let lanes = match options.tuning.lanes {
-            Some(lanes) => lanes,
-            None => choose_lanes(&run, options)?,
-        };
-        let residues = match lanes {
-            2 => lifted::<2>(&run, options),
-            3 => lifted::<3>(&run, options),
-            _ => lifted::<4>(&run, options),
-        }?;
-        let mut curve = vec![0; prep.layout.dim()];
-        Ok::<_, Error>(
-            residues
-                .into_iter()
-                .map(|(key, degree, values)| {
-                    prep.layout.unpack(key, &mut curve);
-                    CurveInvariants {
-                        curve: curve.clone(),
-                        degree,
-                        values,
-                    }
+        W::lift(&run, options)?
+            .into_iter()
+            .map(|(key, degree, values)| {
+                Ok(CurveInvariants {
+                    curve: prep.curve(key)?,
+                    degree,
+                    values,
                 })
-                .collect(),
-        )
+            })
+            .collect::<Result<Vec<_>, Error>>()
     })?;
     Ok(finish(gv, prep.max_deg, &in_lightcone))
 }
 
 /// What a run computes before its passes: the thread pool, the maximum degree (lowered to
-/// the targets'), the key layout, and the candidates with their lightcones.
-struct Prepared {
+/// the targets'), the key layout, the candidates with their lightcones, and the lattice whose
+/// coordinates the curve classes are in, if any, with the geometry in them. The grading
+/// vector, the candidates and the lightcones are in the coordinates of the run.
+struct Prepared<W: Word> {
     pool: rayon::ThreadPool,
     max_deg: u32,
     grading_vector: Vec<i32>,
-    layout: PackedLayout,
-    cands: Vec<(<PackedLayout as KeyLayout>::Key, u32)>,
-    lightcone: Lightcone<<PackedLayout as KeyLayout>::Key>,
+    layout: PackedLayout<W>,
+    cands: Vec<(<PackedLayout<W> as KeyLayout>::Key, u32)>,
+    lightcone: Lightcone<<PackedLayout<W> as KeyLayout>::Key>,
+    lattice: Option<(lattice::Lattice, Geometry)>,
 }
 
-impl Prepared {
-    fn in_lightcone(&self, c: &[i32]) -> bool {
-        self.layout.fits(c) && self.lightcone.contains(self.layout.pack(c), c)
+impl<W: Word> Prepared<W> {
+    /// The coordinates in the run of a curve class in the input coordinates, if it has any.
+    fn coords(&self, c: &[i32]) -> Option<Vec<i32>> {
+        match &self.lattice {
+            Some((lattice, _)) => lattice.coords(c),
+            None => Some(c.to_vec()),
+        }
     }
 
-    fn run<'a>(&'a self, geometry: &'a Geometry, options: &'a Options) -> Run<'a, PackedLayout> {
+    /// Whether a curve class in the input coordinates is in the lightcones.
+    fn in_lightcone(&self, c: &[i32]) -> bool {
+        self.coords(c).is_some_and(|c| {
+            self.layout.fits(&c) && self.lightcone.contains(self.layout.pack(&c), &c)
+        })
+    }
+
+    /// The curve class of a key, in the input coordinates.
+    fn curve(&self, key: PackedKey<W>) -> Result<Vec<i32>, Error> {
+        let mut c = vec![0; self.layout.dim()];
+        self.layout.unpack(key, &mut c);
+        match &self.lattice {
+            Some((lattice, _)) => {
+                let mut x = vec![0; lattice.h11()];
+                lattice.to_input(&c, &mut x).ok_or(Error::LatticeTooLarge)?;
+                Ok(x)
+            }
+            None => Ok(c),
+        }
+    }
+
+    /// The run, with `geometry` in the input coordinates.
+    fn run<'a>(&'a self, geometry: &'a Geometry, options: &'a Options) -> Run<'a, PackedLayout<W>> {
         Run {
             layout: &self.layout,
             grading_vector: &self.grading_vector,
-            geometry,
+            geometry: self.lattice.as_ref().map_or(geometry, |(_, g)| g),
             cands: &self.cands,
             max_deg: self.max_deg,
             lightcone: &self.lightcone,
@@ -698,49 +881,304 @@ impl Prepared {
     }
 }
 
-/// Checks the options and computes what [`run`] and [`bound_gv`] need before their passes.
-fn prepare(
-    source: CandidateSource<'_>,
-    grading_vector: &[i32],
-    max_deg: u32,
-    targets: &[&[i32]],
-    geometry: &Geometry,
-    options: &Options,
-) -> Result<Prepared, Error> {
-    if options.tuning.check_primes == 0
-        || options.tuning.lanes.is_some_and(|l| !(2..=4).contains(&l))
-        || options.threads == Some(0)
-    {
-        return Err(Error::InvalidOptions);
+/// The words of the keys: 128, 256 or 512 bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyWord {
+    U128,
+    Wide4,
+    Wide8,
+}
+
+impl KeyWord {
+    /// The narrowest word that holds fields of `bits` bits and has at least `min_bits`.
+    fn new(bits: u32, min_bits: u32) -> Result<Self, KeyError> {
+        let fits = |n: u32| bits <= n - 2 && min_bits <= n;
+        [(128, Self::U128), (256, Self::Wide4), (512, Self::Wide8)]
+            .into_iter()
+            .find(|&(n, _)| fits(n))
+            .map(|(_, w)| w)
+            .ok_or(KeyError::TooWide {
+                bits,
+                max_bits: PackedLayout::<Wide<8>>::MAX_BITS,
+            })
     }
-    let threads = options.threads.unwrap_or_else(|| {
-        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
-    });
-    // The stages parallelize with rayon and run in whichever pool they are installed in, so
-    // a private one honours `threads` and keeps out of a library consumer's own use of rayon.
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build()
-        .expect("failed to build the worker thread pool");
-    let max_deg = if targets.is_empty() {
-        max_deg
-    } else {
-        max_deg.min(lightcone::max_degree(targets, grading_vector)?)
+}
+
+/// Runs `$body` with `$w` the [`Word`] of a [`KeyWord`].
+macro_rules! with_word {
+    ($word:expr, $w:ident => $body:expr) => {
+        match $word {
+            KeyWord::U128 => {
+                type $w = u128;
+                $body
+            }
+            KeyWord::Wide4 => {
+                type $w = Wide<4>;
+                $body
+            }
+            KeyWord::Wide8 => {
+                type $w = Wide<8>;
+                $body
+            }
+        }
     };
-    let bounds = source.coordinate_bounds(grading_vector, max_deg, targets)?;
-    let layout = PackedLayout::new(&bounds)?;
-    let candidates::Candidates {
-        points: cands,
-        lightcone,
-    } = pool.install(|| source.candidates(&layout, grading_vector, max_deg, targets, geometry))?;
-    Ok(Prepared {
-        pool,
-        max_deg,
-        grading_vector: grading_vector.to_vec(),
-        layout,
-        cands,
-        lightcone,
-    })
+}
+use with_word;
+
+/// What [`run`] and [`bound_gv`] decide before they know the width of the keys: the thread
+/// pool, the maximum degree (lowered to the targets'), the lattice of the curve classes if
+/// they are keyed by their coordinates in it, the grading vector in the coordinates of the
+/// run, and the bounds on those coordinates with the word they fit.
+struct Setup {
+    pool: rayon::ThreadPool,
+    max_deg: u32,
+    grading_vector: Vec<i32>,
+    bounds: Vec<u32>,
+    word: KeyWord,
+    reduced: Option<Reduced>,
+}
+
+/// A run in the coordinates of a lattice of lower rank than $h^{1,1}$ (see [`lattice`]).
+struct Reduced {
+    lattice: lattice::Lattice,
+    geometry: Geometry,
+    source: ReducedSource,
+    /// The targets in the lattice; the others have nothing below them in it. Only for the
+    /// generators, whose lightcones are sets of classes; those of the cones are inequalities,
+    /// which take the targets as they are.
+    targets: Vec<Vec<i32>>,
+}
+
+/// A [`CandidateSource`] in the coordinates of a lattice.
+enum ReducedSource {
+    Generators(Vec<Vec<i32>>),
+    /// The cones, with the inequalities of the Mori cone restricted to the lattice and no
+    /// equations.
+    Cones(ConeData),
+}
+
+impl Reduced {
+    /// The run in the coordinates of the lattice that the vectors of `source` span, if it has
+    /// a lower rank than $h^{1,1}$ (and is not zero).
+    fn new(
+        source: CandidateSource<'_>,
+        grading_vector: &[i32],
+        max_deg: u32,
+        targets: &[&[i32]],
+        geometry: &Geometry,
+    ) -> Result<Option<Self>, Error> {
+        let vectors = source.vectors(grading_vector, max_deg, targets)?;
+        let lattice = match lattice::Lattice::spanned(vectors.iter().copied(), geometry.h11())? {
+            Some(lattice) if lattice.rank() > 0 => lattice,
+            _ => return Ok(None),
+        };
+        let coords = |v: &[i32]| lattice.coords(v).ok_or(Error::LatticeTooLarge);
+        let dim = lattice.rank();
+        let reduced = match source {
+            CandidateSource::Generators(_) => ReducedSource::Generators(
+                vectors
+                    .iter()
+                    .map(|v| coords(v))
+                    .collect::<Result<_, _>>()?,
+            ),
+            CandidateSource::Cones(cone_data) => {
+                let matrix = |columns: Vec<Vec<i32>>| {
+                    DMatrix::from_column_slice(dim, columns.len(), &columns.concat())
+                };
+                let cones = cone_data
+                    .cones
+                    .iter()
+                    .map(|c| {
+                        let basis = crate::cone::columns(&c.hilbert_basis)
+                            .filter(|g| dot(g, grading_vector) <= max_deg as i64)
+                            .map(coords)
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok(crate::CandidateCone {
+                            divisors: c.divisors.clone(),
+                            hilbert_basis: matrix(basis),
+                        })
+                    })
+                    .collect::<Result<_, Error>>()?;
+                let hyperplanes = crate::cone::columns(&cone_data.hyperplanes)
+                    .map(|h| lattice.restrict(h))
+                    .collect::<Result<Vec<_>, _>>()?;
+                ReducedSource::Cones(ConeData {
+                    hyperplanes: matrix(hyperplanes),
+                    equations: DMatrix::zeros(dim, 0),
+                    cones,
+                })
+            }
+        };
+        let targets = match source {
+            CandidateSource::Generators(_) => {
+                targets.iter().filter_map(|p| lattice.coords(p)).collect()
+            }
+            CandidateSource::Cones(_) => Vec::new(),
+        };
+        Ok(Some(Self {
+            geometry: geometry.in_lattice(&lattice)?,
+            lattice,
+            source: reduced,
+            targets,
+        }))
+    }
+}
+
+impl Setup {
+    /// Checks the options, reduces the run to a lattice if it can, and sizes the keys.
+    fn new(
+        source: CandidateSource<'_>,
+        grading_vector: &[i32],
+        max_deg: u32,
+        targets: &[&[i32]],
+        geometry: &Geometry,
+        options: &Options,
+    ) -> Result<Self, Error> {
+        if options.tuning.check_primes == 0
+            || options.tuning.lanes.is_some_and(|l| !(2..=4).contains(&l))
+            || options.tuning.min_key_bits > 512
+            || options.threads == Some(0)
+        {
+            return Err(Error::InvalidOptions);
+        }
+        let threads = options.threads.unwrap_or_else(|| {
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+        });
+        // The stages parallelize with rayon and run in whichever pool they are installed in,
+        // so a private one honours `threads` and keeps out of a library consumer's own use of
+        // rayon.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("failed to build the worker thread pool");
+        let max_deg = if targets.is_empty() {
+            max_deg
+        } else {
+            max_deg.min(lightcone::max_degree(targets, grading_vector)?)
+        };
+        let reduced = if options.tuning.lattice {
+            Reduced::new(source, grading_vector, max_deg, targets, geometry)?
+        } else {
+            None
+        };
+        let (grading_vector, bounds) = match &reduced {
+            None => (
+                grading_vector.to_vec(),
+                source.coordinate_bounds(grading_vector, max_deg, targets)?,
+            ),
+            Some(r) => {
+                let w = r.lattice.restrict(grading_vector)?;
+                let targets: Vec<&[i32]> = r.targets.iter().map(Vec::as_slice).collect();
+                let bounds = match &r.source {
+                    ReducedSource::Generators(gens) => {
+                        let gens: Vec<&[i32]> = gens.iter().map(Vec::as_slice).collect();
+                        CandidateSource::Generators(&gens)
+                            .coordinate_bounds(&w, max_deg, &targets)?
+                    }
+                    ReducedSource::Cones(cone_data) => {
+                        CandidateSource::Cones(cone_data).coordinate_bounds(&w, max_deg, &[])?
+                    }
+                };
+                (w, bounds)
+            }
+        };
+        let bits = field_widths(&bounds).iter().sum();
+        let word = KeyWord::new(bits, options.tuning.min_key_bits)?;
+        Ok(Self {
+            pool,
+            max_deg,
+            grading_vector,
+            bounds,
+            word,
+            reduced,
+        })
+    }
+
+    /// The key layout in `W` and the candidates, for the run of `source` and `targets` in the
+    /// input coordinates.
+    fn prepare<W: Word>(
+        self,
+        source: CandidateSource<'_>,
+        targets: &[&[i32]],
+        geometry: &Geometry,
+    ) -> Result<Prepared<W>, Error> {
+        let Self {
+            pool,
+            max_deg,
+            grading_vector,
+            bounds,
+            reduced,
+            ..
+        } = self;
+        let layout = PackedLayout::<W>::new(&bounds)?;
+        let w = &grading_vector;
+        let (cands, lightcone, lattice) = match reduced {
+            None => {
+                let c =
+                    pool.install(|| source.candidates(&layout, w, max_deg, targets, geometry))?;
+                (c.points, c.lightcone, None)
+            }
+            Some(r) => {
+                let (mut cands, lightcone) = match &r.source {
+                    ReducedSource::Generators(gens) => {
+                        let gens: Vec<&[i32]> = gens.iter().map(Vec::as_slice).collect();
+                        let ts: Vec<&[i32]> = r.targets.iter().map(Vec::as_slice).collect();
+                        let c = pool.install(|| {
+                            CandidateSource::Generators(&gens).candidates(
+                                &layout,
+                                w,
+                                max_deg,
+                                &ts,
+                                &r.geometry,
+                            )
+                        })?;
+                        (c.points, c.lightcone)
+                    }
+                    ReducedSource::Cones(cone_data) => {
+                        let c = pool.install(|| {
+                            CandidateSource::Cones(cone_data).candidates(
+                                &layout,
+                                w,
+                                max_deg,
+                                &[],
+                                &r.geometry,
+                            )
+                        })?;
+                        // The bounds of the inequalities come from the targets as they are.
+                        let lightcone = match source {
+                            CandidateSource::Cones(original) if !targets.is_empty() => {
+                                Lightcone::from_cone_data(original, targets)?
+                                    .restrict(&r.lattice)?
+                            }
+                            _ => c.lightcone,
+                        };
+                        (c.points, lightcone)
+                    }
+                };
+                // Targets none of which is in the lattice have nothing below them.
+                if !targets.is_empty() && r.targets.is_empty() && lightcone.is_all() {
+                    cands.clear();
+                }
+                if !lightcone.is_all() {
+                    let mut c = vec![0; layout.dim()];
+                    cands.retain(|&(key, _)| {
+                        layout.unpack(key, &mut c);
+                        lightcone.contains(key, &c)
+                    });
+                }
+                (cands, lightcone, Some((r.lattice, r.geometry)))
+            }
+        };
+        Ok(Prepared {
+            pool,
+            max_deg,
+            grading_vector,
+            layout,
+            cands,
+            lightcone,
+            lattice,
+        })
+    }
 }
 
 /// The number of primes per pass for a run whose options leave it open, chosen the way the C
@@ -868,10 +1306,10 @@ fn passes<const NL: usize, L: KeyLayout>(
 
 /// The lift of [`passes`] over `NL` primes each, certified if `options` ask for it: then the
 /// invariants are bounded, and passes added until the primes are enough for the bounds.
-fn lifted<const NL: usize>(
-    run: &Run<'_, PackedLayout>,
+fn lifted<const NL: usize, L: KeyLayout>(
+    run: &Run<'_, L>,
     options: &Options,
-) -> Result<Vec<(PackedKey, u32, Vec<Integer>)>, Error> {
+) -> Result<Lifted<L::Key>, Error> {
     let width = run.geometry.n_forms();
     let mut residues = passes::<NL, _>(
         run,
@@ -893,12 +1331,12 @@ fn lifted<const NL: usize>(
 
 /// `None` if the bounds of [`bounds`] on the invariants of `lift`, from `primes`, are all
 /// below half the product of the primes, and the number of primes they need otherwise.
-fn primes_needed(
-    run: &Run<'_, PackedLayout>,
-    lift: &[(PackedKey, u32, Vec<Integer>)],
+fn primes_needed<L: KeyLayout>(
+    run: &Run<'_, L>,
+    lift: &[(L::Key, u32, Vec<Integer>)],
     primes: &[u64],
 ) -> Result<Option<usize>, Error> {
-    let candidates: HashMap<PackedKey, Vec<Bound>> = lift
+    let candidates: HashMap<L::Key, Vec<Bound>> = lift
         .iter()
         .map(|(key, _, values)| (*key, values.iter().map(Bound::from_integer).collect()))
         .collect();
@@ -962,9 +1400,15 @@ fn pass<R: Ring, L: KeyLayout>(
         .map(|j| geometry.q0(j).to_vec())
         .chain((0..geometry.n_divisors()).map(|r| geometry.q(r).to_vec()))
         .collect();
-    let (alpha, rows) = match &inst.beta {
-        Some(beta) => (beta, Some(rows.as_slice())),
-        None => (&inst.alpha, None),
+    // Without the rows, the exponentials pair the curves with alpha in their coordinates.
+    let restricted;
+    let (alpha, rows) = match (&inst.beta, geometry.curve_basis()) {
+        (Some(beta), _) => (beta, Some(rows.as_slice())),
+        (None, Some(basis)) => {
+            restricted = lattice::restrict_series(ring, basis, &inst.alpha)?;
+            (&restricted, None)
+        }
+        (None, None) => (&inst.alpha, None),
     };
     let coeffs = extraction::extract(
         ring,
@@ -1310,7 +1754,10 @@ mod tests {
         // At degree 20 the largest invariant has 206 bits and its bound 230, which four primes
         // cover, but not three.
         let options = Options::default();
-        let prep = prepare(source(), &[1], 20, &[], &geometry, &options).unwrap();
+        let prep = Setup::new(source(), &[1], 20, &[], &geometry, &options)
+            .unwrap()
+            .prepare::<u128>(source(), &[], &geometry)
+            .unwrap();
         let run = prep.run(&geometry, &options);
         let residues = passes::<2, _>(&run, &options, Residues::new(1), 0).unwrap();
         assert_eq!(residues.primes().len(), 6);

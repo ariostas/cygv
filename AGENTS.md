@@ -106,7 +106,13 @@ basis from the lattice points of the fundamental parallelepiped, at most
 `MAX_PARALLELEPIPED`), not from $\pm e_i$, and a face is handled in a lattice basis of its
 span. `cone_data` cuts the Mori cone's basis by the rows $Q_r$ down a tree (each row cut or
 left out, at most two left out, three for a stratum), dropping sums above `max_deg`, which
-is sound because every cone is then inside the Mori cone. Errors are `ConeError`. Phase 7b
+is sound because every cone is then inside the Mori cone. As in #102's `ed93fb4`, only the
+rows negative on some element of that basis enter the tree ($K_T = K_{T \cap N}$), and each
+distinct cone is given once, labeled by a $T$ with the same negative set $M$ on its basis
+that is not a pair when there is one, so that the candidates' skip of vanishing pair forms
+keeps exactly the union of the full set (the Mori cone alone, as $K_{\{0\}}$, when nothing is
+negative): a face of the Mori cone at $h^{1,1} = 491$ goes from minutes to under a second.
+User-supplied Hilbert bases must still have every $T$. Errors are `ConeError`. Phase 7b
 also tried enumerating the lattice points of each $K_T$ directly (`PLAN.md`); both matched
 Normaliz, and the Hilbert bases won because they feed the existing cone path unchanged.
 `src/phase.rs` (phase 7c, a port of `cgv_phase.py` of the C program of PR #94): `phase::Fan`
@@ -136,13 +142,28 @@ code with `reference`. Its primitives are `field` (Montgomery arithmetic,
 primes as a context), `bound` (`BoundRing`, the other `Ring`: upward-rounded nonnegative
 bounds for the certifier of `PLAN.md` phase 8, an `f64` mantissa with an `i64` exponent moved
 up by `next_up` after each operation, subtraction being addition), `key` (curve classes packed
-into fixed-size keys that add like the classes, with a layout sized per run from coordinate
-bounds), `table` (open-addressing tables and sparse series over those keys, each entry
+into keys of 128, 256 or 512 bits that add like the classes, `PackedLayout<W>` over a
+`Word`, `u128` or `Wide<N>` of `N` words, with field widths sized per run from coordinate
+bounds; `Setup` takes the narrowest word that fits, `Tuning::min_key_bits` forces a wider
+one for the tests, `with_word!` dispatches, and the `Lift` trait runs wide keys with four
+lanes only, which keeps the build from compiling the pipeline for every lane count and
+width; 64-bit keys were measured and gave nothing, see `PLAN.md` 5.3), `lattice` (after the
+C's `setup_lattice`: when the vectors the candidates are sums of span a lattice of rank
+below $h^{1,1}$, as on a face of the Mori cone, the run keys the curves by their coordinates
+in an LLL-reduced basis of it, which takes a face of rank 24 at $h^{1,1} = 491$ from ~300
+bits to ~120; `Lattice::spanned` goes through the vectors shortest first, solving for the
+coordinates in floating point and checking them exactly, adding a vector independent modulo
+a 61-bit prime, joining one of fractional coordinates exactly, and reducing by Cohen's
+integral LLL in malachite integers; `Setup` moves the source, the targets, the grading
+vector and the geometry into it (`Reduced`, `Geometry::in_lattice`), `pass` restricts
+$\alpha$ to it after the instanton (`restrict_series`) unless the extraction goes along the
+rows, and the output goes back; `Tuning::lattice` turns it off), `table` (open-addressing tables and sparse series over those keys, each entry
 holding a run-time number of values; the index of a `SlotMap` has 8-byte buckets of a tag
 and a slot) and `level` (the extraction's level tables, `PLAN.md` phase 8b, after the C of
 PR #102: they key the offsets of an exponential by the linear hash $H = \varphi(m) M$, with
 $\varphi$ packing a box of the offsets, less the coordinate the degree fixes, into a `u64`
-when it fits and a `u128` otherwise, so that a scatter's target is one addition, and
+when it fits, a `u128` otherwise, and for wide keys into a word as wide as theirs
+(`Key::Level`), so that a scatter's target is one addition, and
 `OffsetKeys` turns a hash back into a key only for the emitted terms). A *pass* (`pass`, generic over the `Ring`) runs the
 stages modulo `NL` primes: `candidates` (from a `CandidateSource`: either
 the sums of the Hilbert basis elements of each $K_T$ of the cone data, skipping cones contained
@@ -197,7 +218,11 @@ candidates, the curves the extraction subtracts, and each pass's output (GW too,
 multiples of a curve leave the lightcones). `Geometry` in `src/modular.rs` holds the integer data
 the stages read: the CY kind, the charges, one anticanonical row per part of the nef
 partition, and $M$ bilinear forms, one for a threefold ($\sum_t w_t \kappa_{tab}$) and one per
-reference surface for an n-fold, which give $I$ $M$ components. `src/modular/reference_tests.rs`
+reference surface for an n-fold, which give $I$ $M$ components. In a lattice the charges have
+two sides: `q`/`q0` on the curves, in its coordinates (`dim`), which the candidates, the
+period's intersections and the extraction's rows read, and `divisor_q`/`divisor_q0` in the
+$h^{1,1}$ coordinates of the forms, which the period's derivatives, $c_1$ and the instanton
+keep. `src/modular/reference_tests.rs`
 compares $c_0$, $c_1$, $S_2$ and $I$ with the reference stages modulo the primes, curve by curve
 (a mismatch there pins a bug to a stage), and the GV invariants of `compute_gv` with those of
 `run_hkty` and the GW invariants of the two methods, which only agree on consistent geometries

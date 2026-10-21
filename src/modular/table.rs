@@ -669,7 +669,7 @@ mod tests {
     #[test]
     fn test_take() {
         let mut rng = TestRng::new(6);
-        let layout = PackedLayout::new(&[20, 20, 20]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[20, 20, 20]).unwrap();
         let mut map: SlotMap<PackedKey, u64> = SlotMap::new(2, 16);
         let mut model = Vec::new();
         for _ in 0..500 {
@@ -748,7 +748,7 @@ mod tests {
     #[should_panic(expected = "pushed in order")]
     fn test_push_out_of_order() {
         let mut poly = SparsePoly::new(1);
-        poly.push(PackedKey(1), 1, &[1u64]);
+        poly.push(PackedKey(1u128), 1, &[1u64]);
         poly.push(PackedKey(0), 1, &[1u64]);
     }
 }

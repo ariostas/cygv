@@ -135,16 +135,16 @@ impl<'a, R: Ring> Evaluator<'a, R> {
         let q_cols = (0..h11)
             .map(|a| {
                 (0..ndiv)
-                    .filter(|&r| geometry.q(r)[a] != 0)
-                    .map(|r| (r, ring.int(geometry.q(r)[a] as i64)))
+                    .filter(|&r| geometry.divisor_q(r)[a] != 0)
+                    .map(|r| (r, ring.int(geometry.divisor_q(r)[a] as i64)))
                     .collect()
             })
             .collect();
         let q0 = (0..geometry.n_anticanonical())
-            .flat_map(|j| geometry.q0(j).iter().map(|&x| ring.int(x as i64)))
+            .flat_map(|j| geometry.divisor_q0(j).iter().map(|&x| ring.int(x as i64)))
             .collect();
         let q = (0..ndiv)
-            .flat_map(|r| geometry.q(r).iter().map(|&x| ring.int(x as i64)))
+            .flat_map(|r| geometry.divisor_q(r).iter().map(|&x| ring.int(x as i64)))
             .collect();
         let half = tables.inv[2];
         let mut pairs = Vec::new();
@@ -397,8 +397,8 @@ pub fn period<R: Ring, L: KeyLayout>(
     max_deg: u32,
     rows: bool,
 ) -> Result<PeriodData<L::Key, R::Elem>, Error> {
-    let h11 = geometry.h11();
-    if layout.dim() != h11 {
+    let (h11, dim) = (geometry.h11(), geometry.dim());
+    if layout.dim() != dim {
         return Err(Error::DimensionMismatch);
     }
     let chunk = candidates
@@ -410,7 +410,7 @@ pub fn period<R: Ring, L: KeyLayout>(
     let max_arg = candidates
         .par_chunks(chunk)
         .map(|cands| {
-            let mut c = vec![0; h11];
+            let mut c = vec![0; dim];
             let mut max_arg = 0;
             for &(key, _) in cands {
                 layout.unpack(key, &mut c);
@@ -439,7 +439,7 @@ pub fn period<R: Ring, L: KeyLayout>(
     let parts = candidates
         .par_chunks(chunk)
         .map(|cands| {
-            let mut c = vec![0; h11];
+            let mut c = vec![0; dim];
             let mut sc = eval.scratch();
             let mut c0 = SparsePoly::new(1);
             let mut c1 = SparsePoly::new(h11);
@@ -537,7 +537,7 @@ mod tests {
     fn test_negative_anticanonical_degree() {
         use crate::modular::key::{KeyLayout, PackedLayout};
         let lf = LaneField::new([primes().next().unwrap()]);
-        let layout = PackedLayout::new(&[2]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[2]).unwrap();
         let cands = [
             (layout.pack(&[0]), 0),
             (layout.pack(&[1]), 1),
@@ -572,7 +572,7 @@ mod tests {
         ]);
         let w = [3, -1];
         let g = Geometry::from_toric(&q, &[], &intnums, CYKind::Threefold, &w).unwrap();
-        let layout = PackedLayout::new(&[20, 20]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[20, 20]).unwrap();
         let gens: [&[i32]; 2] = [&[0, -1], &[1, 2]];
         let cands = candidates_by_enumeration(&layout, gens, &w, 8, &g).unwrap();
         let lf = LaneField::new([primes().next().unwrap()]);

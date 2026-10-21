@@ -16,11 +16,12 @@
 //! determines, which usually makes it fit 64 bits. The layout and the tables follow the C
 //! program's (`PLAN.md`, PR #102).
 
-use super::key::Key;
+use super::key::{Key, Wide};
 use core::cmp::Reverse;
 use core::fmt::Debug;
 
-/// A word that offsets are packed into: `u64`, or `u128` when the box needs more bits.
+/// A word that offsets are packed into: `u64`, or `u128` when the box needs more bits, or for
+/// keys wider than 128 bits, a [`Wide`] word of theirs.
 pub trait LevelWord: Copy + Ord + Default + Debug + Send + Sync + 'static {
     /// The number of bits.
     const BITS: u32;
@@ -120,6 +121,130 @@ macro_rules! level_word {
 
 level_word!(u64, 0x9E37_79B9_7F4A_7C15);
 level_word!(u128, 0x9E37_79B9_7F4A_7C15_D6E8_FEB8_6659_FD93);
+
+/// $a b \bmod 2^{64 N}$.
+const fn wide_mul<const N: usize>(a: &[u64; N], b: &[u64; N]) -> [u64; N] {
+    let mut r = [0u64; N];
+    let mut i = 0;
+    while i < N {
+        let mut carry = 0u128;
+        let mut j = 0;
+        while i + j < N {
+            let t = r[i + j] as u128 + a[i] as u128 * b[j] as u128 + carry;
+            r[i + j] = t as u64;
+            carry = t >> 64;
+            j += 1;
+        }
+        i += 1;
+    }
+    r
+}
+
+/// $a - b \bmod 2^{64 N}$.
+const fn wide_sub<const N: usize>(a: &[u64; N], b: &[u64; N]) -> [u64; N] {
+    let mut r = [0u64; N];
+    let mut borrow = 0u64;
+    let mut i = 0;
+    while i < N {
+        let (d, b1) = a[i].overflowing_sub(b[i]);
+        let (d, b2) = d.overflowing_sub(borrow);
+        r[i] = d;
+        borrow = (b1 || b2) as u64;
+        i += 1;
+    }
+    r
+}
+
+/// An odd multiplier of $64 N$ bits.
+const fn wide_multiplier<const N: usize>() -> [u64; N] {
+    const WORDS: [u64; 4] = [
+        0x9E37_79B9_7F4A_7C15,
+        0xD6E8_FEB8_6659_FD93,
+        0x94D0_49BB_1331_11EB,
+        0xBF58_476D_1CE4_E5B9,
+    ];
+    let mut r = [0u64; N];
+    let mut i = 0;
+    while i < N {
+        r[i] = WORDS[i % 4].rotate_left(8 * (i / 4) as u32);
+        i += 1;
+    }
+    r
+}
+
+/// The inverse of the odd `m` modulo $2^{64 N}$, by the same Newton iteration.
+const fn wide_inverse<const N: usize>(m: &[u64; N]) -> [u64; N] {
+    let mut two = [0u64; N];
+    two[0] = 2;
+    let mut x = *m;
+    let mut i = 0;
+    while i < 10 {
+        x = wide_mul(&x, &wide_sub(&two, &wide_mul(m, &x)));
+        i += 1;
+    }
+    x
+}
+
+impl<const N: usize> LevelWord for Wide<N> {
+    const BITS: u32 = 64 * N as u32;
+    const MUL: Self = Wide(wide_multiplier::<N>());
+    const MUL_INV: Self = Wide(wide_inverse::<N>(&wide_multiplier::<N>()));
+
+    #[inline]
+    fn wadd(self, other: Self) -> Self {
+        super::key::Word::wrapping_add(self, other)
+    }
+
+    #[inline]
+    fn wsub(self, other: Self) -> Self {
+        super::key::Word::wrapping_sub(self, other)
+    }
+
+    #[inline]
+    fn wmul(self, other: Self) -> Self {
+        Wide(wide_mul(&self.0, &other.0))
+    }
+
+    #[inline]
+    fn xor(self, other: Self) -> Self {
+        let mut r = self.0;
+        for (x, y) in r.iter_mut().zip(other.0) {
+            *x ^= y;
+        }
+        Wide(r)
+    }
+
+    #[inline]
+    fn from_i64(x: i64) -> Self {
+        super::key::Word::from_i64(x)
+    }
+
+    #[inline]
+    fn pow2(s: u32) -> Self {
+        let mut r = [0u64; N];
+        r[(s / 64) as usize] = 1 << (s % 64);
+        Wide(r)
+    }
+
+    #[inline]
+    fn field(self, offset: u32, width: u32) -> u64 {
+        let (i, b) = ((offset / 64) as usize, offset % 64);
+        let mut x = self.0[i] >> b;
+        if b > 0 && i + 1 < N {
+            x |= self.0[i + 1] << (64 - b);
+        }
+        if width >= 64 {
+            x
+        } else {
+            x & ((1 << width) - 1)
+        }
+    }
+
+    #[inline]
+    fn top(self, bits: u32) -> usize {
+        (self.0[N - 1] >> (64 - bits)) as usize
+    }
+}
 
 /// The box of [`level_box`]: per coordinate the lowest value and the width of its field, and
 /// the coordinate that the degree determines, which gets no field.
@@ -533,7 +658,7 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modular::key::{KeyLayout, PackedKey, PackedLayout};
+    use crate::modular::key::{KeyLayout, PackedKey, PackedLayout, Word};
     use crate::modular::TestRng;
     use std::collections::HashMap;
 
@@ -541,6 +666,26 @@ mod tests {
     fn test_inverses() {
         assert_eq!(u64::MUL.wmul(u64::MUL_INV), 1);
         assert_eq!(u128::MUL.wmul(u128::MUL_INV), 1);
+        let one = <Wide<4> as Word>::from_i64(1);
+        assert_eq!(Wide::<4>::MUL.wmul(Wide::<4>::MUL_INV), one);
+        let one = <Wide<8> as Word>::from_i64(1);
+        assert_eq!(Wide::<8>::MUL.wmul(Wide::<8>::MUL_INV), one);
+        // The wide product agrees with u128's.
+        let mut rng = TestRng::new(2);
+        for _ in 0..1000 {
+            let (a, b) = (rng.next_u64(), rng.next_u64());
+            let (c, d) = (rng.next_u64(), rng.next_u64());
+            let x = (a as u128) << 64 | b as u128;
+            let y = (c as u128) << 64 | d as u128;
+            let p = Wide([b, a]).wmul(Wide([d, c]));
+            assert_eq!(
+                p,
+                Wide([x.wrapping_mul(y) as u64, (x.wrapping_mul(y) >> 64) as u64])
+            );
+            for (o, w) in [(0, 64), (5, 64), (64, 3), (100, 28), (60, 10)] {
+                assert_eq!(Wide([b, a]).field(o, w), x.field(o, w));
+            }
+        }
         for m in [1i64, 3, -5, 12345677, i64::MAX, -1] {
             assert_eq!(m.wrapping_mul(inverse_mod_2_64(m)), 1);
         }
@@ -548,10 +693,22 @@ mod tests {
 
     /// Random terms of positive degree under `grading`, in the quadrant-like region where
     /// the grading is positive.
+    /// With more than ten coordinates, the terms have about three nonzero ones each, which
+    /// makes their degrees small and the box wide.
     fn terms(rng: &mut TestRng, grading: &[i32], n: usize) -> Vec<(Vec<i32>, u32)> {
         let mut res = Vec::new();
+        let dim = grading.len() as i64;
         while res.len() < n {
-            let u: Vec<i32> = grading.iter().map(|_| rng.range(-3, 6) as i32).collect();
+            let u: Vec<i32> = grading
+                .iter()
+                .map(|_| {
+                    if dim > 10 && rng.range(1, dim) > 3 {
+                        0
+                    } else {
+                        rng.range(-3, 6) as i32
+                    }
+                })
+                .collect();
             let d: i64 = u
                 .iter()
                 .zip(grading)
@@ -564,21 +721,23 @@ mod tests {
         res
     }
 
-    /// Hashes add like the offsets, and decode to them, for sums of terms up to the degree.
-    fn check_layout<W: LevelWord>(grading: &[i32], seed: u64) {
+    /// Hashes add like the offsets, and decode to them, for sums of terms up to the degree,
+    /// when the box fits `W`; the bits of the box.
+    fn check_layout<W: LevelWord>(grading: &[i32], seed: u64) -> u32 {
         let mut rng = TestRng::new(seed);
-        let ts = terms(&mut rng, grading, 12);
+        let ts = terms(&mut rng, grading, 12.max(3 * grading.len()));
         let max_deg = 40;
         let b = level_box(ts.iter().map(|(u, d)| (u.as_slice(), *d)), grading, max_deg);
         let Some(layout) = LevelLayout::<W>::new(&b, grading) else {
             assert!(b.bits() >= W::BITS);
-            return;
+            return b.bits();
         };
         let dim = grading.len();
         let mut coords = vec![0; dim];
-        // Keys of a packed layout wide enough for the box.
-        let packed = PackedLayout::new(&vec![1 << 12; dim]).unwrap();
-        let units: Vec<PackedKey> = (0..dim)
+        // Keys of a packed layout wide enough for the box: a coordinate is at most the degree
+        // times six.
+        let packed = PackedLayout::<Wide<8>>::new(&vec![1 << 8; dim]).unwrap();
+        let units: Vec<PackedKey<Wide<8>>> = (0..dim)
             .map(|t| {
                 let mut e = vec![0; dim];
                 e[t] = 1;
@@ -606,6 +765,7 @@ mod tests {
                 assert_eq!(keys.key(h, deg), packed.pack(&x));
             }
         }
+        b.bits()
     }
 
     #[test]
@@ -616,12 +776,19 @@ mod tests {
             vec![6, -12, -14, -17, -18, -4, -5, -12],
             vec![0, 1, 0, 2, 5],
             vec![-1, 3],
+            // Boxes of more than 128 and 256 bits.
+            vec![1; 24],
+            vec![1; 48],
         ]
         .iter()
         .enumerate()
         {
             check_layout::<u64>(grading, i as u64);
             check_layout::<u128>(grading, i as u64);
+            check_layout::<Wide<4>>(grading, i as u64);
+            let bits = check_layout::<Wide<8>>(grading, i as u64);
+            assert_eq!(bits > 128, i >= 5, "{bits}");
+            assert_eq!(bits > 256, i >= 6, "{bits}");
         }
     }
 

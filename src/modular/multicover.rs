@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn test_round_trip() {
         let lf = ring();
-        let layout = PackedLayout::new(&[30, 30]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[30, 30]).unwrap();
         let max_deg = 12;
         let inv = lf.inverses(max_deg as usize + 1).unwrap();
         let deg = |c: [i32; 2]| (c[0] + 2 * c[1]) as u32;
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn test_short_table() {
         let lf = ring();
-        let layout = PackedLayout::new(&[30, 30]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[30, 30]).unwrap();
         let inv = lf.inverses(5).unwrap();
         let coeffs = SparsePoly::new(1);
         let kind = CYKind::Threefold;

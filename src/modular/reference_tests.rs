@@ -137,7 +137,7 @@ fn check(case: &Case) {
     let gens: Vec<&[i32]> = case.generators.as_slice().chunks(h11).collect();
     let bounds =
         coordinate_bounds(gens.iter().copied(), &case.grading_vector, case.max_deg).unwrap();
-    let layout = PackedLayout::new(&bounds).unwrap();
+    let layout = PackedLayout::<u128>::new(&bounds).unwrap();
     let cands = candidates_by_enumeration(
         &layout,
         gens.iter().copied(),
@@ -542,6 +542,67 @@ fn test_h11_9_plike_gv() {
     let case = load("h11_9_plike", &yaml, 150);
     assert_eq!(case.grading_vector[0], 148);
     check_gv(&case, &Options::default());
+}
+
+/// Keys of 256 and 512 bits, which the geometries the tests can afford do not need, with and
+/// without certifying, and with the level tables in the widest word the keys allow, give
+/// what keys of 128 bits give (which the tests above compare with the reference), on a
+/// threefold and on the fourfold.
+#[test]
+#[cfg(feature = "cli")]
+fn test_key_words() {
+    let cases = [
+        load("h11_9", include_str!("../../benches/data/h11_9.yaml"), 5),
+        load("fourfold", include_str!("../../examples/fourfold.yaml"), 7),
+    ];
+    for case in &cases {
+        let geometry = Geometry::from_toric(
+            &case.q,
+            &case.nefpart,
+            &case.intnums,
+            case.cy_kind,
+            &case.grading_vector,
+        )
+        .unwrap();
+        let h11 = case.grading_vector.len();
+        let gens: Vec<&[i32]> = case.generators.as_slice().chunks(h11).collect();
+        let run = |options: &Options| {
+            let mut gv = compute_gv(
+                CandidateSource::Generators(&gens),
+                &case.grading_vector,
+                case.max_deg,
+                &[],
+                &geometry,
+                options,
+            )
+            .unwrap();
+            // Within a degree they come in the order of the keys, which depends on the width.
+            gv.sort_by(|a, b| (a.degree, &a.curve).cmp(&(b.degree, &b.curve)));
+            gv
+        };
+        let expected = run(&Options::default());
+        assert!(expected.len() > 10, "{}", case.name);
+        for (min_key_bits, certify, wide_levels) in [
+            (256, false, true),
+            (256, true, false),
+            (512, false, false),
+            (512, true, true),
+        ] {
+            let options = Options {
+                certify,
+                tuning: Tuning {
+                    min_key_bits,
+                    extraction: super::extraction::Tuning {
+                        wide_levels,
+                        ..Default::default()
+                    },
+                    ..Tuning::default()
+                },
+                ..Options::default()
+            };
+            assert_eq!(run(&options), expected, "{} {min_key_bits}", case.name);
+        }
+    }
 }
 
 /// Several threads, with the extraction along trees of one to three rows, and building every

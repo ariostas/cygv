@@ -231,51 +231,49 @@ pub(super) fn extract_tree<R: Ring, L: KeyLayout>(
         }
         Ok(map.take())
     };
-    let narrow = (!tuning.wide_levels)
-        .then(|| LevelLayout::<u64>::new(&level_box, grading))
-        .flatten();
-    if let Some(level) = narrow {
-        return run(&|k, part| {
-            tree_in(
-                ring,
-                layout,
-                &level,
-                beta,
-                rows,
-                part,
-                inv,
-                max_deg,
-                lightcone,
-                tuning,
-                source,
-                k,
-                inst.width(),
-            )
-        });
+    // The narrowest level word that fits, as in the extraction curve by curve.
+    macro_rules! with {
+        ($level:expr) => {
+            run(&|k, part| {
+                tree_in(
+                    ring,
+                    layout,
+                    &$level,
+                    beta,
+                    rows,
+                    part,
+                    inv,
+                    max_deg,
+                    lightcone,
+                    tuning,
+                    source,
+                    k,
+                    inst.width(),
+                )
+            })
+        };
     }
-    match LevelLayout::<u128>::new(&level_box, grading) {
-        Some(level) => run(&|k, part| {
-            tree_in(
-                ring,
-                layout,
-                &level,
-                beta,
-                rows,
-                part,
-                inv,
-                max_deg,
-                lightcone,
-                tuning,
-                source,
-                k,
-                inst.width(),
-            )
-        }),
-        None => Err(Error::Key(KeyError::TooWide {
-            bits: level_box.bits(),
-            max_bits: u128::BITS - 1,
-        })),
+    type Wide<L> = <<L as KeyLayout>::Key as Key>::Level;
+    let wide = <Wide<L> as LevelWord>::BITS > u128::BITS;
+    if !tuning.wide_levels {
+        if let Some(level) = LevelLayout::<u64>::new(&level_box, grading) {
+            return with!(level);
+        }
     }
+    if !tuning.wide_levels || !wide {
+        if let Some(level) = LevelLayout::<u128>::new(&level_box, grading) {
+            return with!(level);
+        }
+    }
+    if wide {
+        if let Some(level) = LevelLayout::<Wide<L>>::new(&level_box, grading) {
+            return with!(level);
+        }
+    }
+    Err(Error::Key(KeyError::TooWide {
+        bits: level_box.bits(),
+        max_bits: <Wide<L> as LevelWord>::BITS - 1,
+    }))
 }
 
 /// The rows of the tree for `beta` along `rows`, those of the most terms up to `max_deg` first:

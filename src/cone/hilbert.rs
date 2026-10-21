@@ -22,7 +22,7 @@ use super::{columns, CandidateCone, ConeData, TooLarge};
 use crate::Stratum;
 use nalgebra::DMatrix;
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fmt;
 
 /// Why the Hilbert bases could not be computed.
@@ -466,14 +466,23 @@ pub fn hilbert_basis(
 }
 
 /// The cone data of the pointed Mori cone cut out by the columns of `hyperplanes` and
-/// `equations`: those, and the Hilbert basis of the cone $K_T$ of every set $T$ of one or two
-/// divisors and of the divisors of every stratum, without its elements of degree above
-/// `max_deg` under `grading_vector`, which must be positive on the Mori cone. `q` has one row
-/// per divisor.
+/// `equations`: those, and the Hilbert bases of the cones $K_T$ of the sets $T$ of one or two
+/// divisors and of the divisors of every stratum, without their elements of degree above
+/// `max_deg` under `grading_vector`, which must be positive on the Mori cone, each distinct
+/// cone once. `q` has one row per divisor.
 ///
 /// The cones are nested, $K_T \subset K_{T'}$ for $T \subset T'$, so they are computed down a
 /// tree: from the Mori cone's basis, cut by each row $Q_r$ in turn or not, with at most two
-/// rows left out (three for a stratum).
+/// rows left out (three for a stratum). As in the C program of PR #102 (`ed93fb4`), only the
+/// divisors $N$ negative on some element of that basis go into $T$: the others are
+/// nonnegative on every class of the cone up to `max_deg`, which cutting by them leaves as it
+/// is, so $K_T = K_{T \cap N}$. And $K_T = K_M$ for $M$ the divisors of $T$ negative on its
+/// Hilbert basis, so each cone is given once, for one $T$ with that $M$, preferring one that
+/// is not a pair: the candidates skip a pair whose form vanishes, and with that preference
+/// they skip exactly what they would among all the cones. A cone with $M$ empty lies in every
+/// $K_r$ and is left out, unless no divisor is negative at all: then the Mori cone is the one
+/// cone, as $K_{\{0\}}$. On a face of a Mori cone of large $h^{1,1}$ that takes the cones from
+/// tens of thousands to a few hundred.
 pub fn cone_data(
     hyperplanes: &DMatrix<i32>,
     equations: &DMatrix<i32>,
@@ -510,17 +519,71 @@ pub fn cone_data(
             d
         })
         .collect();
-    let tree = Tree {
-        rows: &rows,
-        w: &w,
-        max_deg: max_deg as i64,
-        strata: &strata,
+    let negative = |r: usize, basis: &[Elem]| -> Result<bool, TooLarge> {
+        for e in basis {
+            if dot(&rows[r], &e.x)? < 0 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     };
-    let mut found = Vec::new();
-    tree.descend(0, basis, &mut Vec::new(), &mut found)?;
-    let cones = found
+    let neg: Vec<usize> = (0..rows.len())
+        .filter_map(|r| negative(r, &basis).map(|n| n.then_some(r)).transpose())
+        .collect::<Result<_, _>>()?;
+    let mut is_neg = vec![false; rows.len()];
+    neg.iter().for_each(|&r| is_neg[r] = true);
+    let mut groups: Vec<(Vec<usize>, Vec<usize>, Vec<Elem>)> = Vec::new();
+    if neg.is_empty() {
+        if !rows.is_empty() {
+            groups.push((Vec::new(), vec![0], basis));
+        }
+    } else {
+        let tree = Tree {
+            rows: &rows,
+            negative: &is_neg,
+            w: &w,
+            max_deg: max_deg as i64,
+            strata: &strata,
+        };
+        let mut found = Vec::new();
+        tree.descend(0, basis, &mut Vec::new(), &mut found)?;
+        let found: HashMap<Vec<usize>, Vec<Elem>> = found.into_iter().collect();
+        let labels = neg
+            .iter()
+            .map(|&r| vec![r])
+            .chain(
+                neg.iter()
+                    .enumerate()
+                    .flat_map(|(i, &r)| neg[i + 1..].iter().map(move |&s| vec![r, s])),
+            )
+            .chain(strata.iter().map(|s| s.to_vec()));
+        for t in labels {
+            let e: Vec<usize> = t.iter().copied().filter(|&r| is_neg[r]).collect();
+            if e.is_empty() {
+                continue;
+            }
+            let b = &found[&e];
+            let m: Vec<usize> = e
+                .iter()
+                .copied()
+                .filter_map(|r| negative(r, b).map(|n| n.then_some(r)).transpose())
+                .collect::<Result<_, _>>()?;
+            if m.is_empty() {
+                continue;
+            }
+            match groups.iter_mut().find(|g| g.0 == m) {
+                None => groups.push((m, t, b.clone())),
+                Some(g) => {
+                    if g.1.len() == 2 && t.len() != 2 {
+                        g.1 = t;
+                    }
+                }
+            }
+        }
+    }
+    let cones = groups
         .into_iter()
-        .map(|(divisors, basis)| {
+        .map(|(_, divisors, basis)| {
             Ok(CandidateCone {
                 divisors,
                 hilbert_basis: coords.matrix(&basis)?,
@@ -534,10 +597,13 @@ pub fn cone_data(
     })
 }
 
-/// The tree of cuts that gives the cones $K_T$.
+/// The tree of cuts that gives the cones $K_T$ of the sets $T$ of divisors negative somewhere.
 struct Tree<'a> {
     /// The rows $Q_r$, in the coordinates of the span.
     rows: &'a [Vec<i64>],
+    /// Whether each row is negative on some element of the basis; the others are neither
+    /// left out nor cut by.
+    negative: &'a [bool],
     /// The grading vector, in the coordinates of the span.
     w: &'a [i64],
     max_deg: i64,
@@ -575,6 +641,9 @@ impl Tree<'_> {
                 found.push((skipped.clone(), basis));
             }
             return Ok(());
+        }
+        if !self.negative[r] {
+            return self.descend(r + 1, basis, skipped, found);
         }
         skipped.push(r);
         if self.may_skip(skipped) {
@@ -695,30 +764,47 @@ mod tests {
     #[test]
     fn test_cone_data() {
         // P(1,1,2,2,2)[8], whose sixth divisor is negative on the curves (x, y) with x < 2y:
-        // every cone with it is the Mori cone, the others are spanned by (1, 0) and (2, 1).
+        // every cone with it is the Mori cone, the others are spanned by (1, 0) and (2, 1),
+        // inside it, so the Mori cone is the one cone, as K_5.
         let q = DMatrix::from_row_slice(6, 2, &[0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, -2]);
         let mori = dmatrix![1, 0; 0, 1];
         let none = DMatrix::zeros(2, 0);
         let cd = cone_data(&mori, &none, &q, &[], &[1, 1], 10).unwrap();
-        assert_eq!(cd.cones.len(), 21);
-        for c in &cd.cones {
-            let expected = if c.divisors.contains(&5) {
-                [[0, 1], [1, 0]]
-            } else {
-                [[1, 0], [2, 1]]
-            };
-            assert_eq!(cols(&c.hilbert_basis), expected, "{:?}", c.divisors);
-        }
-        // Truncated, and with a stratum on the divisors 0, 1 and 5.
+        assert_eq!(cd.cones.len(), 1);
+        assert_eq!(cd.cones[0].divisors, [5]);
+        assert_eq!(cols(&cd.cones[0].hilbert_basis), [[0, 1], [1, 0]]);
+        // Truncated, and with a stratum on the divisors 0, 1 and 5, which is K_5 again.
         let strata = [Stratum {
             divisors: [5, 1, 0],
             class: vec![1.into(), 0.into()],
         }];
         let cd = cone_data(&mori, &none, &q, &strata, &[1, 1], 2).unwrap();
-        assert_eq!(cd.cones.len(), 22);
-        let k01 = cd.cones.iter().find(|c| c.divisors == [0, 1]).unwrap();
-        assert_eq!(cols(&k01.hilbert_basis), [[1, 0]]);
-        assert!(cd.cones.iter().any(|c| c.divisors == [0, 1, 5]));
+        assert_eq!(cd.cones.len(), 1);
+        assert_eq!(cd.cones[0].divisors, [5]);
+
+        // Divisors 0 and 1 are negative on (0, 1) and (1, 0), 2 and 3 never: K_0 is spanned
+        // by (0, 1) and (1, 1), K_1 by (1, 0) and (1, 1), and K_{0, 1} is the Mori cone,
+        // labeled by the stratum on 0, 1 and 2 when there is one.
+        let q = DMatrix::from_row_slice(4, 2, &[1, -1, -1, 1, 1, 1, 1, 0]);
+        let cones = |strata: &[Stratum]| -> Vec<(Vec<usize>, Vec<Vec<i32>>)> {
+            let cd = cone_data(&mori, &none, &q, strata, &[1, 1], 10).unwrap();
+            cd.cones
+                .iter()
+                .map(|c| (c.divisors.clone(), cols(&c.hilbert_basis)))
+                .collect()
+        };
+        let k0 = (vec![0], vec![vec![0, 1], vec![1, 1]]);
+        let k1 = (vec![1], vec![vec![1, 0], vec![1, 1]]);
+        let mori_basis = vec![vec![0, 1], vec![1, 0]];
+        assert_eq!(
+            cones(&[]),
+            [k0.clone(), k1.clone(), (vec![0, 1], mori_basis.clone())]
+        );
+        let strata = [Stratum {
+            divisors: [2, 1, 0],
+            class: vec![1.into(), 0.into()],
+        }];
+        assert_eq!(cones(&strata), [k0, k1, (vec![0, 1, 2], mori_basis)]);
         // The grading must be positive on the cone.
         assert_eq!(
             cone_data(&mori, &none, &q, &[], &[1, 0], 2).err(),

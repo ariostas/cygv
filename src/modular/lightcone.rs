@@ -15,6 +15,7 @@
 //! pipeline.
 
 use super::key::KeyLayout;
+use super::lattice::Lattice;
 use super::table::SlotMap;
 use super::{dot, Error};
 use crate::cone::{columns, ConeData};
@@ -114,6 +115,27 @@ impl<K: super::key::Key> Lightcone<K> {
         }
     }
 
+    /// The same lightcones for curve classes in the coordinates of `lattice`: the inequalities
+    /// of the Mori cone restricted to it, with the same bounds. The sets of classes of the
+    /// generated semigroup are built in the coordinates of the run in the first place, and
+    /// stay as they are.
+    pub fn restrict(self, lattice: &Lattice) -> Result<Self, Error> {
+        Ok(match self {
+            Self::Hyperplanes {
+                hyperplanes,
+                bounds,
+            } => Self::Hyperplanes {
+                hyperplanes: hyperplanes
+                    .chunks_exact(lattice.h11().max(1))
+                    .map(|h| lattice.restrict(h))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .concat(),
+                bounds,
+            },
+            other => other,
+        })
+    }
+
     /// Whether every curve class is in the lightcones.
     pub fn is_all(&self) -> bool {
         matches!(self, Self::All)
@@ -174,7 +196,7 @@ mod tests {
     fn test_semigroup() {
         // The semigroup of (1, 0) and (1, 2), which misses (1, 1): below (2, 2) are only the
         // elements whose difference with it is an element.
-        let layout = PackedLayout::new(&[4, 4]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[4, 4]).unwrap();
         let sg = generated_semigroup(&layout, [&[1, 0][..], &[1, 2]], &[1, 1], 4).unwrap();
         let lc = Lightcone::from_semigroup(&layout, &sg, &[&[2, 2]]).unwrap();
         let inside: Vec<[i32; 2]> = sg

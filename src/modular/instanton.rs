@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn test_mul_scalar() {
         let lf = ring();
-        let layout = PackedLayout::new(&[30, 30]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[30, 30]).unwrap();
         let mut rng = TestRng::new(11);
         for (max_deg, width) in [(10, 1), (10, 3), (6, 2), (0, 1)] {
             let a = random_series(&mut rng, &lf, &layout, 1, 10, Some(3));
@@ -390,7 +390,7 @@ mod tests {
     #[test]
     fn test_recip() {
         let lf = ring();
-        let layout = PackedLayout::new(&[30, 30]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[30, 30]).unwrap();
         let mut rng = TestRng::new(12);
         let max_deg = 12;
         for c in [1, -7, 123_456] {

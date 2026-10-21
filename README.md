@@ -99,11 +99,13 @@ Problem(q, {(0, 1, 1): 4, (1, 1, 1): 2}, fan=fan).gv(max_deg=3)
 Two implementations of the computation are available, selected with `method`. The `modular` one
 computes modulo word-sized primes and recovers the exact integers by the Chinese remainder
 theorem, which is much faster, but only supports `max_deg` and `target_points`, and curve classes
-whose coordinates fit its keys. The `reference` one is a faithful implementation of the HKTY
-procedure with exact rational arithmetic. The default, `auto`, uses the modular one for `max_deg`
-and `target_points` and the reference one otherwise; curve classes too large for the modular one
-are an error rather than a slow run of the reference. `n_threads` sets the number of threads,
-which defaults to one per core.
+whose coordinates fit its keys of up to 512 bits. On a face of the Mori cone it takes their
+coordinates in a reduced basis of the lattice they span, which keeps them small: faces of rank
+up to a few dozen fit even when $h^{1,1}$ is in the hundreds. The `reference` one is a faithful
+implementation of the HKTY procedure with exact rational arithmetic. The default, `auto`, uses
+the modular one for `max_deg` and `target_points` and the reference one otherwise; curve
+classes too large for the modular one are an error rather than a slow run of the reference.
+`n_threads` sets the number of threads, which defaults to one per core.
 
 The modular implementation accepts its result once one more prime agrees with it, which makes a
 wrong result vanishingly unlikely but does not rule it out. With `certify=True` it proves the

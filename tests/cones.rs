@@ -232,22 +232,46 @@ fn test_cone_data() {
             max_deg,
         )
         .unwrap();
-        assert_eq!(found.cones.len(), normaliz.cones.len());
+        // Each distinct cone once (see `cone::cone_data`), so fewer than Normaliz's.
+        assert!(found.cones.len() < normaliz.cones.len());
         let degree = |c: &Vec<i32>| -> i32 { c.iter().zip(&w).map(|(x, y)| x * y).sum() };
+        let truncated = |c: &CandidateCone| {
+            let mut basis = sorted_columns(&c.hilbert_basis);
+            basis.retain(|c| degree(c) <= max_deg as i32);
+            basis
+        };
         for cone in &found.cones {
             let theirs = normaliz
                 .cones
                 .iter()
                 .find(|c| c.divisors == cone.divisors)
                 .unwrap();
-            let mut expected = sorted_columns(&theirs.hilbert_basis);
-            expected.retain(|c| degree(c) <= max_deg as i32);
             assert_eq!(
                 sorted_columns(&cone.hilbert_basis),
-                expected,
+                truncated(theirs),
                 "{:?}",
                 cone.divisors
             );
+        }
+        // And every one of Normaliz's with a divisor negative on it is one of them.
+        let q = &input.problem.geometry.q;
+        let found: Vec<Vec<Vec<i32>>> = found
+            .cones
+            .iter()
+            .map(|c| sorted_columns(&c.hilbert_basis))
+            .collect();
+        for theirs in &normaliz.cones {
+            let basis = truncated(theirs);
+            let negative = theirs.divisors.iter().any(|&r| {
+                basis.iter().any(|c| {
+                    c.iter()
+                        .enumerate()
+                        .map(|(t, &x)| x * q[(r, t)])
+                        .sum::<i32>()
+                        < 0
+                })
+            });
+            assert_eq!(found.contains(&basis), negative, "{:?}", theirs.divisors);
         }
     }
 }
@@ -404,6 +428,62 @@ fn test_facet_target_points() {
         max_deg: None,
     };
     assert_eq!(results(&input, Method::Modular).unwrap(), Results::new());
+}
+
+/// On the facet the curve classes span a lattice of rank 8, whose coordinates key them, and
+/// that gives the same invariants as the input coordinates: from the cones and from the
+/// semigroup of the generators, below targets, one of them off the facet, certified, and with
+/// keys of 512 bits.
+#[test]
+fn test_facet_lattice() {
+    use cygv::modular::{self, CandidateSource, Tuning};
+    let input = input(H11_9, false, 10, H11_9_FACET);
+    let cone_data = cone_data(&input);
+    let gens = generators(H11_9_FACET);
+    let gens: Vec<&[i32]> = gens.as_slice().chunks(9).collect();
+    let w = grading_vector(&input);
+    let geometry = &input.problem.geometry;
+    let geometry = modular::Geometry::from_toric(
+        &geometry.q,
+        &[],
+        &geometry.intnums,
+        cygv::CYKind::Threefold,
+        &w,
+    )
+    .unwrap();
+    let full = results(&input, Method::Modular).unwrap();
+    let targets = two_targets(&input, &full);
+    let mut off = [0; 9];
+    off[1] = 1;
+    let targets: Vec<&[i32]> = targets.as_slice().chunks(9).chain([&off[..]]).collect();
+    let options = |lattice, certify, min_key_bits| modular::Options {
+        certify,
+        tuning: Tuning {
+            lattice,
+            min_key_bits,
+            ..Tuning::default()
+        },
+        ..modular::Options::default()
+    };
+    for source in [
+        CandidateSource::Cones(&cone_data),
+        CandidateSource::Generators(&gens),
+    ] {
+        for targets in [&[][..], &targets[..2], &targets[..], &targets[2..]] {
+            // Within a degree they come in the order of the keys, which depends on the basis.
+            let run = |options| {
+                let mut gv =
+                    modular::compute_gv(source, &w, 10, targets, &geometry, &options).unwrap();
+                gv.sort_by(|a, b| (a.degree, &a.curve).cmp(&(b.degree, &b.curve)));
+                gv
+            };
+            let expected = run(options(false, false, 0));
+            assert_eq!(expected.is_empty(), targets.len() == 1);
+            for (certify, min_key_bits) in [(false, 0), (true, 0), (false, 512)] {
+                assert_eq!(run(options(true, certify, min_key_bits)), expected);
+            }
+        }
+    }
 }
 
 /// The Hilbert bases of the cones $K_T$ of P(1,1,2,2,2)[8], with the Mori cone spanned by

@@ -67,8 +67,9 @@ pub struct Tuning {
     /// Curves are large when $\alpha$ has at least this many terms up to the degree their
     /// exponentials reach.
     pub sync_min_terms: usize,
-    /// Whether the level tables pack the offsets into 128 bits even when 64 bits fit, which
-    /// only the tests need, since the geometries they can afford fit 64 bits.
+    /// Whether the level tables pack the offsets into the widest word the keys allow (128
+    /// bits, or the width of keys wider than that) even when 64 bits fit, which only the tests
+    /// need, since the geometries they can afford fit 64 bits.
     pub wide_levels: bool,
     /// The number of rows of the tree along which an extraction along rows shares the
     /// exponentials of the curves (see [`extract`]); zero builds every exponential curve by
@@ -689,9 +690,9 @@ impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
 /// terms in the order of the curves. Each curve emits at most one term per key, so every key
 /// then takes its terms in the same order whatever the threads.
 ///
-/// The level tables pack the offsets into 64 bits when the box of [`level_box`] fits, and
-/// into 128 bits otherwise, which always fits when the curve classes fit `layout`
-/// ([`Tuning::wide_levels`] forces the latter).
+/// The level tables pack the offsets into 64 bits when the box of [`level_box`] fits, into
+/// 128 bits otherwise, and for keys wider than 128 bits into a word as wide as theirs if that
+/// is not enough either ([`Key::Level`]; [`Tuning::wide_levels`] forces the widest).
 #[allow(clippy::too_many_arguments)]
 pub fn extract<R: Ring, L: KeyLayout>(
     ring: &R,
@@ -729,11 +730,26 @@ pub fn extract<R: Ring, L: KeyLayout>(
             ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
         )
     };
+    let wide = <<L::Key as Key>::Level as LevelWord>::BITS > u128::BITS;
     (if tuning.wide_levels { None } else { narrow() })
         .or_else(|| {
-            extract_in::<R, L, u128>(
-                ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
-            )
+            (!tuning.wide_levels || !wide)
+                .then(|| {
+                    extract_in::<R, L, u128>(
+                        ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning,
+                        source,
+                    )
+                })
+                .flatten()
+        })
+        .or_else(|| {
+            wide.then(|| {
+                extract_in::<R, L, <L::Key as Key>::Level>(
+                    ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning,
+                    source,
+                )
+            })
+            .flatten()
         })
         .unwrap_or_else(|| {
             let n_terms = alpha.len_upto(max_deg);
@@ -741,7 +757,7 @@ pub fn extract<R: Ring, L: KeyLayout>(
                 bits: offset_box(layout, grading, alpha, n_terms, max_deg)
                     .1
                     .bits(),
-                max_bits: u128::BITS - 1,
+                max_bits: <<L::Key as Key>::Level as LevelWord>::BITS - 1,
             }))
         })
 }
@@ -1044,7 +1060,7 @@ mod tests {
     #[test]
     fn test_round_trip() {
         let lf = ring();
-        let layout = PackedLayout::new(&[30, 30]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[30, 30]).unwrap();
         let mut rng = TestRng::new(21);
         let max_deg = 9;
         let inv = lf.inverses(max_deg as usize + 1).unwrap();
@@ -1208,7 +1224,7 @@ mod tests {
     #[test]
     fn test_errors() {
         let lf = ring();
-        let layout = PackedLayout::new(&[30, 30]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[30, 30]).unwrap();
         let inv = lf.inverses(5).unwrap();
         let empty = SparsePoly::new(2);
         let inst = SparsePoly::new(1);

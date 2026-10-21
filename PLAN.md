@@ -1262,24 +1262,42 @@ Layers, from cheapest to most independent:
 
 Not scheduled; each can be done after the wrap-up. First those from PR #102:
 
-- [ ] **Curves of high $h^{1,1}$ on faces.** Express the curves in an LLL-reduced basis of the
-  lattice the candidates span when it has lower rank than $h^{1,1}$ (the C's `setup_lattice`:
-  the cones, the grading, the curve side of the charges and the lightcone inequalities move
-  to it, and the output goes back), so that a face of the Mori cone of rank 32–40 at
-  $h^{1,1} = 491$ fits the keys. The extraction's `rows` already takes $\alpha$ along other
-  rows than the coordinates. Then keys wider than 128 bits (a second `KeyLayout`, which the
-  tables and stages are already generic over) for what still does not fit. Today such an
-  input falls back to the reference, which cannot finish it. The capability gap that
-  matters most. It also needs fewer cones: `cone::cone_data` gives a $K_T$ for every $T$ of
-  one or two divisors, about 123k at $h^{1,1} = 491$, and the candidates' containment skip
-  is quadratic in their number. #102's `ed93fb4` (2026-10-12) puts only the divisors
-  negative on some extreme ray in $T$ ($K_T = K_{T \cap N}$ otherwise, as cutting by the
-  others changes nothing), 123 cones on a 12-dimensional face there; in the tree that means
-  never leaving out (or cutting by) a row nonnegative on the Mori cone's basis, emitting one
-  cone when no row is negative, and keeping a stratum's label when its other divisors are
-  never negative, so that the vanishing-form skip of the pair does not drop it. On the bench
-  models it would save nothing measurable (13 of 15 divisors are negative somewhere on
-  `h11_11`; `cone_data` takes under 0.3 s).
+- [x] **Curves of high $h^{1,1}$ on faces.** Done (2026-10-21), in three parts.
+  - *Lattice* (`modular::lattice`, the C's `setup_lattice`): when the vectors the candidates
+    are sums of span a lattice of rank below $h^{1,1}$, the curves are keyed by their
+    coordinates in an LLL-reduced basis of it; the cones, the targets, the grading vector and
+    the curve side of the charges move to it, $\alpha$ is restricted to it after the
+    instanton (the divisor side, the forms and $c_1$ stay in $h^{1,1}$ coordinates), and the
+    output goes back. Where the C takes an echelon form of all the vectors in `i64`, the basis
+    is built one vector at a time (a floating-point solve checked exactly, independence
+    modulo a 61-bit prime, exact joins of vectors with fractional coordinates) with Cohen's
+    integral LLL in big integers: echelon forms of even 20 short random vectors overflowed
+    `i128`. Measured before writing it (CYTools, random faces of the toric Mori cones, the C's
+    bound): a face of rank 8, 12, 16, 32 at $h^{1,1} = 101$ needs 105–153, 84–130, 169–249,
+    288–396 bits in the input coordinates at degrees 10–40 and 32–48, 37–61, 64–96, 164–228
+    in the reduced basis; ranks 12 and 24 at $h^{1,1} = 491$ need 158–236 and 240–360, and
+    48–72 and 96–144. So about 4–7 bits per unit of rank: 128 bits to rank ~20, 256 to ~40,
+    512 to ~70; the whole Mori cone (388–590 bits at 101, 1300–2300 at 491) is out of reach
+    anyway. `tests/cones.rs::test_facet_lattice` checks it against the input coordinates on
+    the facet of `h11_9` (both candidate sources, targets on and off the facet, certified,
+    512-bit keys).
+  - *Keys of 256 and 512 bits* (`key::Wide<N>`), when 128 do not hold the reduced
+    coordinates, with level tables as wide (`Key::Level`) when the box of the offsets needs
+    more than 128 bits, which the C does not have (it stops at 127 bits there, with an LLL
+    basis of the lattice of the $L$ terms as a fallback, not ported). Wide keys take four
+    primes per pass (`Lift`). The cost is the build: the pipeline is compiled for every key
+    width, the release build going from 182 s to 350 s and an incremental dev build after
+    editing a stage from 2.7 s to 10.5 s. Dropping certification for wide keys, or one of
+    the two widths, would bring the release build to about 270 s.
+  - *Fewer cones* (`ed93fb4`, see `cone::cone_data`): on random faces of rank 12 and 22 at
+    $h^{1,1} = 491$ (degree 10) the runs went from 173 s and 400 s, nearly all in the Hilbert
+    bases of the 123k cones, to 0.4 s and 0.5 s, with the same output.
+
+  Not tested on realistic inputs: random faces of the toric Mori cone carry almost no
+  nonzero invariants (0–6 here), and whole Mori cones of $h^{1,1} = 16$ or 24 (from the
+  Kreuzer–Skarke list) did not get their Hilbert bases from Normaliz or `cone::cone_data`
+  within 20 minutes. Faces with many nonzero invariants, ideally the C's of rank 32–40 at
+  $h^{1,1} = 491$, are to be added as fixtures.
 - [ ] **Curve-class replay** (the C's `cb_*`): the curves of a layer with the same degree and
   nonzero coordinates share one pattern of pairs, built by hashing for the first and
   replayed by indexing for the others, with sums kept unreduced in blocks of 16 (which needs
@@ -1288,9 +1306,12 @@ Not scheduled; each can be done after the wrap-up. First those from PR #102:
   budget, a cost model and a task order of its own. The tree of 8e now does most of what it
   would (it shares more), so only worth measuring again for the curves' exponentials along
   the other rows.
-- [ ] **64-bit keys everywhere** when the whole layout fits (h11_8 and h11_9 take 51 and 56
-  bits): a `PackedLayout` over `u64` would halve the keys of the series, the shards and the
-  candidates. Not in the C.
+- [x] **64-bit keys everywhere** when the whole layout fits (h11_8 and h11_9 take 51 and 56
+  bits): measured and dropped (2026-10-21). With the run taking `u64` keys whenever they fit,
+  `h11_8` at 24 took 11.2 / 10.4 s and 826 / 842 MB against 11.2 / 11.3 s and 840 / 860 MB
+  with `u128`, and `h11_9` at 18 0.73 / 0.70 s against 0.82 / 0.71 s: the keys are a small
+  part of an entry next to its values and the index, and not worth another copy of the
+  pipeline in the build.
 - [ ] **Structure-of-arrays level tables** on CPUs with a large L2 (the C chooses at run
   time); needs a machine with one to measure.
 
@@ -1622,6 +1643,11 @@ Other follow-ups, not from #102:
    extraction), whether `u64` keys give a real gain, and whether an `i8` variant is worth
    having next to `i16`. Phase 1 implements the trait and the packed `u128`; the others follow
    once there is a benchmark to compare them on.
+
+   Settled in 5.3 (2026-10-21): `u64` keys gave nothing measurable; inline arrays were not
+   built, since a basis of the lattice the curves span (`modular::lattice`) makes the
+   packed keys of a face small, and packed keys of 256 and 512 bits (`Wide<N>`) take the
+   rest, still adding in a few instructions.
 5. **Exactness. Direction (decided): a tunable number of check primes, default 1, minimum 1.** The primes
    in a run split into those needed to hold the largest $\lvert GV\rvert$ and extra ones that
    only verify the lift: the result is accepted when the lift from the needed primes agrees

@@ -125,7 +125,7 @@ pub fn candidates_by_enumeration<'a, L: KeyLayout>(
     max_deg: u32,
     geometry: &Geometry,
 ) -> Result<Vec<(L::Key, u32)>, Error> {
-    if geometry.h11() != grading_vector.len() {
+    if geometry.dim() != grading_vector.len() {
         return Err(Error::DimensionMismatch);
     }
     let points = generated_semigroup(layout, generators, grading_vector, max_deg)?;
@@ -176,7 +176,37 @@ pub enum CandidateSource<'a> {
     Cones(&'a ConeData),
 }
 
-impl CandidateSource<'_> {
+impl<'a> CandidateSource<'a> {
+    /// The vectors whose sums are the candidates of degree at most `max_deg` and whatever
+    /// else [`CandidateSource::candidates`] packs for the lightcones of `targets`: the
+    /// generators, or the elements of the Hilbert bases.
+    pub fn vectors(
+        &self,
+        grading_vector: &[i32],
+        max_deg: u32,
+        targets: &[&[i32]],
+    ) -> Result<Vec<&'a [i32]>, Error> {
+        let top = match *self {
+            Self::Generators(_) => semigroup_degree(max_deg, targets, grading_vector)?,
+            Self::Cones(_) => max_deg,
+        };
+        let vectors: Vec<&'a [i32]> = match *self {
+            Self::Generators(gens) => gens.to_vec(),
+            Self::Cones(cone_data) => cone_data
+                .cones
+                .iter()
+                .flat_map(|c| columns(&c.hilbert_basis))
+                .collect(),
+        };
+        if vectors.iter().any(|v| v.len() != grading_vector.len()) {
+            return Err(Error::DimensionMismatch);
+        }
+        Ok(vectors
+            .into_iter()
+            .filter(|g| dot(g, grading_vector) <= top as i64)
+            .collect())
+    }
+
     /// Bounds on the absolute values of the coordinates of the candidates of degree at most
     /// `max_deg`, and of whatever else [`CandidateSource::candidates`] packs for the
     /// lightcones of `targets`, which size the keys (see [`coordinate_bounds`]).
@@ -224,7 +254,7 @@ impl CandidateSource<'_> {
     ) -> Result<Candidates<L::Key>, Error> {
         let (mut cands, lightcone) = match *self {
             Self::Generators(gens) => {
-                if geometry.h11() != grading_vector.len() {
+                if geometry.dim() != grading_vector.len() {
                     return Err(Error::DimensionMismatch);
                 }
                 // The lightcones need the elements up to the degree of the targets.
@@ -322,8 +352,8 @@ pub(crate) fn cone_candidates<L: KeyLayout>(
     geometry: &Geometry,
     skip: bool,
 ) -> Result<Vec<(L::Key, u32)>, Error> {
-    let h11 = geometry.h11();
-    if h11 != grading_vector.len() || cones.iter().any(|c| !fits(&c.hilbert_basis, h11)) {
+    let dim = geometry.dim();
+    if dim != grading_vector.len() || cones.iter().any(|c| !fits(&c.hilbert_basis, dim)) {
         return Err(Error::DimensionMismatch);
     }
     let bases: Vec<Vec<&[i32]>> = cones
@@ -385,7 +415,7 @@ pub(crate) fn cone_candidates<L: KeyLayout>(
 /// Whether $Q_s K^{(k)} Q_t$ vanishes for every form $k$.
 fn vanishing_form(geometry: &Geometry, s: usize, t: usize) -> bool {
     let h11 = geometry.h11();
-    let (qs, qt) = (geometry.q(s), geometry.q(t));
+    let (qs, qt) = (geometry.divisor_q(s), geometry.divisor_q(t));
     (0..geometry.n_forms()).all(|k| {
         let form = geometry.form(k);
         let mut v = 0i128;
@@ -424,7 +454,7 @@ pub(crate) mod tests {
         let dim = grading_vector.len();
         let bounds =
             coordinate_bounds(generators.iter().copied(), grading_vector, max_deg).unwrap();
-        let layout = PackedLayout::new(&bounds).unwrap();
+        let layout = PackedLayout::<u128>::new(&bounds).unwrap();
         let points =
             generated_semigroup(&layout, generators.iter().copied(), grading_vector, max_deg)
                 .unwrap();
@@ -482,7 +512,7 @@ pub(crate) mod tests {
     fn test_generator_reduction() {
         // (2, 0) and (1, 1) are sums of (1, 0) and (0, 1), so the result is the same with
         // or without them, and the count of points is that of the quadrant.
-        let layout = PackedLayout::new(&[10, 10]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[10, 10]).unwrap();
         let full = generated_semigroup(
             &layout,
             [&[1, 0][..], &[2, 0], &[1, 1], &[0, 1]],
@@ -497,7 +527,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_generated_semigroup_errors() {
-        let layout = PackedLayout::new(&[3, 3]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[3, 3]).unwrap();
         assert_eq!(
             generated_semigroup(&layout, [&[1, -1][..]], &[1, 1], 3),
             Err(Error::Key(KeyError::NonPositiveDegree))
@@ -525,7 +555,8 @@ pub(crate) mod tests {
         )
         .unwrap();
         let gens: [&[i32]; 2] = [&[1, 0], &[0, 1]];
-        let layout = PackedLayout::new(&coordinate_bounds(gens, &[1, 1], 6).unwrap()).unwrap();
+        let layout =
+            PackedLayout::<u128>::new(&coordinate_bounds(gens, &[1, 1], 6).unwrap()).unwrap();
         let all = generated_semigroup(&layout, gens, &[1, 1], 6).unwrap();
         let cands = candidates_by_enumeration(&layout, gens, &[1, 1], 6, &geometry).unwrap();
         // Every class (a, b) has at most one negative intersection, a - 2b with the last row.
@@ -687,7 +718,7 @@ pub(crate) mod tests {
         let h11 = grading_vector.len();
         let bounds =
             coordinate_bounds(generators.iter().copied(), grading_vector, max_deg).unwrap();
-        let layout = PackedLayout::new(&bounds).unwrap();
+        let layout = PackedLayout::<u128>::new(&bounds).unwrap();
         let points = unpacked(
             &layout,
             &generated_semigroup(&layout, generators.iter().copied(), grading_vector, max_deg)
@@ -753,7 +784,7 @@ pub(crate) mod tests {
             .zip(coordinate_bounds(generators.iter().copied(), grading_vector, max_deg).unwrap())
             .map(|(a, b)| a.max(b))
             .collect();
-        let layout = PackedLayout::new(&bounds).unwrap();
+        let layout = PackedLayout::<u128>::new(&bounds).unwrap();
         let expected = candidates_by_enumeration(
             &layout,
             generators.iter().copied(),
@@ -882,7 +913,7 @@ pub(crate) mod tests {
             source.coordinate_bounds(&[1, 1], 4, &[]),
             Err(KeyError::DimensionMismatch)
         );
-        let layout = PackedLayout::new(&[4, 4]).unwrap();
+        let layout = PackedLayout::<u128>::new(&[4, 4]).unwrap();
         assert_eq!(
             source.candidates(&layout, &[1, 1], 4, &[], &geometry).err(),
             Some(Error::DimensionMismatch)
