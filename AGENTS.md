@@ -347,8 +347,12 @@ indices differently (the first index is a reference surface in the n-fold case).
   splits a table by the high bits of the key hash, each shard behind a `Mutex`, and workers add
   to it in batches (a chunk's own map, or per-shard buffers of `FLUSH` terms), so each lock is
   taken rarely. The extraction's tree builds the curves' exponentials in parallel by curve,
-  sums up the tree by parent, subtracts by table and multiplies by target table (its products
-  into one table are one task, and those near the root scale badly). The curve-by-curve
+  sums up the tree by parent, subtracts by table and multiplies by target table, the products
+  into one table a task of its own (`with_max_len(1)`: rayon would otherwise run the largest,
+  which come first, one after another on one thread), but for the root's tables, which take
+  the largest products: an exact ring on more than one thread splits them in parts by hash, as
+  the sinks are, so that their products go as tasks of a chunk of sources each. It reads each
+  layer's curves from the shards in parallel. The curve-by-curve
   extraction applies the curves of a layer (degrees $[d, d + \delta)$, $\delta$
   the lowest degree of $\alpha$) in parallel, each worker indexed by
   `rayon::current_thread_index` with its own level tables; layers of few large curves (the first

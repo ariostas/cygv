@@ -1521,6 +1521,66 @@ Other follow-ups, not from #102:
   Not on that list, because they barely depend on the CPU: more lanes per pass (`NL` up to
   8, one pass instead of two), 64-bit keys, and the lane probe, all of which can be measured
   here.
+  - *Apple M1 Max* (branch `perf-m1`, 2026-10-22): 8 performance and 2 efficiency cores,
+    128 KB of L1D per core and 12 MB of L2 per cluster of four, 128-byte lines, NEON, no SVE;
+    macOS, with `xctrace` (Time Profiler, CPU Counters) for the profiles. The C of #102 was
+    not rerun (removed in `4baa720`); the baseline is `ee45d46`. A core is about 2.5 times the
+    Haswell's (`h11_10` at 20 on one thread: 21 s against 51), but 8 threads gave only 2.3 times
+    one (9.1 s, about 2.5 cores busy on average): the parallel code, not the arithmetic, was
+    what the larger machine exposed. Timers per step of the tree (scratch, not committed)
+    found it:
+    - The products of a layer go by target table, sorted largest first, and rayon cut that
+      list into about one piece per thread, so the largest tables (the root's, of the top
+      degrees, the one of degree 20 alone a fifth of a layer's pairs) ran one after another on
+      one thread: products 5.3 s on one thread, 4.0 s on eight. With `with_max_len(1)`, 1.9 s.
+      The root's tables, split in parts by hash as the sinks are (exact rings, more than one
+      thread), with their products as tasks of 2^16 pairs: 1.0 s, and the emission 0.34 →
+      0.19 s. On one thread a split root costs 8–12% of the products whatever the number of
+      parts (1 to 512), so it stays whole there; on eight, 64–256 parts were not clearly
+      better than 32 (faster products, slower emission).
+    - Prefetch was x86-64 only; `prfm pldl1keep` on AArch64 takes the products on one thread
+      from 5.0 to 4.55 s, the exponentials unchanged (their level tables stay in cache).
+    - The serial tail: the dispatch's sort of the 1.17 M invariants (0.21 s; now sorted in the
+      pool, so the dispatch only checks it), the YAML (0.45 → 0.07 s, formatted in chunks in
+      parallel), the reading of each layer's curves (0.29 → 0.07 s), and the instanton's
+      products by $c_0^{-1}$, split over $c_0^{-1}$'s 2–25 terms (0.21 → 0.08 s, now over
+      the other series').
+    - Result, medians of 5 alternating runs (3 for the modes), identical outputs, before /
+      after: 8 threads `h11_10` at 20 8.32 / 4.73 s, `h11_8` at 22 1.36 / 0.81 s, `h11_11` at
+      20 0.86 / 0.59 s, `h11_9` at 20 (cones) 0.51 / 0.39 s; certified `h11_8` at 22 3.03 /
+      2.17 s, `h11_11` at 20 1.82 / 1.32 s; low-memory `h11_10` at 20 26.2 / 22.4 s. One thread
+      unchanged within 2%. The live peak is unchanged (950 against 953 MiB on `h11_10`); the
+      resident peak rose 2–7% on eight threads, macOS's allocator keeping freed blocks, its
+      resident peak being about 1.6 times the live one (1.5 GB against 950 MiB).
+    - Where `h11_10` at 20 on 8 threads goes now (4.2 s computing, 4.1 times one thread): the
+      exponentials 1.2 s (6.9 times one thread), the products 0.9 s (4.9 times), the emission
+      0.17, the powers 0.14, the instanton 0.39, the lane probe's pass 0.25, the period 0.12,
+      the setup 0.12 (the candidates' `generated_semigroup` keeps about 2.6 cores busy), the
+      lift and the rest about 0.4. Each `ShardedMap::take` merges its shards by a serial heap
+      (about 0.05 s each, three in the instanton and one at the end of the tree), a parallel
+      merge by splitters would save perhaps 4%. 10 threads are no faster than 8.
+    - SIMD arithmetic (`ALGORITHMS.md`), measured with a microbenchmark of `acc += a b` on
+      three lanes as in the scatter: scalar 62-bit Montgomery 2.9 ns, scalar double-precision
+      FMA with 50-bit primes 2.6 ns, NEON on two `float64x2` vectors 3.4 ns. The M1's 64-bit
+      multipliers are as fast as its two-wide doubles, and 50-bit primes need a quarter more
+      of them, so nothing to gain on AArch64; AVX-512 IFMA is for the x86 machine. A lane
+      costs 15–20% of the extraction on one thread (`h11_10` at 20 with 2 / 3 / 4 lanes:
+      exponentials 8.6 / 9.8 / 11.5 s, products 4.6 / 5.1 / 6.3 s); the arithmetic is about a
+      fifth of a pair.
+    - Counters (CPU Counters' top-down, one thread, `h11_8` at 22): 45% of the cycles useful,
+      28% discarded (mispredicted), 22.5% bound in processing, 4% in delivery; 28–37% discarded
+      in the exponentials and the products. The probe loops (hit, empty or collision) are the
+      likely branches: filling the level tables to 3/8 or 1/2 instead of 3/4 took the
+      exponentials 6–8% and the powers 22–34% faster on one thread, nothing measurable on
+      eight; not adopted. Branchless probing is untried.
+    - Not adopted either: structure-of-arrays level tables (hashes and values apart), about
+      2% on the exponentials on one thread, within the noise; a third row of the tree, which
+      again only helps `h11_10` on one thread (18.3 against 19.7 s, 20% more memory), and is
+      slower on eight everywhere (`h11_10` 5.2 against 4.65 s, `h11_8` at 22 0.94 against
+      0.90); depth 1 is far slower (8.7 s). The default stays at two.
+    - Caveats: a laptop with other load (a security agent and a backup took a core or two at
+      times), so the timings are medians of alternating runs and differences under 5% are
+      noise.
 
 - [ ] **Certifying vex phases** (`Error::CertifyStrata` today, as in the C): the stratum
   terms need bounds of their own in the majorant run.
