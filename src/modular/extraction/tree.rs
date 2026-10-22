@@ -527,7 +527,6 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
         .collect();
     let keys = level.offset_keys(&units);
     let ints: Vec<R::Elem> = (0..=max_deg).map(|n| ring.int(n as i64)).collect();
-    let mut c = vec![0; h11];
     let TreeRows {
         tree,
         row_series,
@@ -589,7 +588,6 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
         layout.unpack(key, c);
         lightcone.contains(key, c)
     };
-    let mut values = vec![R::Elem::default(); width];
 
     let mut layer: Vec<TreeCurve<L::Key, W, R::Elem>> = Vec::new();
     // With a window of leaf degrees, the leaves only take the terms of its degrees, and the
@@ -754,45 +752,61 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
         }
         fold_outs(ring, &mut workers, &mut shards);
 
-        // The curves of the layer, with their leaves, sorted by leaf and then key.
-        layer.clear();
-        for shard in shards.iter_mut() {
-            let shard = shard.get_mut().unwrap();
-            while shard.heap.min_deg().is_some_and(|e| e < top) {
-                let slot = shard.heap.pop().unwrap();
-                let (key, deg) = (shard.map.key(slot), shard.map.deg(slot));
-                let mut val = shard.map.values(slot)[0];
-                // A curve of the maximum degree has nothing left to change, and one outside
-                // the lightcones only changes curves outside them.
-                if deg == 0 || deg >= max_deg || ring.is_zero(val) || !in_lightcone(key, &mut c) {
-                    continue;
-                }
-                if let Some(source) = source {
-                    source(&c, deg, &mut values);
-                    val = values[k];
-                    if ring.is_zero(val) {
+        // The curves of the layer, read from the shards in parallel and sorted by key.
+        let parts: Vec<Vec<_>> = shards
+            .par_iter_mut()
+            .map(|shard| {
+                let shard = shard.get_mut().unwrap();
+                let (mut c, mut values) = (vec![0; h11], vec![R::Elem::default(); width]);
+                let mut part = Vec::new();
+                while shard.heap.min_deg().is_some_and(|e| e < top) {
+                    let slot = shard.heap.pop().unwrap();
+                    let (key, deg) = (shard.map.key(slot), shard.map.deg(slot));
+                    let mut val = shard.map.values(slot)[0];
+                    // A curve of the maximum degree has nothing left to change, and one
+                    // outside the lightcones only changes curves outside them.
+                    if deg == 0 || deg >= max_deg || ring.is_zero(val) || !in_lightcone(key, &mut c)
+                    {
                         continue;
                     }
+                    if let Some(source) = source {
+                        source(&c, deg, &mut values);
+                        val = values[k];
+                        if ring.is_zero(val) {
+                            continue;
+                        }
+                    }
+                    part.push(TreeCurve {
+                        key,
+                        deg,
+                        val,
+                        leaf: 0,
+                        hash: level.hash(&c),
+                    });
                 }
-                layer.push(TreeCurve {
-                    key,
-                    deg,
-                    val,
-                    leaf: 0,
-                    hash: level.hash(&c),
-                });
-            }
-        }
-        // The nodes are numbered as they appear, in an order that does not depend on the
-        // threads, since the sums go in their order.
-        layer.sort_unstable_by_key(|t| t.key);
-        for t in layer.iter_mut() {
-            layout.unpack(t.key, &mut c);
-            let prefix: Vec<i64> = tree
-                .iter()
-                .map(|&r| super::super::dot(&c, &rows[r]))
-                .collect();
-            t.leaf = node_of(&prefix, &mut nodes, &mut index, marker, max_deg);
+                part
+            })
+            .collect();
+        layer.clear();
+        layer.extend(parts.into_iter().flatten());
+        layer.par_sort_unstable_by_key(|t| t.key);
+        // The leaves, from the prefixes of the curves, computed in parallel. The nodes are
+        // numbered as they appear, in an order that does not depend on the threads, since the
+        // sums go in their order.
+        let mut prefixes = vec![0i64; layer.len() * depth];
+        prefixes
+            .par_chunks_mut(depth.max(1))
+            .zip(layer.par_iter())
+            .for_each(|(prefix, t)| {
+                let mut c = vec![0; h11];
+                layout.unpack(t.key, &mut c);
+                for (x, &r) in prefix.iter_mut().zip(tree) {
+                    *x = super::super::dot(&c, &rows[r]);
+                }
+            });
+        for (i, t) in layer.iter_mut().enumerate() {
+            let prefix = &prefixes[i * depth..(i + 1) * depth];
+            t.leaf = node_of(prefix, &mut nodes, &mut index, marker, max_deg);
         }
 
         // Build the exponentials of the curves along the other rows, as far as the window.
