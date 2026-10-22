@@ -20,6 +20,29 @@ use std::sync::Mutex;
 /// Marks an unused bucket of a [`SlotMap`].
 const EMPTY: u64 = 0;
 
+/// Asks the processor to fetch the cache line at `ptr` ahead of a use a few iterations later.
+/// It does nothing on other architectures than x86-64 and AArch64.
+#[inline(always)]
+pub(crate) fn prefetch<T>(ptr: *const T) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: a prefetch has no effect on memory, and SSE is part of x86-64.
+    #[allow(unused_unsafe)]
+    unsafe {
+        core::arch::x86_64::_mm_prefetch(ptr.cast::<i8>(), core::arch::x86_64::_MM_HINT_T0);
+    }
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: a prefetch has no effect on memory or flags, and does not fault.
+    unsafe {
+        core::arch::asm!(
+            "prfm pldl1keep, [{ptr}]",
+            ptr = in(reg) ptr,
+            options(nostack, preserves_flags, readonly)
+        );
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let _ = ptr;
+}
+
 /// Whether all values are zero, i.e. equal to [`Default`].
 #[inline]
 fn all_zero<V: Default + PartialEq>(vals: &[V]) -> bool {
@@ -142,22 +165,11 @@ impl<K: Key, V: Copy + Default + PartialEq> SlotMap<K, V> {
     }
 
     /// Asks the processor to fetch the bucket where a key with hash `hash` is probed first
-    /// into the cache, ahead of an insertion a few iterations later. It does nothing on other
-    /// architectures than x86-64.
+    /// into the cache, ahead of an insertion a few iterations later.
     #[inline]
     pub fn prefetch(&self, hash: u64) {
-        #[cfg(target_arch = "x86_64")]
-        {
-            let h = hash as usize & (self.index.len() - 1);
-            let ptr = self.index[h..].as_ptr().cast::<i8>();
-            // SAFETY: a prefetch has no effect on memory, and SSE is part of x86-64.
-            #[allow(unused_unsafe)]
-            unsafe {
-                core::arch::x86_64::_mm_prefetch(ptr, core::arch::x86_64::_MM_HINT_T0);
-            }
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        let _ = hash;
+        let h = hash as usize & (self.index.len() - 1);
+        prefetch(self.index[h..].as_ptr());
     }
 
     /// The values of `key`'s slot, created with zero values if there is none.
