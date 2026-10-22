@@ -1567,10 +1567,24 @@ Other follow-ups, not from #102:
     and the products: 1 to 16 within noise, 4 kept. The tree's depth: the default stays
     (above). The parts of the tables in the split products (1–16 per thread) and the
     buffers (128–2048 terms): within 10%, one part per thread kept.
-  - The C of #102 as the baseline: not rerun. On the bench models its saturation check of
-    the cone data fails and it falls back to enumerating the semigroup of the generators,
-    about $10^8$ points at these degrees, which ran this machine out of memory once; it has
-    no tree, so the comparison of phase 8d no longer says much anyway.
+  - The C of #102 as the baseline, built with `-O3 -march=native`, its cone data from
+    Normaliz 3.11.0. Its input needs a generating set that saturates the cone, so it gets the
+    Hilbert basis of the Mori cone: with the bench files' generators its saturation check
+    fails and it enumerates the semigroup instead, about $10^8$ points at these degrees,
+    which ran this machine out of memory once. Every output identical to cygv's. Wall clock
+    (C's own lane probe in both), 1 / 8 / 16 threads:
+
+    | Case | C | cygv | C / cygv |
+    |------|---|------|----------|
+    | `h11_8` at 20 | 5.74 / – / 1.26 s | 0.97 / – / 0.31 s | 5.9 / – / 4.1× |
+    | `h11_8` at 24 | 98.2 / 22.3 / 21.8 s | 6.24 / 1.93 / 1.74 s | 15.7 / 11.5 / 12.5× |
+    | `h11_10` at 20 | 227.0 / 63.7 / 63.2 s | 14.59 / 4.43 / 3.98 s | 15.6 / 14.4 / 15.9× |
+    | `h11_11` at 20 | – / – / 1.18 s | – / – / 0.47 s | – / – / 2.5× |
+    | `h11_11` at 24 | 73.7 / 19.8 / 20.2 s | 8.66 / 3.07 / 2.75 s | 8.5 / 6.4 / 7.3× |
+
+    The gap grows with the degree, as the tree's sharing does (phase 8e), and the C gains
+    nothing from 8 to 16 threads. Peak memory: the C 1.0–4.0 GB on 8–16 threads, cygv
+    0.6–1.3 GB; on one thread they are close.
   - Result, before (`ee45d46`) and after the session, 1 / 8 / 16 threads:
 
     | Case | Before | After |
