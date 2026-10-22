@@ -271,6 +271,28 @@ pub use cone::CandidateCone;
 #[doc(inline)]
 pub use python::cygv;
 
+/// Makes the allocator return large blocks to the system as soon as they are freed, which
+/// keeps the resident memory of a run close to what it holds: about a third less in the
+/// low-memory mode ([`Options::low_memory`]), for a few percent of time. It changes a setting
+/// of the whole process, glibc's `M_MMAP_THRESHOLD`, which otherwise rises as large blocks
+/// are freed, so that later ones come from a heap that keeps their memory. The command line
+/// and the Python module call it for a run in the low-memory mode; it does nothing on other
+/// platforms than Linux with glibc.
+pub fn return_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        extern "C" {
+            fn mallopt(param: core::ffi::c_int, value: core::ffi::c_int) -> core::ffi::c_int;
+        }
+        const M_MMAP_THRESHOLD: core::ffi::c_int = -3;
+        // SAFETY: mallopt only changes a setting of glibc's allocator, which is safe to do at
+        // any time.
+        unsafe {
+            mallopt(M_MMAP_THRESHOLD, 128 * 1024);
+        }
+    }
+}
+
 // Re-export the big-number crate of the results, so that callers can name its types and
 // traits without depending on a matching version themselves.
 pub use malachite;

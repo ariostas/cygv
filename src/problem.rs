@@ -123,6 +123,10 @@ pub struct Options {
     /// Whether to prove the results exact (see [`modular::Options::certify`]); the reference
     /// pipeline is exact anyway. Not supported in vex phases yet.
     pub certify: bool,
+    /// Whether to prefer memory to speed (see [`modular::Options::low_memory`]), for the runs
+    /// that do not fit otherwise: about a third of the memory for about two and a half times
+    /// the time. Only the modular pipeline has such a mode; the reference ignores it.
+    pub low_memory: bool,
     /// The Hilbert bases of the cones $K_T$ (see [`crate::cone::ConeData`]), computed by an
     /// external program such as Normaliz, which the modular pipeline then uses instead of
     /// computing them (the reference pipeline does not need them). They are trusted: an

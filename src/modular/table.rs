@@ -397,8 +397,42 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
             parts.iter().all(|p| p.width == width),
             "merged series need the same width"
         );
-        if parts.len() == 1 {
-            return parts.into_iter().next().unwrap();
+        let mut parts: Vec<Self> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+        if parts.len() <= 1 {
+            return parts.pop().unwrap_or_else(|| Self::new(width));
+        }
+        // A merge of the parts if each is in order, which they usually are; otherwise a sort.
+        let sorted = parts
+            .iter()
+            .all(|p| (1..p.len()).all(|i| (p.degs[i - 1], p.keys[i - 1]) < (p.degs[i], p.keys[i])));
+        let n: usize = parts.iter().map(Self::len).sum();
+        let mut res = Self::new(width);
+        res.keys.reserve_exact(n);
+        res.degs.reserve_exact(n);
+        res.vals.reserve_exact(n * width);
+        if sorted {
+            let mut heap: BinaryHeap<Reverse<(u32, K, u32)>> = parts
+                .iter()
+                .enumerate()
+                .map(|(p, part)| Reverse((part.degs[0], part.keys[0], p as u32)))
+                .collect();
+            let mut at = vec![0usize; parts.len()];
+            while let Some(Reverse((deg, key, p))) = heap.pop() {
+                let (p, part) = (p as usize, &parts[p as usize]);
+                let i = at[p];
+                debug_assert!(
+                    res.keys.last().is_none_or(|&k| k != key),
+                    "merged series have no key in common"
+                );
+                res.keys.push(key);
+                res.degs.push(deg);
+                res.vals.extend_from_slice(part.values(i));
+                at[p] += 1;
+                if at[p] < part.len() {
+                    heap.push(Reverse((part.degs[i + 1], part.keys[i + 1], p as u32)));
+                }
+            }
+            return res;
         }
         let mut order: Vec<(u32, K, u32, u32)> = parts
             .iter()
@@ -412,10 +446,6 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
             order.windows(2).all(|w| w[0].1 != w[1].1),
             "merged series have no key in common"
         );
-        let mut res = Self::new(width);
-        res.keys.reserve(order.len());
-        res.degs.reserve(order.len());
-        res.vals.reserve(order.len() * width);
         for (deg, key, p, i) in order {
             res.keys.push(key);
             res.degs.push(deg);

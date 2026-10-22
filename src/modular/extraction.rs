@@ -32,7 +32,9 @@
 
 use super::field::Ring;
 use super::key::{Key, KeyError, KeyLayout};
-use super::level::{level_box, LevelBox, LevelLayout, LevelTable, LevelWord, OffsetKeys};
+use super::level::{
+    level_box, BoxBounds, CompactTable, LevelBox, LevelLayout, LevelTable, LevelWord, OffsetKeys,
+};
 use super::lightcone::Lightcone;
 use super::table::{shard_of, DegreeHeap, SlotMap, SparsePoly};
 use super::Error;
@@ -42,7 +44,7 @@ use std::sync::Mutex;
 mod tree;
 
 /// Level tables larger than this are freed after each curve rather than kept for the next.
-const LEVEL_KEEP: usize = 1 << 15;
+const LEVEL_KEEP: usize = 1 << 12;
 
 /// How many terms ahead the scatter prefetches the entries it will write.
 const PREFETCH: usize = 4;
@@ -77,6 +79,16 @@ pub struct Tuning {
     /// one value per term, and builds the exponentials curve by curve for one with several,
     /// which the tree extracts one component at a time, more slowly than the curves do.
     pub tree_depth: Option<usize>,
+    /// The number of degrees whose terms the leaves of the tree take at a time, or `None` for
+    /// all of them: the exponential of each curve is then built again for every window of
+    /// that many degrees above it, which costs time and keeps the leaves to a fraction of their
+    /// terms.
+    pub leaf_window: Option<u32>,
+    /// Whether the terms of the degrees of the tree that no power reaches beyond, which only
+    /// sum up to the root, go to it directly, into tables split by hash that the threads fill
+    /// through buffers, rather than into the nodes where they arise. That takes less memory
+    /// and somewhat more time. Only for an exact ring, whose sums may be taken in any order.
+    pub sinks: bool,
 }
 
 impl Tuning {
@@ -97,6 +109,8 @@ impl Default for Tuning {
             sync_min_terms: 20000,
             wide_levels: false,
             tree_depth: None,
+            leaf_window: None,
+            sinks: false,
         }
     }
 }
@@ -298,6 +312,8 @@ impl<W: LevelWord, E: Copy + Default + PartialEq> ExpWorkspace<W, E> {
 struct Shard<K, E> {
     map: SlotMap<K, E>,
     heap: DegreeHeap,
+    /// The final terms taken out of the map, nonzero, each part in order of degree and key.
+    done: Vec<SparsePoly<K, E>>,
     /// Space for [`Shard::fold_ordered`]: the terms in order, by curve, buffer and index,
     /// and the hashes of their keys.
     order: Vec<(u32, u32, u32)>,
@@ -305,6 +321,48 @@ struct Shard<K, E> {
 }
 
 impl<K: Key, E: Copy + Default + PartialEq> Shard<K, E> {
+    /// Takes the terms of degree below `below` out of the map, which are final once the
+    /// curves below it are applied, when they are a ninth of it or more: the nonzero ones to
+    /// [`Shard::done`], and the zero ones, most of them, away. Every term left is still in the
+    /// heap.
+    fn evict(&mut self, below: u32) {
+        if 8 * self.map.len() < 9 * self.heap.len() + 4096 {
+            return;
+        }
+        let width = self.map.width();
+        let (mut fin, mut keep) = (Vec::new(), Vec::new());
+        for s in 0..self.map.len() as u32 {
+            if self.map.deg(s) >= below {
+                keep.push(s);
+            } else if self.map.values(s).iter().any(|v| *v != E::default()) {
+                fin.push(s);
+            }
+        }
+        fin.sort_unstable_by_key(|&s| (self.map.deg(s), self.map.key(s)));
+        let mut part = SparsePoly::new(width);
+        for &s in &fin {
+            part.push(self.map.key(s), self.map.deg(s), self.map.values(s));
+        }
+        if !part.is_empty() {
+            self.done.push(part);
+        }
+        let mut map = SlotMap::new(width, keep.len() + keep.len() / 4 + 16);
+        let mut heap = DegreeHeap::new();
+        for &s in &keep {
+            let (t, _) = map.insert(self.map.key(s), self.map.deg(s));
+            map.values_mut(t).copy_from_slice(self.map.values(s));
+            heap.push(map.deg(t), t);
+        }
+        (self.map, self.heap) = (map, heap);
+    }
+
+    /// The nonzero terms, in parts.
+    fn finish(mut self) -> Vec<SparsePoly<K, E>> {
+        let rest = self.map.take();
+        self.done.push(rest);
+        self.done
+    }
+
     /// Subtracts the terms of `out` and empties it.
     ///
     /// The keys are hashed first, so that the bucket of each one can be prefetched a few
@@ -370,6 +428,32 @@ impl<K: Key, E: Copy + Default + PartialEq> Shard<K, E> {
         }
         outs.iter_mut().for_each(|o| o.clear());
     }
+}
+
+/// The shards of the series `inst`, each with a heap of its terms.
+fn new_shards<K: Key, E: Copy + Default + PartialEq>(
+    inst: &SparsePoly<K, E>,
+    n_shards: usize,
+) -> Vec<Mutex<Shard<K, E>>> {
+    let mut shards: Vec<Mutex<Shard<K, E>>> = (0..n_shards)
+        .map(|_| {
+            Mutex::new(Shard {
+                map: SlotMap::new(inst.width(), (inst.len() + inst.len() / 8) / n_shards + 16),
+                heap: DegreeHeap::new(),
+                done: Vec::new(),
+                order: Vec::new(),
+                hashes: Vec::new(),
+            })
+        })
+        .collect();
+    for i in 0..inst.len() {
+        let key = inst.keys()[i];
+        let shard = shards[shard_of(key, n_shards)].get_mut().unwrap();
+        let (s, _) = shard.map.insert(key, inst.degs()[i]);
+        shard.map.values_mut(s).copy_from_slice(inst.values(i));
+        shard.heap.push(inst.degs()[i], s);
+    }
+    shards
 }
 
 /// Terms to subtract from one shard, as a worker collects them.
@@ -452,17 +536,12 @@ fn sort_layer<K: Key, E: Copy>(layer: &mut Vec<(K, u32)>, vals: &mut Vec<E>, wid
 /// The end of the group of the curves of `layer` from `start` on: at most [`GROUP_CURVES`],
 /// whose exponentials have about [`GROUP_TERMS`] times as many terms as `inst` in all, by the
 /// terms of `inst` up to the degree each one reaches, but at least one curve.
-fn group_end<K: Key, E: Copy + Default + PartialEq>(
-    layer: &[(K, u32)],
-    start: usize,
-    inst: &SparsePoly<K, E>,
-    max_deg: u32,
-) -> usize {
-    let budget = GROUP_TERMS * inst.len().max(1 << 16);
+fn group_end<K: Key>(layer: &[(K, u32)], start: usize, upto: &[usize], max_deg: u32) -> usize {
+    let budget = GROUP_TERMS * upto[max_deg as usize].max(1 << 16);
     let mut end = start + 1;
-    let mut terms = inst.len_upto(max_deg - layer[start].1);
+    let mut terms = upto[(max_deg - layer[start].1) as usize];
     while end < layer.len() && end - start < GROUP_CURVES {
-        terms += inst.len_upto(max_deg - layer[end].1);
+        terms += upto[(max_deg - layer[end].1) as usize];
         if terms > budget {
             break;
         }
@@ -698,9 +777,9 @@ pub fn extract<R: Ring, L: KeyLayout>(
     ring: &R,
     layout: &L,
     grading: &[i32],
-    alpha: &SparsePoly<L::Key, R::Elem>,
+    alpha: SparsePoly<L::Key, R::Elem>,
     rows: Option<&[Vec<i32>]>,
-    inst: &SparsePoly<L::Key, R::Elem>,
+    inst: SparsePoly<L::Key, R::Elem>,
     inv: &[R::Elem],
     max_deg: u32,
     lightcone: &Lightcone<L::Key>,
@@ -725,41 +804,31 @@ pub fn extract<R: Ring, L: KeyLayout>(
             ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
         );
     }
-    let narrow = || {
-        extract_in::<R, L, u64>(
-            ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
-        )
-    };
+    // The narrowest level word that fits.
+    let n_terms = alpha.len_upto(max_deg);
+    let level_box = offset_box(layout, grading, &alpha, n_terms, max_deg).1;
     let wide = <<L::Key as Key>::Level as LevelWord>::BITS > u128::BITS;
-    (if tuning.wide_levels { None } else { narrow() })
-        .or_else(|| {
-            (!tuning.wide_levels || !wide)
-                .then(|| {
-                    extract_in::<R, L, u128>(
-                        ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning,
-                        source,
-                    )
-                })
-                .flatten()
-        })
-        .or_else(|| {
-            wide.then(|| {
-                extract_in::<R, L, <L::Key as Key>::Level>(
-                    ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning,
-                    source,
-                )
-            })
-            .flatten()
-        })
-        .unwrap_or_else(|| {
-            let n_terms = alpha.len_upto(max_deg);
-            Err(Error::Key(KeyError::TooWide {
-                bits: offset_box(layout, grading, alpha, n_terms, max_deg)
-                    .1
-                    .bits(),
-                max_bits: <<L::Key as Key>::Level as LevelWord>::BITS - 1,
-            }))
-        })
+    macro_rules! go {
+        ($w:ty) => {
+            extract_in::<R, L, $w>(
+                ring, layout, grading, &alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
+            )
+            .expect("the level layout fits")
+        };
+    }
+    if !tuning.wide_levels && LevelLayout::<u64>::new(&level_box, grading).is_some() {
+        return go!(u64);
+    }
+    if (!tuning.wide_levels || !wide) && LevelLayout::<u128>::new(&level_box, grading).is_some() {
+        return go!(u128);
+    }
+    if wide && LevelLayout::<<L::Key as Key>::Level>::new(&level_box, grading).is_some() {
+        return go!(<L::Key as Key>::Level);
+    }
+    Err(Error::Key(KeyError::TooWide {
+        bits: level_box.bits(),
+        max_bits: <<L::Key as Key>::Level as LevelWord>::BITS - 1,
+    }))
 }
 
 /// The coordinates of the terms of `alpha` up to the `n_terms`-th, one after the other, and
@@ -792,7 +861,7 @@ fn extract_in<R: Ring, L: KeyLayout, W: LevelWord>(
     grading: &[i32],
     alpha: &SparsePoly<L::Key, R::Elem>,
     rows: Option<&[Vec<i32>]>,
-    inst: &SparsePoly<L::Key, R::Elem>,
+    inst: SparsePoly<L::Key, R::Elem>,
     inv: &[R::Elem],
     max_deg: u32,
     lightcone: &Lightcone<L::Key>,
@@ -834,7 +903,7 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
     hashes: &[W],
     alpha: &SparsePoly<L::Key, R::Elem>,
     rows: Option<&[Vec<i32>]>,
-    inst: &SparsePoly<L::Key, R::Elem>,
+    inst: SparsePoly<L::Key, R::Elem>,
     inv: &[R::Elem],
     max_deg: u32,
     lightcone: &Lightcone<L::Key>,
@@ -847,23 +916,10 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
     let threads = rayon::current_num_threads();
     let n_shards = if threads == 1 { 1 } else { 4 * threads };
 
-    let mut shards: Vec<Mutex<Shard<L::Key, R::Elem>>> = (0..n_shards)
-        .map(|_| {
-            Mutex::new(Shard {
-                map: SlotMap::new(width, 2 * inst.len() / n_shards),
-                heap: DegreeHeap::new(),
-                order: Vec::new(),
-                hashes: Vec::new(),
-            })
-        })
-        .collect();
-    for i in 0..inst.len() {
-        let key = inst.keys()[i];
-        let shard = shards[shard_of(key, n_shards)].get_mut().unwrap();
-        let (s, _) = shard.map.insert(key, inst.degs()[i]);
-        shard.map.values_mut(s).copy_from_slice(inst.values(i));
-        shard.heap.push(inst.degs()[i], s);
-    }
+    let mut shards = new_shards(&inst, n_shards);
+    // The shards hold the series now; the groups only need its number of terms by degree.
+    let upto: Vec<usize> = (0..=max_deg).map(|d| inst.len_upto(d)).collect();
+    drop(inst);
     let mut workers: Box<Workers<W, L::Key, R::Elem>> = (0..threads)
         .map(|_| {
             Mutex::new(Worker {
@@ -925,7 +981,7 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
             let end = if R::EXACT {
                 layer.len()
             } else {
-                group_end(&layer, start, inst, max_deg)
+                group_end(&layer, start, &upto, max_deg)
             };
             let ctx = LayerCtx {
                 ring,
@@ -977,10 +1033,13 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
                 });
             start = end;
         }
+        shards
+            .par_iter_mut()
+            .for_each(|s| s.get_mut().unwrap().evict(top));
     }
     let parts = shards
         .into_iter()
-        .map(|s| s.into_inner().unwrap().map.take())
+        .flat_map(|s| s.into_inner().unwrap().finish())
         .collect();
     Ok(SparsePoly::merge(width, parts))
 }
@@ -1101,9 +1160,9 @@ mod tests {
                 &lf,
                 &layout,
                 &[1, 1],
-                &alpha,
+                alpha.clone(),
                 None,
-                &inst,
+                inst.clone(),
                 &inv,
                 max_deg,
                 &Lightcone::All,
@@ -1125,7 +1184,7 @@ mod tests {
                 &[1, 1],
                 &alpha,
                 None,
-                &inst,
+                inst.clone(),
                 &inv,
                 max_deg,
                 &Lightcone::All,
@@ -1146,9 +1205,9 @@ mod tests {
                     &lf,
                     &layout,
                     &[1, 1],
-                    &alpha,
+                    alpha.clone(),
                     None,
-                    &inst,
+                    inst.clone(),
                     &inv,
                     max_deg,
                     &Lightcone::All,
@@ -1188,9 +1247,9 @@ mod tests {
                     &lf,
                     &layout,
                     &[1, 1],
-                    a,
+                    a.clone(),
                     r,
-                    &inst,
+                    inst.clone(),
                     &inv,
                     max_deg,
                     &Lightcone::All,
@@ -1203,12 +1262,22 @@ mod tests {
                     .collect::<HashMap<PackedKey, Vec<E>>>()
             };
             let expected_rows = run(&alpha_m, None, &Tuning::default());
-            // Curve by curve, and along trees of every depth, in 64 and 128 bits.
+            // Curve by curve, and along trees of every depth, in 64 and 128 bits, with the
+            // leaves taking every degree or windows of them, and with sinks or without.
             for tree_depth in [None, Some(0), Some(1), Some(2), Some(3)] {
-                for wide_levels in [false, true] {
+                for (wide_levels, leaf_window, sinks) in [
+                    (false, None, false),
+                    (true, None, false),
+                    (false, Some(1), false),
+                    (false, None, true),
+                    (false, Some(2), true),
+                    (true, Some(1), true),
+                ] {
                     let tuning = Tuning {
                         tree_depth,
                         wide_levels,
+                        leaf_window,
+                        sinks,
                         ..Tuning::default()
                     };
                     assert_eq!(
@@ -1233,9 +1302,9 @@ mod tests {
                 &lf,
                 &layout,
                 &[1, 1],
-                &empty,
+                empty.clone(),
                 None,
-                &inst,
+                inst.clone(),
                 &inv,
                 5,
                 &Lightcone::All,
@@ -1249,9 +1318,9 @@ mod tests {
                 &lf,
                 &layout,
                 &[1, 1],
-                &SparsePoly::new(3),
+                SparsePoly::new(3),
                 None,
-                &inst,
+                inst.clone(),
                 &inv,
                 4,
                 &Lightcone::All,
@@ -1264,9 +1333,9 @@ mod tests {
             &lf,
             &layout,
             &[1, 1],
-            &empty,
+            empty.clone(),
             None,
-            &inst,
+            inst.clone(),
             &inv,
             4,
             &Lightcone::All,

@@ -69,6 +69,10 @@ Options:
                  bounds every invariant, and takes more primes until the bounds
                  are below half their product. Not in vex phases. It defaults to
                  false; the reference pipeline is exact anyway.
+  low_memory     Whether to prefer memory to speed, for the runs that do not fit
+                 otherwise: the modular pipeline then takes about a third of the
+                 memory, for about two and a half times the time. It defaults to
+                 false.
   n_threads      The number of threads to use. It defaults to one per core.
   hilbert_bases  For every set T of one or two divisors, the Hilbert basis of
                  the cone K_T of the curve classes in the Mori cone that only
@@ -110,6 +114,9 @@ struct Args {
     /// Do not prove the results exact, for every input
     #[arg(long)]
     no_certify: bool,
+    /// Prefer memory to speed, for every input
+    #[arg(long)]
+    low_memory: bool,
 }
 
 /// Parse the name of a kind of invariants.
@@ -178,10 +185,16 @@ fn run(args: &Args) -> Result<(), Box<dyn Error>> {
         if args.certify || args.no_certify {
             input.options.certify = args.certify;
         }
+        if args.low_memory {
+            input.options.low_memory = true;
+        }
         // Every document is checked before any is computed.
         input.validate()?;
     }
 
+    if inputs.iter().any(|input| input.options.low_memory) {
+        cygv::return_freed_memory();
+    }
     let mut writer = open_output(args.output.as_ref())?;
     for input in inputs.iter() {
         let results = input.compute()?;

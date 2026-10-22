@@ -519,8 +519,28 @@ pub struct Options {
     /// [`bound_gv`], and more primes are taken until every bound is below half their product,
     /// so that, by induction on degree, every invariant is the one its residues determine.
     pub certify: bool,
+    /// Whether to prefer memory to speed (`PLAN.md` phase 10): one prime per pass instead of
+    /// two to four, unless [`Tuning::lanes`] says otherwise; the terms of the top degrees of
+    /// the extraction's tree in shared tables ([`extraction::Tuning::sinks`]); and the leaves
+    /// of the tree a degree at a time ([`extraction::Tuning::leaf_window`], unless it is set).
+    /// On the benchmark models it takes about a third of the memory, for about two and a
+    /// half times the time.
+    pub low_memory: bool,
     /// How many primes the run takes, and how the extraction parallelizes.
     pub tuning: Tuning,
+}
+
+impl Options {
+    /// The options with the extraction's tuning for [`Options::low_memory`] filled in.
+    fn resolved(&self) -> Options {
+        let mut options = self.clone();
+        if options.low_memory {
+            let extraction = &mut options.tuning.extraction;
+            extraction.sinks = true;
+            extraction.leaf_window.get_or_insert(1);
+        }
+        options
+    }
 }
 
 /// The tuning of [`compute_gv`], which does not change its results.
@@ -529,11 +549,12 @@ pub struct Tuning {
     /// The number of primes that only check the lift, at least one: the lift from the other
     /// primes is accepted when it agrees with these at every curve.
     pub check_primes: usize,
-    /// The number of primes per pass, from 2 to 4, or `None` to choose it from the size of the
+    /// The number of primes per pass, from 1 to 4, or `None` to choose it from the size of the
     /// invariants: up to degree 12 two, and above that as many as the largest invariant needs,
     /// predicted from a run at 3/4 of the degree, plus the check primes, as the C program's
-    /// driver does, but at most four (passes are added if they are not enough). Keys wider
-    /// than 128 bits always take four.
+    /// driver does, but at most four (passes are added if they are not enough), or one with
+    /// [`Options::low_memory`]. Keys wider than 128 bits always take four, or one with
+    /// [`Options::low_memory`].
     pub lanes: Option<usize>,
     /// The minimum number of primes, even if fewer give a stable lift.
     pub min_primes: usize,
@@ -654,6 +675,7 @@ pub fn bound_gv(
     if !geometry.strata().is_empty() {
         return Err(Error::CertifyStrata);
     }
+    let options = &options.resolved();
     let setup = Setup::new(source, grading_vector, max_deg, targets, geometry, options)?;
     with_word!(setup.word, W => bound_gv_in::<W>(setup, source, targets, geometry, options, candidates))
 }
@@ -746,6 +768,7 @@ fn run<T>(
     options: &Options,
     finish: impl FnOnce(Vec<CurveInvariants>, u32, &dyn Fn(&[i32]) -> bool) -> T,
 ) -> Result<T, Error> {
+    let options = &options.resolved();
     let setup = Setup::new(source, grading_vector, max_deg, targets, geometry, options)?;
     with_word!(setup.word, W => run_in::<W, T>(setup, source, targets, geometry, options, finish))
 }
@@ -755,10 +778,11 @@ type Lifted<K> = Vec<(K, u32, Vec<Integer>)>;
 
 /// How the passes of a run with keys of a [`Word`] take their primes.
 ///
-/// Keys of 128 bits take as many per pass as the options say, or [`choose_lanes`] predicts.
-/// Wider ones always take four: they only come with large geometries, and leaving out the
-/// passes of two and three primes for them keeps the build from compiling the pipeline for
-/// every number of primes and every key width.
+/// Keys of 128 bits take as many per pass as the options say, or [`choose_lanes`] predicts,
+/// or one for [`Options::low_memory`]. Wider ones always take four, or one for
+/// [`Options::low_memory`]: they only come with large geometries, and leaving out the passes
+/// of two and three primes for them keeps the build from compiling the pipeline for every
+/// number of primes and every key width.
 trait Lift: Word {
     fn lift(
         run: &Run<'_, PackedLayout<Self>>,
@@ -773,9 +797,11 @@ impl Lift for u128 {
     ) -> Result<Lifted<PackedKey<Self>>, Error> {
         let lanes = match options.tuning.lanes {
             Some(lanes) => lanes,
+            None if options.low_memory => 1,
             None => choose_lanes(run, options)?,
         };
         match lanes {
+            1 => lifted::<1, _>(run, options),
             2 => lifted::<2, _>(run, options),
             3 => lifted::<3, _>(run, options),
             _ => lifted::<4, _>(run, options),
@@ -788,7 +814,11 @@ impl<const N: usize> Lift for Wide<N> {
         run: &Run<'_, PackedLayout<Self>>,
         options: &Options,
     ) -> Result<Lifted<PackedKey<Self>>, Error> {
-        lifted::<4, _>(run, options)
+        if options.low_memory {
+            lifted::<1, _>(run, options)
+        } else {
+            lifted::<4, _>(run, options)
+        }
     }
 }
 
@@ -808,18 +838,22 @@ fn run_in<W: Lift, T>(
         return Ok(finish(Vec::new(), prep.max_deg, &in_lightcone));
     }
     let run = prep.run(geometry, options);
-    let gv = prep.pool.install(|| {
-        W::lift(&run, options)?
-            .into_iter()
-            .map(|(key, degree, values)| {
-                Ok(CurveInvariants {
-                    curve: prep.curve(key)?,
-                    degree,
-                    values,
-                })
-            })
-            .collect::<Result<Vec<_>, Error>>()
-    })?;
+    let mut lift = prep.pool.install(|| W::lift(&run, options))?;
+    // Converted from the end, the lift shrinking as it goes, so that the two are never both
+    // whole.
+    let mut gv = Vec::with_capacity(lift.len());
+    let step = (lift.len() / 8).max(1 << 16);
+    while let Some((key, degree, values)) = lift.pop() {
+        gv.push(CurveInvariants {
+            curve: prep.curve(key)?,
+            degree,
+            values,
+        });
+        if lift.capacity() - lift.len() >= step {
+            lift.shrink_to_fit();
+        }
+    }
+    gv.reverse();
     Ok(finish(gv, prep.max_deg, &in_lightcone))
 }
 
@@ -1035,7 +1069,7 @@ impl Setup {
         options: &Options,
     ) -> Result<Self, Error> {
         if options.tuning.check_primes == 0
-            || options.tuning.lanes.is_some_and(|l| !(2..=4).contains(&l))
+            || options.tuning.lanes.is_some_and(|l| !(1..=4).contains(&l))
             || options.tuning.min_key_bits > 512
             || options.threads == Some(0)
         {
@@ -1392,7 +1426,7 @@ fn pass<R: Ring, L: KeyLayout>(
     // The extraction goes along the rows for its tree, and for the majorant run.
     let along_rows = source.is_some() || tuning.uses_tree(geometry.n_forms());
     let mut pd = period::period(ring, layout, geometry, cands, max_deg, along_rows)?;
-    let inst = instanton::instanton(ring, geometry, &pd, max_deg)?;
+    let inst = instanton::instanton(ring, geometry, &mut pd, max_deg)?;
     // Only the inverses outlive the instanton: freeing the rest lowers the extraction's peak.
     let inv = &std::mem::take(&mut pd.tables.inv);
     drop(pd);
@@ -1401,14 +1435,11 @@ fn pass<R: Ring, L: KeyLayout>(
         .chain((0..geometry.n_divisors()).map(|r| geometry.q(r).to_vec()))
         .collect();
     // Without the rows, the exponentials pair the curves with alpha in their coordinates.
-    let restricted;
-    let (alpha, rows) = match (&inst.beta, geometry.curve_basis()) {
+    let instanton::InstantonData { alpha, inst, beta } = inst;
+    let (alpha, rows) = match (beta, geometry.curve_basis()) {
         (Some(beta), _) => (beta, Some(rows.as_slice())),
-        (None, Some(basis)) => {
-            restricted = lattice::restrict_series(ring, basis, &inst.alpha)?;
-            (&restricted, None)
-        }
-        (None, None) => (&inst.alpha, None),
+        (None, Some(basis)) => (lattice::restrict_series(ring, basis, &alpha)?, None),
+        (None, None) => (alpha, None),
     };
     let coeffs = extraction::extract(
         ring,
@@ -1416,7 +1447,7 @@ fn pass<R: Ring, L: KeyLayout>(
         grading_vector,
         alpha,
         rows,
-        &inst.inst,
+        inst,
         inv,
         max_deg,
         lightcone,
@@ -1701,10 +1732,22 @@ mod tests {
             sync_min_terms: 0,
             ..tree(0)
         };
+        // The low-memory tuning: the leaves a degree at a time (the sinks are only for exact
+        // rings).
+        let window = extraction::Tuning {
+            leaf_window: Some(1),
+            sinks: true,
+            ..extraction::Tuning::default()
+        };
         // Along trees, which group the sums differently for each depth, and curve by curve,
         // every layer applied curve by curve and then level-synchronously.
         let default = extraction::Tuning::default();
-        for tunings in [vec![default], vec![tree(3)], vec![tree(0), by_level]] {
+        for tunings in [
+            vec![default],
+            vec![tree(3)],
+            vec![window],
+            vec![tree(0), by_level],
+        ] {
             let one = bounds(1, tunings[0].clone());
             assert!(!one.is_empty());
             for threads in [2, 3, 8] {

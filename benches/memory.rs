@@ -181,6 +181,10 @@ fn measure(id: &str) -> Measurement {
         .find(|s| s.id() == id)
         .unwrap_or_else(|| panic!("unknown scenario {id:?}"));
     let model = common::model(scenario.model);
+    // As the command line and the Python module do for a run in the low-memory mode.
+    if scenario.pipeline == common::Pipeline::ModularLowMemory {
+        cygv::return_freed_memory();
+    }
 
     // Anything allocated before this point (the model, the process itself) is
     // not part of what is being measured.

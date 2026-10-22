@@ -186,6 +186,7 @@ fn parse(args: &Bound<'_, PyDict>) -> PyResult<(Problem, Options)> {
         method,
         n_threads: get(args, "n_threads")?,
         certify: get(args, "certify")?.unwrap_or(false),
+        low_memory: get(args, "low_memory")?.unwrap_or(false),
         hilbert_bases,
         ..Options::default()
     };
@@ -247,6 +248,10 @@ pub fn compute_py(kind: &str, args: &Bound<'_, PyDict>) -> PyResult<Output> {
         _ => return Err(value_error("the kind must be \"gv\" or \"gw\"")),
     };
     let (problem, options) = parse(args)?;
+    // The computation runs in a process of its own (see hkty.py).
+    if options.low_memory {
+        crate::return_freed_memory();
+    }
     Ok(
         match compute(&problem, kind, &options).map_err(to_py_err)? {
             Computed::Gv(gv) => output(gv),

@@ -225,6 +225,7 @@ def test_methods() -> None:
     certified = QUINTIC.gv(max_deg=5, certify=True)
     assert certified == expected
     assert certified.report.certified
+    assert QUINTIC.gv(max_deg=5, low_memory=True) == expected
     expected = QUINTIC.gw(max_deg=5, method="reference")
     assert expected[1] == ((2,), Fraction(609250 * 8 + 2875, 8))
     assert QUINTIC.gw(max_deg=5, method="modular") == expected

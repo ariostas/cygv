@@ -197,6 +197,15 @@ max_deg: 6
     let out = String::from_utf8_lossy(&uncertified.stdout);
     assert!(out.contains("certified: false"), "{out}");
 
+    // So are those of the low-memory mode, as the flag or in the input.
+    let low = run(&["--low-memory"], &input);
+    assert!(low.status.success());
+    assert_eq!(without_report(&low.stdout), outputs[0]);
+    let in_input = input.replace("max_deg: 6\n", "max_deg: 6\nlow_memory: true\n");
+    let low = run(&[], &in_input);
+    assert!(low.status.success());
+    assert_eq!(without_report(&low.stdout), outputs[0]);
+
     // The maximum degree and the invariants can be set for every document.
     let output = run(&["--max-deg", "2", "--invariants", "gw"], &input);
     assert!(output.status.success());

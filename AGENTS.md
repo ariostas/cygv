@@ -164,7 +164,9 @@ PR #102: they key the offsets of an exponential by the linear hash $H = \varphi(
 $\varphi$ packing a box of the offsets, less the coordinate the degree fixes, into a `u64`
 when it fits, a `u128` otherwise, and for wide keys into a word as wide as theirs
 (`Key::Level`), so that a scatter's target is one addition, and
-`OffsetKeys` turns a hash back into a key only for the emitted terms). A *pass* (`pass`, generic over the `Ring`) runs the
+`OffsetKeys` turns a hash back into a key only for the emitted terms; the tree's nodes keep
+their terms in `CompactTable`s, of any capacity and filled to 13/16, which take two thirds of
+the memory of a `LevelTable` and are as fast). A *pass* (`pass`, generic over the `Ring`) runs the
 stages modulo `NL` primes: `candidates` (from a `CandidateSource`: either
 the sums of the Hilbert basis elements of each $K_T$ of the cone data, skipping cones contained
 in another and two-divisor cones whose form $Q_s K^{(k)} Q_u$ vanishes, as the C does, or the
@@ -190,15 +192,24 @@ row once for all of their curves, relaxed in the degree, while each curve builds
 exponential of the other rows as before; the pass takes $\beta$ along the rows whenever the
 tree is used, which `extraction::Tuning::tree_depth` and `uses_tree` decide: by default for a
 series of one component, while an n-fold's several components go curve by curve, the tree
-taking them one at a time) and `multicover` (the GV
+taking them one at a time; the shards evict the final terms after every layer, most of them
+zero, and two options of the tuning trade time for memory, which the low-memory mode turns
+on: `sinks`, which sends the terms of the degrees no power reaches beyond straight to the
+root, into tables split by hash that the threads fill through buffers, and `leaf_window`,
+which has the leaves take a window of degrees at a time, every curve building its
+exponential again for each later window) and `multicover` (the GV
 invariants from those, by gcd of the coordinates; exponent 3 and a division by the degree for
 threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats passes with the
 next primes until `crt::Residues` gives a stable lift (the lift from all but the last
 `check_primes` primes must agree with those), skipping a pass whose primes cannot invert a
-denominator of the strata (`Error::NotInvertible`), with `Options` for the lane count (2 to 4 primes
+denominator of the strata (`Error::NotInvertible`), with `Options` for the lane count (1 to 4 primes
 per pass; by default `choose_lanes` predicts it from a probe run at 3/4 of the degree, as the
-C's driver does), a minimum number of primes, the thread count, the extraction's tuning and
-`certify`; big integers (`malachite::Integer`) are only built by `crt`, for the final values.
+C's driver does), a minimum number of primes, the thread count, the extraction's tuning,
+`certify` and `low_memory` (`PLAN.md` phase 10: one prime per pass, the sinks and leaf windows
+of one degree, for about a third of the memory in two and a half times the time; the
+command line and the Python module also call `return_freed_memory`, which sets glibc's
+`M_MMAP_THRESHOLD` so that large freed blocks go back to the system, a third less resident
+memory); big integers (`malachite::Integer`) are only built by `crt`, for the final values.
 With `certify` (the certifier, `PLAN.md` phase 8, after the C's `cgv_maj` and `certify.py`),
 `lifted` runs `bounds` on the lift and `primes_needed` compares every bound with half the
 product of the primes, adding passes until it is below: `bounds` is a `pass` over `BoundRing`
@@ -264,7 +275,7 @@ indices differently (the first index is a reference surface in the n-fold case).
   `Strata(list)`), a `MoriCone` (`Generators`, `Inequalities { hyperplanes, equations }` or
   `FromFan`), a `Selection` (`MaxDeg`, `TargetPoints { points, max_deg }`, `MinPoints`,
   `CurveClasses`) and an optional `grading_vector`, plus `Options` (`method`, `n_threads`,
-  `certify`, `hilbert_bases`, and `tuning: modular::Tuning`). Every field has the name of the
+  `certify`, `low_memory`, `hilbert_bases`, and `tuning: modular::Tuning`). Every field has the name of the
   Python keyword and YAML key that set it, and every choice is an enum, so conflicting input
   cannot be built. `compute_gv`, `compute_gw` and the runtime-kind `compute` (returning
   `Computed::Gv` or `Computed::Gw`, for Python and the CLI) in `src/dispatch.rs` (a private
@@ -364,7 +375,7 @@ indices differently (the first index is a reference surface in the n-fold case).
 
 `src/bin/cygv/main.rs` is a thin clap front end: it reads YAML from a file or stdin, parses it with
 `io::Input::load_all`, applies the overrides (`--threads`, `--method`, `--max-deg` through
-`Input::set_max_deg`, `--invariants`, `--certify`/`--no-certify`) and validates every document
+`Input::set_max_deg`, `--invariants`, `--certify`/`--no-certify`, `--low-memory`) and validates every document
 before computing any, and writes one YAML document of results per input document to a file or
 stdout, flushing after each one. All of the parsing and formatting lives in `src/io.rs`, whose
 `Input` holds a `Problem`, the `InvariantKind` and the `Options`, with the field names of the
@@ -429,8 +440,9 @@ and is kept so that saved criterion baselines still match), and any argument aft
 not a flag filters on it. Adding a model or a degree means adding a row to `scenarios()`; nothing else has to
 change. Each row also names a `Pipeline`: the reference (`Method::Reference`, explicitly, since
 the default is `Auto`), or the modular one without or with the supplied cone data (the
-inequalities as the cone, and the Hilbert bases as `Options::hilbert_bases`). The modular
-ids end in `/modular` or `/modular-cones` (the reference ones have no suffix, so that older
+inequalities as the cone, and the Hilbert bases as `Options::hilbert_bases`), or in its
+low-memory mode without it. The modular
+ids end in `/modular`, `/modular-cones` or `/modular-lowmem` (the reference ones have no suffix, so that older
 baselines still match), so `cargo bench -- modular` runs only those. The modular scenarios go
 to much higher degrees, mostly with the cone data. Those without it compute the cone data from
 the generators (the facets, then the Hilbert bases); before phase 7b they enumerated the

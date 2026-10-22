@@ -113,6 +113,10 @@ result instead: it bounds every invariant from above, by running the computation
 upward-rounded reals, and takes more primes until every bound is below half their product, which
 costs about as much as the computation itself. Vex phases cannot be certified yet.
 
+For runs that do not fit in memory otherwise, `low_memory=True` makes the modular implementation
+prefer memory to speed: it takes about a third of the memory, for about two and a half times
+the time.
+
 The modular implementation takes the curve classes from the Hilbert bases of the cones $K_T$ of
 the classes in the Mori cone that only meet the divisors in $T$ negatively, which it computes
 itself. A program such as [Normaliz](https://www.normaliz.uni-osnabrueck.de/) can compute them
@@ -211,8 +215,8 @@ results:
 ```
 
 Run `cygv --help` for the full list of input fields and options. `--method`, `--threads`,
-`--max-deg`, `--invariants` and `--certify` set those for every document, and the `examples`
-directory has complete inputs.
+`--max-deg`, `--invariants`, `--certify` and `--low-memory` set those for every document, and
+the `examples` directory has complete inputs.
 
 ## License
 

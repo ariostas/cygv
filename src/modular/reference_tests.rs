@@ -147,7 +147,7 @@ fn check(case: &Case) {
     )
     .unwrap();
     let pd = period(&lf, &layout, &geometry, &cands, case.max_deg, false).unwrap();
-    let inst = instanton(&lf, &geometry, &pd, case.max_deg).unwrap();
+    let inst = instanton(&lf, &geometry, &mut pd.clone(), case.max_deg).unwrap();
 
     // The candidates are the elements with at most two negative intersections, and those on
     // the strata.
@@ -383,7 +383,7 @@ fn test_invalid_options() {
         },
         Options {
             tuning: Tuning {
-                lanes: Some(1),
+                lanes: Some(0),
                 ..Tuning::default()
             },
             ..Options::default()
@@ -601,6 +601,70 @@ fn test_key_words() {
                 ..Options::default()
             };
             assert_eq!(run(&options), expected, "{} {min_key_bits}", case.name);
+        }
+    }
+}
+
+/// The low-memory mode gives the same invariants: with one prime per pass, the top degrees
+/// of the tree in sinks and its leaves a degree at a time, certified or not, with wide keys,
+/// and with the fourfold's components along a tree.
+#[test]
+fn test_low_memory() {
+    let cases = [
+        load("h11_9", include_str!("../../benches/data/h11_9.yaml"), 6),
+        load("fourfold", include_str!("../../examples/fourfold.yaml"), 7),
+    ];
+    for case in &cases {
+        let geometry = Geometry::from_toric(
+            &case.q,
+            &case.nefpart,
+            &case.intnums,
+            case.cy_kind,
+            &case.grading_vector,
+        )
+        .unwrap();
+        let h11 = case.grading_vector.len();
+        let gens: Vec<&[i32]> = case.generators.as_slice().chunks(h11).collect();
+        let run = |options: &Options| {
+            let mut gv = compute_gv(
+                CandidateSource::Generators(&gens),
+                &case.grading_vector,
+                case.max_deg,
+                &[],
+                &geometry,
+                options,
+            )
+            .unwrap();
+            gv.sort_by(|a, b| (a.degree, &a.curve).cmp(&(b.degree, &b.curve)));
+            gv
+        };
+        let expected = run(&Options::default());
+        assert!(expected.len() > 10, "{}", case.name);
+        for (certify, min_key_bits, tree_depth) in [
+            (false, 0, None),
+            (true, 0, None),
+            (false, 512, None),
+            (false, 0, Some(2)),
+        ] {
+            let options = Options {
+                certify,
+                low_memory: true,
+                tuning: Tuning {
+                    min_key_bits,
+                    extraction: super::extraction::Tuning {
+                        tree_depth,
+                        ..Default::default()
+                    },
+                    ..Tuning::default()
+                },
+                ..Options::default()
+            };
+            assert_eq!(
+                run(&options),
+                expected,
+                "{} {certify} {min_key_bits} {tree_depth:?}",
+                case.name
+            );
         }
     }
 }

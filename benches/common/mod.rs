@@ -334,6 +334,9 @@ pub enum Pipeline {
     Modular,
     /// The modular pipeline, with the supplied cone data.
     ModularCones,
+    /// The modular pipeline in its low-memory mode, which computes the cone data from the
+    /// generators.
+    ModularLowMemory,
 }
 
 impl Pipeline {
@@ -344,6 +347,7 @@ impl Pipeline {
             Pipeline::Reference => "",
             Pipeline::Modular => "/modular",
             Pipeline::ModularCones => "/modular-cones",
+            Pipeline::ModularLowMemory => "/modular-lowmem",
         }
     }
 }
@@ -413,7 +417,7 @@ impl Scenario {
     pub fn run(&self, m: &Model) -> usize {
         let (method, cone, hilbert_bases) = match self.pipeline {
             Pipeline::Reference => (Method::Reference, None, None),
-            Pipeline::Modular => (Method::Modular, None, None),
+            Pipeline::Modular | Pipeline::ModularLowMemory => (Method::Modular, None, None),
             Pipeline::ModularCones => {
                 let cd = m.cone_data.clone().expect("the model has no cone data");
                 let cone = MoriCone::Inequalities {
@@ -437,6 +441,7 @@ impl Scenario {
         let options = Options {
             method,
             n_threads: n_threads().map(|n| n.max(1) as usize),
+            low_memory: self.pipeline == Pipeline::ModularLowMemory,
             hilbert_bases,
             ..Options::default()
         };
@@ -473,10 +478,11 @@ pub fn scenarios() -> Vec<Scenario> {
     // generators.
     let both = |t: [f64; 2]| t.map(Some);
     let gv_rat = |t: f64| [Some(t), None];
-    let (r, m, mc) = (
+    let (r, m, mc, ml) = (
         Pipeline::Reference,
         Pipeline::Modular,
         Pipeline::ModularCones,
+        Pipeline::ModularLowMemory,
     );
     //   model,          deg, pipeline, samples, per-run secs,         tier
     #[rustfmt::skip]
@@ -508,10 +514,14 @@ pub fn scenarios() -> Vec<Scenario> {
         ("h11_9",        20, mc,     10, gv_rat(5.0),         Heavy),
         ("h11_10",       16, mc,     10, gv_rat(10.0),        Heavy),
         ("h11_11",       18, mc,     10, gv_rat(1.8),         Heavy),
+        ("h11_8",        22, m,      10, gv_rat(4.2),         Heavy),
+        ("h11_8",        22, ml,     10, gv_rat(11.6),        Heavy),
         ("h11_8",        20, r,       1, gv_rat(1600.0),      Huge),
         ("h11_9",        18, r,       1, gv_rat(800.0),       Huge),
         ("h11_9_plike", 300, r,       1, gv_rat(123.0),       Huge),
         ("h11_11",       16, r,       1, gv_rat(240.0),       Huge),
+        ("h11_10",       20, m,       1, gv_rat(25.0),        Huge),
+        ("h11_10",       20, ml,      1, gv_rat(65.0),        Huge),
     ];
 
     let heavy_enabled = std::env::var_os("CYGV_BENCH_HEAVY").is_some();

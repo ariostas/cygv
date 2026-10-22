@@ -376,6 +376,7 @@ fn run_modular(
     let modular_options = modular::Options {
         threads: options.n_threads,
         certify: options.certify,
+        low_memory: options.low_memory,
         tuning: options.tuning.clone(),
     };
     let threefold = cy_kind.is_threefold();
@@ -397,19 +398,45 @@ fn entries<T: PartialEq + Default>(
     threefold: bool,
 ) -> Vec<Invariant<T>> {
     let zero = T::default();
-    let mut res = Vec::new();
-    for inv in invariants {
-        for (k, value) in inv.values.into_iter().enumerate() {
-            if value != zero {
-                res.push(Invariant {
-                    curve: inv.curve.clone(),
-                    surface: (!threefold).then_some(k),
-                    degree: inv.degree,
-                    value,
-                });
-            }
+    let n = invariants
+        .iter()
+        .map(|inv| inv.values.iter().filter(|&v| *v != zero).count())
+        .sum();
+    let mut res = Vec::with_capacity(n);
+    // Converted from the end, the input shrinking as it goes, so that the two are never both
+    // whole.
+    let mut invariants = invariants;
+    let step = (invariants.len() / 8).max(1 << 16);
+    while let Some(inv) = invariants.pop() {
+        if invariants.capacity() - invariants.len() >= step {
+            invariants.shrink_to_fit();
+        }
+        let mut values: Vec<(usize, T)> = inv
+            .values
+            .into_iter()
+            .enumerate()
+            .filter(|(_, v)| *v != zero)
+            .collect();
+        // Backwards, like the curves; the first component takes the curve, the others a copy.
+        let first = (!values.is_empty()).then(|| values.remove(0));
+        for (k, value) in values.into_iter().rev() {
+            res.push(Invariant {
+                curve: inv.curve.clone(),
+                surface: (!threefold).then_some(k),
+                degree: inv.degree,
+                value,
+            });
+        }
+        if let Some((k, value)) = first {
+            res.push(Invariant {
+                curve: inv.curve,
+                surface: (!threefold).then_some(k),
+                degree: inv.degree,
+                value,
+            });
         }
     }
+    res.reverse();
     res
 }
 

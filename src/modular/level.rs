@@ -275,33 +275,59 @@ pub fn level_box<'a>(
     grading: &[i32],
     max_deg: u32,
 ) -> LevelBox {
-    let dim = grading.len();
-    let (mut lo, mut hi) = (vec![0i64; dim], vec![0i64; dim]);
-    let max_deg = max_deg as i64;
+    let mut bounds = BoxBounds::new(grading.len(), max_deg);
     for (u, deg) in terms {
-        assert!(deg > 0, "the terms of a level box need a positive degree");
-        let deg = deg as i64;
-        for t in 0..dim {
-            let x = max_deg * u[t] as i64;
-            lo[t] = lo[t].min(x.div_euclid(deg));
-            hi[t] = hi[t].max(-((-x).div_euclid(deg)));
+        bounds.add(u, deg);
+    }
+    bounds.finish(grading)
+}
+
+/// [`level_box`] one term at a time, for terms that are not stored as coordinates.
+pub struct BoxBounds {
+    lo: Vec<i64>,
+    hi: Vec<i64>,
+    max_deg: i64,
+}
+
+impl BoxBounds {
+    pub fn new(dim: usize, max_deg: u32) -> Self {
+        Self {
+            lo: vec![0; dim],
+            hi: vec![0; dim],
+            max_deg: max_deg as i64,
         }
     }
-    let mut widths: Vec<u32> = lo
-        .iter()
-        .zip(&hi)
-        .map(|(&l, &h)| u64::BITS - ((h - l) as u64).leading_zeros())
-        .collect();
-    let dropped = (0..dim)
-        .filter(|&t| grading[t] != 0)
-        .max_by_key(|&t| (widths[t], Reverse(t)));
-    if let Some(t) = dropped {
-        widths[t] = 0;
+
+    /// Adds the term of coordinates `u` and degree `deg`, which must be positive.
+    pub fn add(&mut self, u: &[i32], deg: u32) {
+        assert!(deg > 0, "the terms of a level box need a positive degree");
+        let deg = deg as i64;
+        for (t, &x) in u.iter().enumerate() {
+            let x = self.max_deg * x as i64;
+            self.lo[t] = self.lo[t].min(x.div_euclid(deg));
+            self.hi[t] = self.hi[t].max(-((-x).div_euclid(deg)));
+        }
     }
-    LevelBox {
-        lo,
-        widths,
-        dropped,
+
+    /// The box, with the widest coordinate of nonzero weight under `grading` left out.
+    pub fn finish(self, grading: &[i32]) -> LevelBox {
+        let Self { lo, hi, .. } = self;
+        let mut widths: Vec<u32> = lo
+            .iter()
+            .zip(&hi)
+            .map(|(&l, &h)| u64::BITS - ((h - l) as u64).leading_zeros())
+            .collect();
+        let dropped = (0..grading.len())
+            .filter(|&t| grading[t] != 0)
+            .max_by_key(|&t| (widths[t], Reverse(t)));
+        if let Some(t) = dropped {
+            widths[t] = 0;
+        }
+        LevelBox {
+            lo,
+            widths,
+            dropped,
+        }
     }
 }
 
@@ -652,6 +678,187 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
         self.entries = Vec::new();
         self.used = Vec::new();
         self.log2 = 0;
+    }
+}
+
+/// A compact open-addressing table of terms keyed by the hashes of their classes, for terms
+/// that wait for their degree (the nodes of the extraction's tree): any capacity, the bucket
+/// from the top 32 bits of the hash scaled to it, filled up to [`COMPACT_LOAD`] before it
+/// grows by [`COMPACT_GROWTH`], and no list of the entries in use, so that it holds about
+/// 1.4 entries per term rather than [`LevelTable`]'s two to three.
+#[derive(Debug, Clone)]
+pub struct CompactTable<W, V> {
+    entries: Vec<(W, V)>,
+    len: usize,
+    marker: W,
+}
+
+/// The largest fraction of a [`CompactTable`] in use, as a numerator over 16.
+pub const COMPACT_LOAD: usize = 13;
+
+/// The factor a [`CompactTable`] grows by, as a numerator over 16.
+pub const COMPACT_GROWTH: usize = 20;
+
+/// The capacity of a [`CompactTable`] when it is first used.
+const COMPACT_MIN_CAPACITY: usize = 16;
+
+impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
+    pub fn new(marker: W) -> Self {
+        Self {
+            entries: Vec::new(),
+            len: 0,
+            marker,
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[inline]
+    fn bucket(h: W, capacity: usize) -> usize {
+        ((h.top(32) as u64 * capacity as u64) >> 32) as usize
+    }
+
+    /// The value of hash `h`, if it has an entry.
+    #[inline]
+    pub fn get_mut(&mut self, h: W) -> Option<&mut V> {
+        let n = self.entries.len();
+        if n == 0 {
+            return None;
+        }
+        let x = h.xor(self.marker);
+        let mut i = Self::bucket(h, n);
+        loop {
+            let k = self.entries[i].0;
+            if k == x {
+                return Some(&mut self.entries[i].1);
+            }
+            if k == W::default() {
+                return None;
+            }
+            i += 1;
+            if i == n {
+                i = 0;
+            }
+        }
+    }
+
+    /// The value of hash `h`, inserted as zero if it has no entry.
+    #[inline(always)]
+    pub fn get_or_insert(&mut self, h: W) -> &mut V {
+        debug_assert!(h != self.marker, "the marker was inserted");
+        let n = self.entries.len();
+        if n == 0 {
+            return self.insert(h);
+        }
+        let x = h.xor(self.marker);
+        let mut i = Self::bucket(h, n);
+        loop {
+            let k = self.entries[i].0;
+            if k == x {
+                return &mut self.entries[i].1;
+            }
+            if k == W::default() {
+                break;
+            }
+            i += 1;
+            if i == n {
+                i = 0;
+            }
+        }
+        if 16 * (self.len + 1) > COMPACT_LOAD * n {
+            return self.insert(h);
+        }
+        self.len += 1;
+        self.entries[i] = (x, V::default());
+        &mut self.entries[i].1
+    }
+
+    /// Inserts hash `h` as zero after allocating or growing the table.
+    #[cold]
+    #[inline(never)]
+    fn insert(&mut self, h: W) -> &mut V {
+        let n = self.entries.len();
+        let capacity = if n == 0 {
+            COMPACT_MIN_CAPACITY
+        } else {
+            (n * COMPACT_GROWTH / 16).max(n + 1)
+        };
+        assert!(capacity <= 1 << 32, "too many entries for a compact table");
+        let old = core::mem::replace(
+            &mut self.entries,
+            vec![(W::default(), V::default()); capacity],
+        );
+        for entry in old {
+            if entry.0 != W::default() {
+                let mut j = Self::bucket(entry.0.xor(self.marker), capacity);
+                while self.entries[j].0 != W::default() {
+                    j += 1;
+                    if j == capacity {
+                        j = 0;
+                    }
+                }
+                self.entries[j] = entry;
+            }
+        }
+        let x = h.xor(self.marker);
+        let mut i = Self::bucket(h, capacity);
+        while self.entries[i].0 != W::default() {
+            i += 1;
+            if i == capacity {
+                i = 0;
+            }
+        }
+        self.len += 1;
+        self.entries[i] = (x, V::default());
+        &mut self.entries[i].1
+    }
+
+    /// Prefetches the entry where hash `h` would be probed first, as
+    /// [`LevelTable::prefetch`] does.
+    #[inline]
+    pub fn prefetch(&self, h: W) {
+        #[cfg(target_arch = "x86_64")]
+        if !self.entries.is_empty() {
+            let ptr = self.entries[Self::bucket(h, self.entries.len())..]
+                .as_ptr()
+                .cast::<i8>();
+            // SAFETY: a prefetch has no effect on memory, and SSE is part of x86-64.
+            #[allow(unused_unsafe)]
+            unsafe {
+                core::arch::x86_64::_mm_prefetch(ptr, core::arch::x86_64::_MM_HINT_T0);
+            }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = h;
+    }
+
+    /// The entries in use, as hashes and values.
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (W, V)> + '_ {
+        let marker = self.marker;
+        self.entries
+            .iter()
+            .filter(|e| e.0 != W::default())
+            .map(move |&(k, v)| (k.xor(marker), v))
+    }
+
+    /// Removes all entries and frees the memory.
+    pub fn release(&mut self) {
+        self.entries = Vec::new();
+        self.len = 0;
     }
 }
 

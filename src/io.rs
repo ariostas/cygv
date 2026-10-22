@@ -34,6 +34,9 @@
 //! # Whether to prove the results exact, taking more primes if needed (not in vex phases).
 //! # Defaults to false.
 //! certify: false
+//! # Whether to prefer memory to speed, for the runs that do not fit otherwise: about a third
+//! # of the memory for about two and a half times the time. Defaults to false.
+//! low_memory: false
 //! ```
 //!
 //! A vex phase of the ambient toric variety needs its strata (see [`Stratum`]), each given by
@@ -103,7 +106,7 @@ use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
 /// The fields that are accepted in an input document.
-const INPUT_FIELDS: [&str; 20] = [
+const INPUT_FIELDS: [&str; 21] = [
     "name",
     "q",
     "intnums",
@@ -122,6 +125,7 @@ const INPUT_FIELDS: [&str; 20] = [
     "method",
     "n_threads",
     "certify",
+    "low_memory",
     "hilbert_bases",
     // Rejected below with what to write instead.
     "cones",
@@ -311,6 +315,12 @@ impl Input {
                 .as_bool()
                 .ok_or_else(|| IoError::invalid_field("certify", "expected a boolean"))?,
         };
+        let low_memory = match get_field(hash, "low_memory") {
+            None => false,
+            Some(y) => y
+                .as_bool()
+                .ok_or_else(|| IoError::invalid_field("low_memory", "expected a boolean"))?,
+        };
         let method = match get_field(hash, "method") {
             None => Method::default(),
             Some(y) => y.as_str().and_then(Method::from_name).ok_or_else(|| {
@@ -342,6 +352,7 @@ impl Input {
                 method,
                 n_threads,
                 certify,
+                low_memory,
                 hilbert_bases,
                 ..Options::default()
             },
@@ -1175,11 +1186,16 @@ hilbert_bases:
     #[test]
     fn test_parse_options() {
         let base = THREEFOLD.replace("min_points: 20\n", "max_deg: 5\n");
-        assert!(!load_one(&base).unwrap().options.certify);
-        let input = load_one(&format!("{base}certify: true\nn_threads: 3\n")).unwrap();
-        assert!(input.options.certify);
+        let input = load_one(&base).unwrap();
+        assert!(!input.options.certify && !input.options.low_memory);
+        let input = load_one(&format!(
+            "{base}certify: true\nn_threads: 3\nlow_memory: true\n"
+        ));
+        let input = input.unwrap();
+        assert!(input.options.certify && input.options.low_memory);
         assert_eq!(input.options.n_threads, Some(3));
         assert_eq!(field_of(&format!("{base}certify: 1\n")), "certify");
+        assert_eq!(field_of(&format!("{base}low_memory: yes\n")), "low_memory");
         assert_eq!(field_of(&format!("{base}n_threads: 0\n")), "n_threads");
     }
 

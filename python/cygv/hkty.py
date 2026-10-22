@@ -270,6 +270,7 @@ class Problem:
         method: str | None = None,
         n_threads: int | None = None,
         certify: bool = False,
+        low_memory: bool = False,
         hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
     ) -> Invariants:
         """The GV invariants, as integers, of the curve classes selected by one of:
@@ -283,8 +284,10 @@ class Problem:
 
         ``method`` is "auto" (the default), "modular" or "reference": auto runs the much
         faster modular pipeline for ``max_deg`` and ``target_points``, and the reference one
-        otherwise. ``certify`` proves the results exact. ``n_threads`` defaults to one per
-        core. ``hilbert_bases`` are the Hilbert bases of the cones ``K_T`` from a program such
+        otherwise. ``certify`` proves the results exact. ``low_memory`` prefers memory to
+        speed, for the runs that do not fit otherwise: the modular pipeline then takes about a
+        third of the memory, for about two and a half times the time. ``n_threads`` defaults
+        to one per core. ``hilbert_bases`` are the Hilbert bases of the cones ``K_T`` from a program such
         as Normaliz, as ``(divisors, basis)`` pairs, which the modular pipeline then uses
         instead of computing them.
 
@@ -300,6 +303,7 @@ class Problem:
             method=method,
             n_threads=n_threads,
             certify=certify,
+            low_memory=low_memory,
             hilbert_bases=hilbert_bases,
         )
 
@@ -313,6 +317,7 @@ class Problem:
         method: str | None = None,
         n_threads: int | None = None,
         certify: bool = False,
+        low_memory: bool = False,
         hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
     ) -> Invariants:
         """The GW invariants, as fractions, of the curve classes selected as for :meth:`gv`,
@@ -326,6 +331,7 @@ class Problem:
             method=method,
             n_threads=n_threads,
             certify=certify,
+            low_memory=low_memory,
             hilbert_bases=hilbert_bases,
         )
 
@@ -340,6 +346,7 @@ class Problem:
         method: str | None,
         n_threads: int | None,
         certify: bool,
+        low_memory: bool,
         hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None,
     ) -> Invariants:
         q = _vectors(self.q, "q")
@@ -363,6 +370,7 @@ class Problem:
             "method": method,
             "n_threads": n_threads,
             "certify": certify,
+            "low_memory": low_memory,
             "hilbert_bases": _hilbert_bases(hilbert_bases),
         }
         entries, dimension, grading_vector, report = _compute_in_subprocess(kind, args)

@@ -23,15 +23,26 @@
 //! series at the root; the curves of the layer are then read, and their terms added to their
 //! leaves, and $n_C\, z^C$ to every node above them but the root (the series keeps it); and
 //! then the terms of the degrees of the layer, now final, are scattered against the other terms
-//! of the power of each node into its parent. The nodes keep their terms in level tables of
-//! absolute classes, keyed by linear hashes over a box that holds every class the extraction
-//! touches.
+//! of the power of each node into its parent. The nodes keep their terms in compact tables of
+//! absolute classes ([`CompactTable`]), keyed by linear hashes over a box that holds every class
+//! the extraction touches.
+//!
+//! Most of the memory is the terms that wait for their degree, and two options of
+//! [`Tuning`] trade time for it (`PLAN.md` phase 10). With [`Tuning::sinks`], the terms of the
+//! degrees above `max_deg - delta`, which no power reaches beyond and which therefore only sum
+//! up to the root, go to the root directly wherever they arise, into a table per degree split
+//! in parts by hash that the threads fill through buffers, instead of into every node on the
+//! way. With [`Tuning::leaf_window`], the leaves take the terms of a window of that many degrees
+//! at a time: the curves add those of the window they are applied in, and at the start of every
+//! later window, each curve applied before builds its exponential again for the terms of the
+//! window's degrees.
 //!
 //! Each kind of work runs in parallel: the curves of a layer, as by [`extract`]; the sums by
 //! parent; the subtractions by table; and the products by target table, each writing one table
 //! of one node. Unless the ring is exact, every sum is taken in an order that does not depend
-//! on the threads: the curves of a layer are sorted, their terms kept until they are all built
-//! and then added in that order, and the subtractions buffered until the layer's sums are done.
+//! on the threads: the curves of a layer are sorted, their terms kept until those of a group of
+//! them are all built and then added in that order, the subtractions buffered until the layer's
+//! sums are done, and there are no sinks.
 //!
 //! A series with several values per term (an n-fold) is extracted one component at a time,
 //! since the components do not mix.
@@ -81,7 +92,7 @@ struct Node<W, E> {
     depth: usize,
     /// The last entry of the prefix, the exponent of the power of its row.
     m: i64,
-    tabs: Vec<Mutex<LevelTable<W, E>>>,
+    tabs: Vec<Mutex<CompactTable<W, E>>>,
 }
 
 /// A curve of a layer.
@@ -109,6 +120,70 @@ struct TreeWorker<K, W, E> {
     filled: Vec<(usize, u32)>,
     /// One buffer per shard.
     out: Vec<OutBuf<K, E>>,
+    /// One buffer per part of a sink.
+    bufs: Vec<Vec<(W, E)>>,
+}
+
+/// The tables of the root for one of the top degrees, which no power reaches beyond, so that
+/// every term of those degrees, wherever in the tree it arises, only sums up to the root:
+/// it goes there directly, into parts by hash that the threads fill at once.
+type Sink<W, E> = Vec<Mutex<CompactTable<W, E>>>;
+
+/// The terms buffered for one part of a [`Sink`] before they are added to it.
+const SINK_FLUSH: usize = 1024;
+
+/// The part of a [`Sink`] of `n` parts that hash `h` goes to: a mix of its top bits, since
+/// the tables take their buckets from those in order.
+#[inline]
+fn part_of<W: LevelWord>(h: W, n: usize) -> usize {
+    let x = (h.top(32) as u32).wrapping_mul(0x9E37_79B9);
+    ((x as u64 * n as u64) >> 32) as usize
+}
+
+/// Adds the terms in `bufs`, one buffer per part of `sink`, to their parts, and empties
+/// them.
+fn sink_flush<R: Ring, W: LevelWord>(
+    ring: &R,
+    sink: &Sink<W, R::Elem>,
+    bufs: &mut [Vec<(W, R::Elem)>],
+) {
+    for (part, buf) in sink.iter().zip(bufs.iter_mut()) {
+        if !buf.is_empty() {
+            add_all(ring, buf.drain(..), &mut part.lock().unwrap());
+        }
+    }
+}
+
+/// Buffers the term $(h, v)$ for its part of `sink` in `bufs`, and adds the buffer to the
+/// part if it is full.
+#[inline]
+fn sink_push<R: Ring, W: LevelWord>(
+    ring: &R,
+    sink: &Sink<W, R::Elem>,
+    bufs: &mut [Vec<(W, R::Elem)>],
+    h: W,
+    v: R::Elem,
+) {
+    let k = part_of(h, sink.len());
+    let buf = &mut bufs[k];
+    buf.push((h, v));
+    if buf.len() >= SINK_FLUSH {
+        add_all(ring, buf.drain(..), &mut sink[k].lock().unwrap());
+    }
+}
+
+/// Adds `terms` to `sink`, through the buffers `bufs`.
+fn sink_add<R: Ring, W: LevelWord>(
+    ring: &R,
+    sink: &Sink<W, R::Elem>,
+    terms: impl IntoIterator<Item = (W, R::Elem)>,
+    bufs: &mut Vec<Vec<(W, R::Elem)>>,
+) {
+    bufs.resize_with(sink.len(), Vec::new);
+    for (h, v) in terms {
+        sink_push(ring, sink, bufs, h, v);
+    }
+    sink_flush(ring, sink, bufs);
 }
 
 /// The node of `prefix`, created with its ancestors if needed.
@@ -137,9 +212,9 @@ fn node_of<W: LevelWord, E: Copy + Default>(
 fn new_tabs<W: LevelWord, E: Copy + Default>(
     marker: W,
     max_deg: u32,
-) -> Vec<Mutex<LevelTable<W, E>>> {
+) -> Vec<Mutex<CompactTable<W, E>>> {
     (0..=max_deg)
-        .map(|_| Mutex::new(LevelTable::new(marker)))
+        .map(|_| Mutex::new(CompactTable::new(marker)))
         .collect()
 }
 
@@ -147,7 +222,7 @@ fn new_tabs<W: LevelWord, E: Copy + Default>(
 fn add_all<R: Ring, W: LevelWord>(
     ring: &R,
     sources: impl IntoIterator<Item = (W, R::Elem)>,
-    target: &mut LevelTable<W, R::Elem>,
+    target: &mut CompactTable<W, R::Elem>,
 ) {
     for (h, v) in sources {
         let t = target.get_or_insert(h);
@@ -162,7 +237,7 @@ fn product<R: Ring, W: LevelWord>(
     sources: &[(W, R::Elem)],
     hs: &[W],
     vs: &[R::Elem],
-    target: &mut LevelTable<W, R::Elem>,
+    target: &mut CompactTable<W, R::Elem>,
 ) {
     for &(hb, fb) in sources {
         for (j, (&hu, &lu)) in hs.iter().zip(vs).enumerate() {
@@ -180,9 +255,9 @@ pub(super) fn extract_tree<R: Ring, L: KeyLayout>(
     ring: &R,
     layout: &L,
     grading: &[i32],
-    beta: &SparsePoly<L::Key, R::Elem>,
+    beta: SparsePoly<L::Key, R::Elem>,
     rows: &[Vec<i32>],
-    inst: &SparsePoly<L::Key, R::Elem>,
+    inst: SparsePoly<L::Key, R::Elem>,
     inv: &[R::Elem],
     max_deg: u32,
     lightcone: &Lightcone<L::Key>,
@@ -191,89 +266,156 @@ pub(super) fn extract_tree<R: Ring, L: KeyLayout>(
 ) -> Extracted<L::Key, R::Elem> {
     let h11 = layout.dim();
     // Every class the extraction touches is a sum of terms of beta and of the series.
-    let mut coords = Vec::new();
-    let mut degs = Vec::new();
+    let mut bounds = BoxBounds::new(h11, max_deg);
     let mut c = vec![0; h11];
-    for p in [beta, inst] {
+    for p in [&beta, &inst] {
         for i in 0..p.len_upto(max_deg) {
             if p.degs()[i] > 0 {
                 layout.unpack(p.keys()[i], &mut c);
-                coords.extend_from_slice(&c);
-                degs.push(p.degs()[i]);
+                bounds.add(&c, p.degs()[i]);
             }
         }
     }
-    let terms = degs
-        .iter()
-        .enumerate()
-        .map(|(i, &d)| (&coords[i * h11..(i + 1) * h11], d));
-    let level_box = level_box(terms, grading, max_deg);
-    drop((coords, degs));
-    let run = |level: &dyn Fn(usize, &SparsePoly<_, _>) -> Extracted<_, _>| {
-        let width = inst.width();
-        if width == 1 {
-            return level(0, inst);
-        }
-        // One component at a time.
-        let mut map = SlotMap::new(width, inst.len());
-        for k in 0..width {
-            let mut part = SparsePoly::new(1);
-            for i in 0..inst.len() {
-                let v = inst.values(i)[k];
-                if !ring.is_zero(v) {
-                    part.push(inst.keys()[i], inst.degs()[i], &[v]);
-                }
-            }
-            let got = level(k, &part)?;
-            for i in 0..got.len() {
-                map.get_or_insert(got.keys()[i], got.degs()[i])[k] = got.values(i)[0];
-            }
-        }
-        Ok(map.take())
-    };
+    let level_box = bounds.finish(grading);
     // The narrowest level word that fits, as in the extraction curve by curve.
-    macro_rules! with {
+    macro_rules! go {
         ($level:expr) => {
-            run(&|k, part| {
-                tree_in(
-                    ring,
-                    layout,
-                    &$level,
-                    beta,
-                    rows,
-                    part,
-                    inv,
-                    max_deg,
-                    lightcone,
-                    tuning,
-                    source,
-                    k,
-                    inst.width(),
-                )
-            })
+            tree_with(
+                ring, layout, &$level, beta, rows, inst, inv, max_deg, lightcone, tuning, source,
+            )
         };
     }
     type Wide<L> = <<L as KeyLayout>::Key as Key>::Level;
     let wide = <Wide<L> as LevelWord>::BITS > u128::BITS;
     if !tuning.wide_levels {
         if let Some(level) = LevelLayout::<u64>::new(&level_box, grading) {
-            return with!(level);
+            return go!(level);
         }
     }
     if !tuning.wide_levels || !wide {
         if let Some(level) = LevelLayout::<u128>::new(&level_box, grading) {
-            return with!(level);
+            return go!(level);
         }
     }
     if wide {
         if let Some(level) = LevelLayout::<Wide<L>>::new(&level_box, grading) {
-            return with!(level);
+            return go!(level);
         }
     }
     Err(Error::Key(KeyError::TooWide {
         bits: level_box.bits(),
         max_bits: <Wide<L> as LevelWord>::BITS - 1,
     }))
+}
+
+/// What the tree takes from beta: its rows, the series of each one with the hashes of its
+/// terms, and beta along the other rows, without the terms where they all vanish, with the
+/// hashes of its terms.
+struct TreeRows<K, W, E> {
+    tree: Vec<usize>,
+    row_series: Vec<RowSeries<K, W, E>>,
+    rest_rows: Vec<Vec<i32>>,
+    rest_beta: SparsePoly<K, E>,
+    rest_hashes: Vec<W>,
+    /// The lowest degree of beta.
+    delta: u32,
+    /// [`Tuning::leaf_window`].
+    window: Option<u32>,
+    /// [`Tuning::sinks`].
+    sinks: bool,
+}
+
+/// [`extract_tree`] with the classes hashed by `level`: the series one component at a time.
+#[allow(clippy::too_many_arguments)]
+fn tree_with<R: Ring, L: KeyLayout, W: LevelWord>(
+    ring: &R,
+    layout: &L,
+    level: &LevelLayout<W>,
+    beta: SparsePoly<L::Key, R::Elem>,
+    rows: &[Vec<i32>],
+    inst: SparsePoly<L::Key, R::Elem>,
+    inv: &[R::Elem],
+    max_deg: u32,
+    lightcone: &Lightcone<L::Key>,
+    tuning: &Tuning,
+    source: Option<Source<'_, R::Elem>>,
+) -> Extracted<L::Key, R::Elem> {
+    let tree_rows = {
+        let h11 = layout.dim();
+        let mut c = vec![0; h11];
+        let n_beta = beta.len_upto(max_deg);
+        let hashes: Vec<W> = (0..n_beta)
+            .map(|u| {
+                layout.unpack(beta.keys()[u], &mut c);
+                level.hash(&c)
+            })
+            .collect();
+        let tree = tree_rows(ring, &beta, rows.len(), max_deg, tuning.tree_depth);
+        let row_series: Vec<RowSeries<L::Key, W, R::Elem>> = tree
+            .iter()
+            .map(|&r| {
+                let mut b = SparsePoly::new(1);
+                let mut h = Vec::new();
+                for (u, &hash) in hashes.iter().enumerate() {
+                    let v = beta.values(u)[r];
+                    if !ring.is_zero(v) {
+                        b.push(beta.keys()[u], beta.degs()[u], &[v]);
+                        h.push(hash);
+                    }
+                }
+                (b, h)
+            })
+            .collect();
+        let rest: Vec<usize> = (0..rows.len()).filter(|r| !tree.contains(r)).collect();
+        let rest_rows: Vec<Vec<i32>> = rest.iter().map(|&r| rows[r].clone()).collect();
+        let mut rest_beta = SparsePoly::new(rest.len());
+        let mut rest_hashes = Vec::new();
+        let mut v = vec![R::Elem::default(); rest.len()];
+        for (u, &hash) in hashes.iter().enumerate() {
+            for (x, &r) in v.iter_mut().zip(&rest) {
+                *x = beta.values(u)[r];
+            }
+            if v.iter().any(|&x| !ring.is_zero(x)) {
+                rest_beta.push(beta.keys()[u], beta.degs()[u], &v);
+                rest_hashes.push(hash);
+            }
+        }
+        TreeRows {
+            tree,
+            row_series,
+            rest_rows,
+            rest_beta,
+            rest_hashes,
+            delta: beta.degs().first().map_or(1, |&d| d.max(1)),
+            window: tuning.leaf_window,
+            sinks: tuning.sinks,
+        }
+    };
+    // The tree only needs what it took.
+    drop(beta);
+    let width = inst.width();
+    if width == 1 {
+        return tree_in(
+            ring, layout, level, &tree_rows, rows, inst, inv, max_deg, lightcone, source, 0, 1,
+        );
+    }
+    let mut map = SlotMap::new(width, inst.len());
+    for k in 0..width {
+        let mut part = SparsePoly::new(1);
+        for i in 0..inst.len() {
+            let v = inst.values(i)[k];
+            if !ring.is_zero(v) {
+                part.push(inst.keys()[i], inst.degs()[i], &[v]);
+            }
+        }
+        let got = tree_in(
+            ring, layout, level, &tree_rows, rows, part, inv, max_deg, lightcone, source, k, width,
+        )?;
+        for i in 0..got.len() {
+            map.get_or_insert(got.keys()[i], got.degs()[i])[k] = got.values(i)[0];
+        }
+    }
+    Ok(map.take())
 }
 
 /// The rows of the tree for `beta` along `rows`, those of the most terms up to `max_deg` first:
@@ -314,13 +456,12 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
     ring: &R,
     layout: &L,
     level: &LevelLayout<W>,
-    beta: &SparsePoly<L::Key, R::Elem>,
+    tree_rows: &TreeRows<L::Key, W, R::Elem>,
     rows: &[Vec<i32>],
-    inst: &SparsePoly<L::Key, R::Elem>,
+    inst: SparsePoly<L::Key, R::Elem>,
     inv: &[R::Elem],
     max_deg: u32,
     lightcone: &Lightcone<L::Key>,
-    tuning: &Tuning,
     source: Option<Source<'_, R::Elem>>,
     k: usize,
     width: usize,
@@ -337,47 +478,13 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
     let keys = level.offset_keys(&units);
     let ints: Vec<R::Elem> = (0..=max_deg).map(|n| ring.int(n as i64)).collect();
     let mut c = vec![0; h11];
-    let n_beta = beta.len_upto(max_deg);
-    let hashes: Vec<W> = (0..n_beta)
-        .map(|u| {
-            layout.unpack(beta.keys()[u], &mut c);
-            level.hash(&c)
-        })
-        .collect();
-
-    // The rows of the tree, the series of each one, and beta along the other rows, without the
-    // terms where they all vanish.
-    let tree = tree_rows(ring, beta, rows.len(), max_deg, tuning.tree_depth);
-    let depth = tree.len();
-    let row_series: Vec<RowSeries<L::Key, W, R::Elem>> = tree
-        .iter()
-        .map(|&r| {
-            let mut b = SparsePoly::new(1);
-            let mut h = Vec::new();
-            for (u, &hash) in hashes.iter().enumerate() {
-                let v = beta.values(u)[r];
-                if !ring.is_zero(v) {
-                    b.push(beta.keys()[u], beta.degs()[u], &[v]);
-                    h.push(hash);
-                }
-            }
-            (b, h)
-        })
-        .collect();
-    let rest: Vec<usize> = (0..rows.len()).filter(|r| !tree.contains(r)).collect();
-    let rest_rows: Vec<Vec<i32>> = rest.iter().map(|&r| rows[r].clone()).collect();
-    let mut rest_beta = SparsePoly::new(rest.len());
-    let mut rest_hashes = Vec::new();
-    let mut v = vec![R::Elem::default(); rest.len()];
-    for (u, &hash) in hashes.iter().enumerate() {
-        for (x, &r) in v.iter_mut().zip(&rest) {
-            *x = beta.values(u)[r];
-        }
-        if v.iter().any(|&x| !ring.is_zero(x)) {
-            rest_beta.push(beta.keys()[u], beta.degs()[u], &v);
-            rest_hashes.push(hash);
-        }
-    }
+    let TreeRows {
+        tree,
+        row_series,
+        delta,
+        ..
+    } = tree_rows;
+    let (depth, delta) = (tree.len(), *delta);
 
     // The power $E_j^m$ of the row of depth j + 1, up to degree `top`.
     let power = |j: usize, m: i64, top: u32| {
@@ -402,23 +509,9 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
 
     let threads = rayon::current_num_threads();
     let n_shards = if threads == 1 { 1 } else { 4 * threads };
-    let mut shards: Vec<Mutex<Shard<L::Key, R::Elem>>> = (0..n_shards)
-        .map(|_| {
-            Mutex::new(Shard {
-                map: SlotMap::new(1, 2 * inst.len() / n_shards),
-                heap: DegreeHeap::new(),
-                order: Vec::new(),
-                hashes: Vec::new(),
-            })
-        })
-        .collect();
-    for i in 0..inst.len() {
-        let key = inst.keys()[i];
-        let shard = shards[shard_of(key, n_shards)].get_mut().unwrap();
-        let (s, _) = shard.map.insert(key, inst.degs()[i]);
-        shard.map.values_mut(s).copy_from_slice(inst.values(i));
-        shard.heap.push(inst.degs()[i], s);
-    }
+    let mut shards = new_shards(&inst, n_shards);
+    // The shards hold the series now.
+    drop(inst);
     let mut workers: Vec<Worker<L::Key, W, R::Elem>> = (0..threads)
         .map(|_| {
             Mutex::new(TreeWorker {
@@ -428,6 +521,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
                 curves: Vec::new(),
                 filled: Vec::new(),
                 out: (0..n_shards).map(|_| OutBuf::new()).collect(),
+                bufs: Vec::new(),
             })
         })
         .collect();
@@ -447,11 +541,54 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
     };
     let mut values = vec![R::Elem::default(); width];
 
-    let delta = beta.degs().first().map_or(1, |&d| d.max(1));
     let mut layer: Vec<TreeCurve<L::Key, W, R::Elem>> = Vec::new();
+    // With a window of leaf degrees, the leaves only take the terms of its degrees, and the
+    // curves of the earlier windows build their exponentials again for each new one.
+    let mut win_end = 1;
+    // Every term of a power but the first has degree at least delta, so the terms of the
+    // degrees from `root_from` on go to the sinks; but those of a ring that is not exact, whose
+    // sums must be taken in order.
+    let root_from = if R::EXACT && tree_rows.sinks {
+        (max_deg + 1).saturating_sub(delta).max(1)
+    } else {
+        max_deg + 1
+    };
+    let n_parts = if threads == 1 { 1 } else { 4 * threads };
+    let sinks: Vec<Sink<W, R::Elem>> = (root_from..=max_deg)
+        .map(|_| {
+            (0..n_parts)
+                .map(|_| Mutex::new(CompactTable::new(marker)))
+                .collect()
+        })
+        .collect();
+    let mut stored: Vec<TreeCurve<L::Key, W, R::Elem>> = Vec::new();
     let mut d = 1;
     while d <= max_deg {
         let top = (d + delta).min(max_deg + 1);
+        // A new window: the curves of the earlier ones add their terms of its degrees.
+        if d >= win_end {
+            let h = tree_rows.window.map_or(max_deg, |h| h.max(delta));
+            let start = d;
+            win_end = d.saturating_add(h).min(max_deg + 1);
+            push_exps(
+                ring,
+                layout,
+                tree_rows,
+                &ints,
+                inv,
+                &nodes,
+                &mut workers,
+                &stored,
+                start,
+                win_end - 1,
+                (root_from, &sinks),
+                threads,
+                &mut active,
+            );
+            if win_end > max_deg {
+                stored = Vec::new();
+            }
+        }
 
         // Sum the terms of the degrees of the layer up the tree, and subtract the root and its
         // children from the series.
@@ -491,8 +628,14 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             emitted.sort_unstable();
             emitted.dedup();
             let (nodes, shards, workers, keys) = (&nodes, &shards, &workers, &keys);
-            emitted.par_iter().enumerate().for_each(|(i, &n)| {
-                let t = nodes[n].tabs[xi].lock().unwrap();
+            let sink = (x >= root_from).then(|| &sinks[(x - root_from) as usize]);
+            let tables: Vec<&Mutex<CompactTable<W, R::Elem>>> = emitted
+                .iter()
+                .map(|&n| &nodes[n].tabs[xi])
+                .chain(sink.into_iter().flatten())
+                .collect();
+            tables.par_iter().enumerate().for_each(|(i, tab)| {
+                let t = tab.lock().unwrap();
                 let w = rayon::current_thread_index().unwrap_or(0);
                 let mut worker = workers[w].lock().unwrap();
                 let TreeWorker { curve, out, .. } = &mut *worker;
@@ -510,6 +653,11 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
         }
         for x in d..top {
             nodes[0].tabs[x as usize].get_mut().unwrap().release();
+            if x >= root_from {
+                for part in &sinks[(x - root_from) as usize] {
+                    part.lock().unwrap().release();
+                }
+            }
         }
         let mut outs: Vec<Vec<&mut OutBuf<L::Key, R::Elem>>> =
             (0..n_shards).map(|_| Vec::new()).collect();
@@ -573,79 +721,24 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             t.leaf = node_of(&prefix, &mut nodes, &mut index, marker, max_deg);
         }
 
-        // Build the exponentials of the curves along the other rows. An exact ring adds their
-        // terms to the leaves right away; otherwise they are kept, and added in order.
-        let apply = |i: usize| {
-            let t = &layer[i];
-            let w = rayon::current_thread_index().unwrap_or(0);
-            let mut worker = workers[w].lock().unwrap();
-            let TreeWorker {
-                ws,
-                curve,
-                terms,
-                curves,
-                filled,
-                ..
-            } = &mut *worker;
-            layout.unpack(t.key, curve);
-            let start = terms.len();
-            ws.exp(
-                ring,
-                curve,
-                &rest_beta,
-                &rest_hashes,
-                Some(&rest_rows),
-                &ints,
-                inv,
-                max_deg - t.deg,
-                |h, e, f| terms.push((t.hash.wadd(h), t.deg + e, ring.mul(t.val, f))),
-            );
-            if R::EXACT {
-                add_terms(ring, &nodes[t.leaf], t.leaf, &terms[start..], filled);
-                terms.truncate(start);
-            } else {
-                curves.push((i, start, terms.len()));
-            }
-        };
-        if threads == 1 {
-            (0..layer.len()).for_each(apply);
-        } else {
-            (0..layer.len()).into_par_iter().for_each(apply);
-        }
-        if !R::EXACT {
-            // Each leaf takes the terms of its curves in their order.
-            let mut kept: Vec<(usize, usize, usize, usize)> = Vec::new();
-            for (w, worker) in workers.iter_mut().enumerate() {
-                let worker = worker.get_mut().unwrap();
-                kept.extend(worker.curves.drain(..).map(|(i, s, e)| (i, w, s, e)));
-            }
-            kept.sort_unstable_by_key(|&(i, ..)| (layer[i].leaf, i));
-            let (nodes, workers, layer) = (&nodes, &workers, &layer);
-            let filled: Vec<(usize, u32)> = kept
-                .chunk_by(|a, b| layer[a.0].leaf == layer[b.0].leaf)
-                .collect::<Vec<_>>()
-                .into_par_iter()
-                .flat_map_iter(|g| {
-                    let leaf = layer[g[0].0].leaf;
-                    let mut filled = Vec::new();
-                    for &(_, w, s, e) in g {
-                        // Only this task reads the worker's terms now.
-                        let worker = workers[w].lock().unwrap();
-                        add_terms(ring, &nodes[leaf], leaf, &worker.terms[s..e], &mut filled);
-                    }
-                    filled
-                })
-                .collect();
-            for (n, x) in filled {
-                active[x as usize].push(n);
-            }
-        }
-        for worker in workers.iter_mut() {
-            let worker = worker.get_mut().unwrap();
-            worker.terms.clear();
-            for (n, x) in worker.filled.drain(..) {
-                active[x as usize].push(n);
-            }
+        // Build the exponentials of the curves along the other rows, as far as the window.
+        push_exps(
+            ring,
+            layout,
+            tree_rows,
+            &ints,
+            inv,
+            &nodes,
+            &mut workers,
+            &layer,
+            0,
+            win_end - 1,
+            (root_from, &sinks),
+            threads,
+            &mut active,
+        );
+        if win_end <= max_deg {
+            stored.extend(layer.iter().copied());
         }
         // The curves themselves, in every node above them but the root.
         for t in &layer {
@@ -671,6 +764,11 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             let (nodes, keys) = (&nodes, &keys);
             srcs.par_extend(list.into_par_iter().filter_map(|n| {
                 let mut t = nodes[n].tabs[x as usize].lock().unwrap();
+                // Every term of a power but the first has degree at least delta.
+                if x + delta > max_deg {
+                    t.release();
+                    return None;
+                }
                 let mut c = vec![0; h11];
                 let s: Vec<(W, R::Elem)> = t
                     .iter()
@@ -720,11 +818,27 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             .collect();
         by_target.sort_by_key(|&(cost, _)| core::cmp::Reverse(cost));
         let filled: Vec<(usize, u32)> = {
-            let (nodes, powers, srcs) = (&nodes, &powers, &srcs);
+            let (nodes, powers, srcs, sinks) = (&nodes, &powers, &srcs, &sinks);
             by_target
                 .into_par_iter()
                 .filter_map(|(_, g)| {
                     let (p, y) = g[0].0;
+                    if y >= root_from {
+                        let sink = &sinks[(y - root_from) as usize];
+                        let mut bufs = vec![Vec::new(); sink.len()];
+                        for &(_, si, j0, j1) in g {
+                            let (n, _, s) = &srcs[si];
+                            let pw = &powers[&(nodes[*n].depth - 1, nodes[*n].m)];
+                            let (hs, vs) = (&pw.hashes[j0..j1], &pw.vals[j0..j1]);
+                            for &(hb, fb) in s {
+                                for (&hu, &lu) in hs.iter().zip(vs) {
+                                    sink_push(ring, sink, &mut bufs, hb.wadd(hu), ring.mul(lu, fb));
+                                }
+                            }
+                        }
+                        sink_flush(ring, sink, &mut bufs);
+                        return None;
+                    }
                     let mut t = nodes[p].tabs[y as usize].lock().unwrap();
                     let was_empty = t.is_empty();
                     for &(_, si, j0, j1) in g {
@@ -739,27 +853,182 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
         for (n, y) in filled {
             active[y as usize].push(n);
         }
+        shards
+            .par_iter_mut()
+            .for_each(|s| s.get_mut().unwrap().evict(top));
         d = top;
     }
     let parts = shards
         .into_iter()
-        .map(|s| s.into_inner().unwrap().map.take())
+        .flat_map(|s| s.into_inner().unwrap().finish())
         .collect();
     Ok(SparsePoly::merge(1, parts))
+}
+
+/// Builds the exponentials of `curves` along the rows that are not in the tree, up to degree
+/// `hi`, and adds $n_C\, z^C$ times their terms of degree `lo` to `hi` to the leaves of the
+/// curves, recording in `active` the tables that had no terms. An exact ring adds the terms
+/// of each curve right away; otherwise they are kept, and each leaf takes those of its curves
+/// in their order.
+#[allow(clippy::too_many_arguments)]
+fn push_exps<R: Ring, L: KeyLayout, W: LevelWord>(
+    ring: &R,
+    layout: &L,
+    tree_rows: &TreeRows<L::Key, W, R::Elem>,
+    ints: &[R::Elem],
+    inv: &[R::Elem],
+    nodes: &[Node<W, R::Elem>],
+    workers: &mut [Worker<L::Key, W, R::Elem>],
+    curves: &[TreeCurve<L::Key, W, R::Elem>],
+    lo: u32,
+    hi: u32,
+    sinks: (u32, &[Sink<W, R::Elem>]),
+    threads: usize,
+    active: &mut [Vec<usize>],
+) {
+    // The terms that are kept until they are added in order are kept a group of curves at a
+    // time, which bounds their memory and keeps each leaf's order.
+    let group = if R::EXACT {
+        curves.len().max(1)
+    } else {
+        GROUP_CURVES
+    };
+    for curves in curves.chunks(group) {
+        push_group(
+            ring, layout, tree_rows, ints, inv, nodes, workers, curves, lo, hi, sinks, threads,
+            active,
+        );
+    }
+}
+
+/// [`push_exps`] for one group of curves.
+#[allow(clippy::too_many_arguments)]
+fn push_group<R: Ring, L: KeyLayout, W: LevelWord>(
+    ring: &R,
+    layout: &L,
+    tree_rows: &TreeRows<L::Key, W, R::Elem>,
+    ints: &[R::Elem],
+    inv: &[R::Elem],
+    nodes: &[Node<W, R::Elem>],
+    workers: &mut [Worker<L::Key, W, R::Elem>],
+    curves: &[TreeCurve<L::Key, W, R::Elem>],
+    lo: u32,
+    hi: u32,
+    sinks: (u32, &[Sink<W, R::Elem>]),
+    threads: usize,
+    active: &mut [Vec<usize>],
+) {
+    let apply = |i: usize| {
+        let t = &curves[i];
+        if t.deg >= hi {
+            return;
+        }
+        let w = rayon::current_thread_index().unwrap_or(0);
+        let mut worker = workers[w].lock().unwrap();
+        let TreeWorker {
+            ws,
+            curve,
+            terms,
+            curves: kept,
+            filled,
+            bufs,
+            ..
+        } = &mut *worker;
+        layout.unpack(t.key, curve);
+        let start = terms.len();
+        ws.exp(
+            ring,
+            curve,
+            &tree_rows.rest_beta,
+            &tree_rows.rest_hashes,
+            Some(&tree_rows.rest_rows),
+            ints,
+            inv,
+            hi - t.deg,
+            |h, e, f| {
+                if t.deg + e >= lo {
+                    terms.push((t.hash.wadd(h), t.deg + e, ring.mul(t.val, f)));
+                }
+            },
+        );
+        if R::EXACT {
+            add_terms(ring, nodes, t.leaf, &terms[start..], filled, sinks, bufs);
+            terms.truncate(start);
+        } else {
+            kept.push((i, start, terms.len()));
+        }
+    };
+    {
+        if threads == 1 {
+            (0..curves.len()).for_each(apply);
+        } else {
+            (0..curves.len()).into_par_iter().for_each(apply);
+        }
+    }
+    if !R::EXACT {
+        let mut kept: Vec<(usize, usize, usize, usize)> = Vec::new();
+        for (w, worker) in workers.iter_mut().enumerate() {
+            let worker = worker.get_mut().unwrap();
+            kept.extend(worker.curves.drain(..).map(|(i, s, e)| (i, w, s, e)));
+        }
+        kept.sort_unstable_by_key(|&(i, ..)| (curves[i].leaf, i));
+        let workers = &*workers;
+        let filled: Vec<(usize, u32)> = kept
+            .chunk_by(|a, b| curves[a.0].leaf == curves[b.0].leaf)
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .flat_map_iter(|g| {
+                let leaf = curves[g[0].0].leaf;
+                let mut filled = Vec::new();
+                for &(_, w, s, e) in g {
+                    // Only this task reads the worker's terms now.
+                    let worker = workers[w].lock().unwrap();
+                    let mut bufs = Vec::new();
+                    add_terms(
+                        ring,
+                        nodes,
+                        leaf,
+                        &worker.terms[s..e],
+                        &mut filled,
+                        sinks,
+                        &mut bufs,
+                    );
+                }
+                filled
+            })
+            .collect();
+        for (n, x) in filled {
+            active[x as usize].push(n);
+        }
+    }
+    for worker in workers.iter_mut() {
+        let worker = worker.get_mut().unwrap();
+        worker.terms.clear();
+        for (n, x) in worker.filled.drain(..) {
+            active[x as usize].push(n);
+        }
+    }
 }
 
 /// Adds `terms`, as hashes, degrees and values in order of degree, to the tables of `node`,
 /// whose index is `n`, and records in `filled` the tables that had no terms before.
 fn add_terms<R: Ring, W: LevelWord>(
     ring: &R,
-    node: &Node<W, R::Elem>,
+    nodes: &[Node<W, R::Elem>],
     n: usize,
     terms: &[(W, u32, R::Elem)],
     filled: &mut Vec<(usize, u32)>,
+    (root_from, sinks): (u32, &[Sink<W, R::Elem>]),
+    bufs: &mut Vec<Vec<(W, R::Elem)>>,
 ) {
     for run in terms.chunk_by(|a, b| a.1 == b.1) {
         let x = run[0].1;
-        let mut t = node.tabs[x as usize].lock().unwrap();
+        if x >= root_from {
+            let sink = &sinks[(x - root_from) as usize];
+            sink_add(ring, sink, run.iter().map(|&(h, _, f)| (h, f)), bufs);
+            continue;
+        }
+        let mut t = nodes[n].tabs[x as usize].lock().unwrap();
         if t.is_empty() {
             filled.push((n, x));
         }

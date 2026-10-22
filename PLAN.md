@@ -1116,27 +1116,67 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     many breaking changes: the module paths, the `Method` and `certify` arguments, the new
     `ComputeError` variants, saturation by default; 6.2 and 6.7 list the consequences).
   - [ ] Decide what happens to PR #94 and credit its author (section 7).
-- [ ] **10. A low-memory mode** (after the release; added on 2026-10-13): an option that
-  prefers memory to speed, for the runs that do not fit (the C reports 3–6 GB at degree
-  26–28 for $h^{1,1} = 10$–11, and `h11_10` at 20 already peaks at 1.8 GB here, against 0.6 GB
-  before the extraction). Explore first, measuring each lever's memory against its time on
-  `h11_10` at 20–24, then decide the option's shape (a flag, or a memory budget the run
-  plans for). Candidates, roughly in order of promise:
-  - The tree's node tables, about 1 GB of the peak on `h11_10` at 20: terms waiting for their
-    degree, copied into every node on the way down (leaves 534 MB, depth one 276 MB, root
-    176 MB at layer 16). Store them once and let the nodes refer to them, flush them sooner,
-    or keep a shallower tree (curve by curve the extraction took 1.70 against 1.91 GB).
-  - Two lanes per pass instead of three or four: every term holds one value per lane next
-    to its key, so the tables shrink by a third or so, for more passes.
-  - Dropping $\alpha$ when the extraction goes along the rows ($\beta$ replaces it), and
-    whatever else the stages keep alive past their last use (the period data already goes
-    before the extraction).
-  - 64-bit keys when the layout fits (section 5.3), and smaller shards' buffers.
-  - The pruning of the target mode (section 5.3), for runs with targets.
-  - Lightcone chunks (idea 5 of `ALGORITHMS.md`, measured in 5.3): 1.6× less memory for 2.9×
-    the time with four chunks, so the last resort; it composes with the others.
-  - Opportunistically, folding the tables onto the orbits of a symmetry (idea 6, measured in
-    5.3) divides them by $|G|$, but few geometries have one, mostly of order 2, so last.
+- [x] **10. A low-memory mode** (added on 2026-10-13, done on 2026-10-21): `low_memory` (the
+  field of `Options`, the YAML key, `--low-memory`, the Python keyword), for the runs that do
+  not fit otherwise. Explored with a probe that sampled the live bytes of a run under a
+  counting allocator, with markers at every stage and every layer of the tree (removed since;
+  the memory bench has `/modular-lowmem` scenarios now). On `h11_10` at degree 20 (8 threads,
+  1.17 M invariants) the peak was 1.60 GB in 27 s: 1.0 GB of it the tree's node tables
+  (19.8 M entries of 24 bytes in 52 bytes each), the rest the shards of the series, the
+  workers' level tables and the inputs of the extraction. Two kinds of change came out of it.
+  - Free ones, now the default, identical output: the nodes keep their terms in a
+    `CompactTable` (any capacity, filled to 13/16 before it grows by 5/4, no list of the
+    entries in use: 33 bytes an entry instead of 52), which is also faster; the extraction
+    takes $\beta$ and $I$ by value and frees them once the tree has its rows and the shards
+    the series, and frees $\alpha$ along the rows; the tree builds its rows once for all the
+    components of an n-fold; the shards evict the final terms after every layer once they
+    are an eighth of them (the zero ones, three quarters of the classes the extraction
+    touches, away, the others to sorted parts), and start at the size of $I$, not twice it;
+    the nodes' terms of the top degree are not kept as sources, since no power reaches
+    beyond; the candidates drop the spare capacity of their concatenation (80 MB); the
+    residues are sorted arrays (28 bytes a curve instead of about 85); the workers keep
+    level tables of up to 4096 entries rather than 32768 (half their memory, no time); the
+    instanton frees $c_1$ and $S_2$ as it uses them, adds its chunks' maps in batches of
+    $2^{16}$ terms and keeps its columns as indices; the level box is bounded without
+    storing the coordinates; `SparsePoly::merge` merges sorted parts by a heap; and the lift
+    and the results are converted from the end, the input shrinking, rather than held twice.
+    `h11_10` at 20: 0.94 GiB in 25 s (resident 1.2 GiB); `h11_8` at 22: 352 → 219 MiB, the
+    same time (`cargo bench --bench memory`).
+  - The mode itself (`modular::Options::low_memory`):
+    - One prime per pass (`Tuning::lanes` may now be 1, also for wide keys): every value
+      in 8 bytes instead of 16. −25% for 1.4× the time.
+    - Sinks (`extraction::Tuning::sinks`): the terms of the degrees above
+      `max_deg - delta`, which only sum up to the root, go there directly, into a table
+      per degree split in parts by hash and filled through buffers, rather than into every
+      node on the way (the degree-20 tables held 8.2 M of the 19.8 M entries). −18% for
+      1.13× (the products lose their locality); exact rings only, since the parts take
+      their terms in any order. With two primes a pass they would save 24% for 1.08× in
+      the default mode too; kept out of it for now, like the allocator setting below.
+    - Leaf windows (`extraction::Tuning::leaf_window`, 1 in the mode): the leaves take the
+      terms of one degree at a time, and every curve builds its exponential again for each
+      degree above it. −17% for 1.6× at degree 20, −19% for 1.9× at 22.
+    - `cygv::return_freed_memory`, which the command line and the Python module call:
+      glibc's `M_MMAP_THRESHOLD` at 128 KB, so that large freed blocks go back to the
+      system (the threshold otherwise rises as they are freed, and the heap keeps them).
+      The resident memory falls by a third (0.75 → 0.49 GB) for 1.06× the time; in the
+      default mode by a quarter for 1.07×, so it stays out of it.
+
+    `h11_10` at 20 (the bench's `/modular-lowmem`): 0.47 GiB live and resident in 69 s,
+    against 1.50 GiB live and 1.74 GiB resident in 27 s before; at 22, 1.09 against
+    3.71 GiB in 278 against 102 s; `h11_8` at 22, 118 MiB (151 resident) in 12.8 s against
+    352 MiB in 4.2 s; the fourfold at 24, 18 against 52 MiB.
+  - Measured and left out: a tree of depth one (−10% for 1.75×) or three (+25%); load
+    15/16 for the compact tables (−10% for 1.19×; 14/16 −4.5% for 1.04×); pulling the
+    products into the inner nodes when their degree comes instead of pushing them (the
+    sources of every degree must then be kept, which outgrow the tables they save by the
+    last layers); keeping only the candidates' classes in the shards and the root (wrong:
+    a million of the 1.17 M invariants are at classes that are not candidates, whose period
+    vanishes but whose invariants do not); 64-bit keys (5.3); lightcone chunks and
+    symmetries (5.3).
+  - Left: certifying in the mode gains little (395 against 411 MB on `h11_8` at 22), since
+    the majorant pass has 16-byte bounds and no sinks (its sums must be taken in order); a
+    deterministic sink, or bounds in 8 bytes, would bring it down. The output itself
+    (`Invariant`s with a vector each) is about 136 bytes an invariant, 0.4 GB at 3 M.
 
 Outside the phases:
 

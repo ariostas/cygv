@@ -404,6 +404,8 @@ pub(crate) fn cone_candidates<L: KeyLayout>(
     points.push((L::Key::default(), 0));
     points.par_sort_unstable_by_key(|&(key, deg)| (deg, key));
     points.dedup();
+    // The cones overlap, so most of the concatenation was duplicates.
+    points.shrink_to_fit();
     // The cones of the strata also have points with three negative intersections that carry
     // nothing.
     if !geometry.strata().is_empty() {

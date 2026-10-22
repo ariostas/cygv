@@ -55,6 +55,10 @@ fn chunks(n: usize, n_chunks: usize, cost: impl Fn(usize) -> usize) -> Vec<Range
     res
 }
 
+/// The most terms a chunk of [`par_accumulate`] collects before adding them, when the sums
+/// may be taken in any order.
+const LOCAL_TERMS: usize = 1 << 16;
+
 /// The number of chunks of [`par_accumulate`] when the sums must be taken in a fixed order.
 const ORDERED_CHUNKS: usize = 128;
 
@@ -98,6 +102,11 @@ fn par_accumulate<K: Key, E: Copy + Default + PartialEq + Send + Sync>(
         |local, xs| {
             for x in xs {
                 body(x, local);
+                // A chunk's terms can be most of the result: added in batches, they take
+                // a bounded share of the memory.
+                if local.len() >= LOCAL_TERMS {
+                    acc.add_from(local, &add);
+                }
             }
             acc.add_from(local, &add);
         },
@@ -211,7 +220,7 @@ pub fn recip<R: Ring, K: Key>(
 pub fn instanton<R: Ring, K: Key>(
     ring: &R,
     geometry: &Geometry,
-    period: &PeriodData<K, R::Elem>,
+    period: &mut PeriodData<K, R::Elem>,
     max_deg: u32,
 ) -> Result<InstantonData<K, R::Elem>, Error> {
     let h11 = geometry.h11();
@@ -222,27 +231,35 @@ pub fn instanton<R: Ring, K: Key>(
     let mut acc = SlotMap::new(1, period.c0.len());
     let c0_inv = recip(ring, &period.c0, max_deg, &mut acc)?;
     drop(acc);
+    // Each part of the period is freed once it is used, which lowers the peak.
     let alpha = mul_scalar(ring, &c0_inv, &period.c1, max_deg);
+    period.c1 = SparsePoly::new(h11);
     let beta = period
         .c1_rows
-        .as_ref()
-        .map(|c1| mul_scalar(ring, &c0_inv, c1, max_deg));
+        .take()
+        .map(|c1| mul_scalar(ring, &c0_inv, &c1, max_deg));
 
     let acc = ShardedMap::new(m, n_shards(), period.s2.len() + alpha.len());
     mul_scalar_into(ring, &c0_inv, &period.s2, max_deg, &acc);
+    period.s2 = SparsePoly::new(m);
 
     // sum_a alpha_a V^(k)_a = 1/2 sum_{a, b} K^(k)_ab alpha_a alpha_b, by pairs of columns
     // a <= b with some K_ab nonzero, since each alpha_a has few terms: the product of the two
     // columns times K_ab for a < b, and for a = b half of it, i.e. the products of the terms
     // x < y and half of those of x = y.
-    let mut columns: Vec<Vec<(K, u32, R::Elem)>> = vec![Vec::new(); h11];
+    // The terms of each column, as indices into alpha.
+    let mut columns: Vec<Vec<u32>> = vec![Vec::new(); h11];
     for x in 0..alpha.len() {
         for (a, &v) in alpha.values(x).iter().enumerate() {
             if !ring.is_zero(v) {
-                columns[a].push((alpha.keys()[x], alpha.degs()[x], v));
+                columns[a].push(x as u32);
             }
         }
     }
+    let term = |a: usize, i: usize| {
+        let x = columns[a][i] as usize;
+        (alpha.keys()[x], alpha.degs()[x], alpha.values(x)[a])
+    };
     let half = period.tables.inv[2];
     // For each pair of columns, the coefficients K^(k)_ab of the forms.
     let mut pairs: Vec<(usize, usize, Vec<R::Elem>)> = Vec::new();
@@ -263,13 +280,12 @@ pub fn instanton<R: Ring, K: Key>(
     let inner = |o: usize| {
         let (p, i) = (outer[o].0 as usize, outer[o].1 as usize);
         let (a, b, _) = &pairs[p];
-        let (col_a, col_b) = (&columns[*a], &columns[*b]);
-        let d = col_a[i].1;
+        let d = term(*a, i).1;
         let start = if a == b { i } else { 0 };
         let end = if d > max_deg {
             0
         } else {
-            col_b.partition_point(|t| t.1 <= max_deg - d)
+            columns[*b].partition_point(|&y| alpha.degs()[y as usize] <= max_deg - d)
         };
         start..end.max(start)
     };
@@ -281,9 +297,9 @@ pub fn instanton<R: Ring, K: Key>(
         |o, local| {
             let (p, i) = (outer[o].0 as usize, outer[o].1 as usize);
             let (a, b, kab) = &pairs[p];
-            let (kx, dx, vx) = columns[*a][i];
+            let (kx, dx, vx) = term(*a, i);
             for j in inner(o) {
-                let (ky, dy, vy) = columns[*b][j];
+                let (ky, dy, vy) = term(*b, j);
                 let mut v = ring.mul(vx, vy);
                 if a == b && i == j {
                     v = ring.mul(v, half);

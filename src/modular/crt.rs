@@ -17,7 +17,7 @@
 
 use super::field::{LaneField, Lanes};
 use super::key::Key;
-use super::table::{SlotMap, SparsePoly};
+use super::table::SparsePoly;
 use malachite::Integer;
 use rayon::prelude::*;
 
@@ -117,8 +117,9 @@ impl<'a> Lift<'a> {
 pub struct Residues<K> {
     width: usize,
     primes: Vec<u64>,
-    /// The curves, numbered in order of insertion.
-    curves: SlotMap<K, ()>,
+    /// The curves, in increasing order of degree and then key, as the passes give them.
+    keys: Vec<K>,
+    degs: Vec<u32>,
     /// Per prime, `width` residues per curve, zero where a pass found nothing.
     columns: Vec<Vec<u64>>,
 }
@@ -129,7 +130,8 @@ impl<K: Key> Residues<K> {
         Self {
             width,
             primes: Vec::new(),
-            curves: SlotMap::new(1, 1024),
+            keys: Vec::new(),
+            degs: Vec::new(),
             columns: Vec::new(),
         }
     }
@@ -143,12 +145,12 @@ impl<K: Key> Residues<K> {
     /// The number of curves so far.
     #[inline]
     pub fn len(&self) -> usize {
-        self.curves.len()
+        self.keys.len()
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.curves.is_empty()
+        self.keys.is_empty()
     }
 
     /// Adds the result of a pass, i.e. the invariants modulo the primes of `ring`.
@@ -170,19 +172,66 @@ impl<K: Key> Residues<K> {
             );
             self.primes.push(f.p());
         }
-        let n = self.width * self.curves.len();
+        // Both lists are in order of degree and then key: the index of each value among the
+        // curves after the merge, which only moves the old curves if the pass has new ones.
+        let order = |a: (u32, K), b: (u32, K)| a.cmp(&b);
+        let mut at = Vec::with_capacity(values.len());
+        let mut new = 0;
+        let mut i = 0;
+        for v in 0..values.len() {
+            let x = (values.degs()[v], values.keys()[v]);
+            while i < self.keys.len() && order((self.degs[i], self.keys[i]), x).is_lt() {
+                i += 1;
+            }
+            if i < self.keys.len() && (self.degs[i], self.keys[i]) == x {
+                at.push(i + new);
+            } else {
+                at.push(i + new);
+                new += 1;
+            }
+        }
+        if new > 0 {
+            let n = self.keys.len() + new;
+            let (mut keys, mut degs) = (Vec::with_capacity(n), Vec::with_capacity(n));
+            let mut moved = Vec::with_capacity(self.keys.len());
+            let mut i = 0;
+            for v in 0..values.len() {
+                let x = (values.degs()[v], values.keys()[v]);
+                while i < self.keys.len() && order((self.degs[i], self.keys[i]), x).is_lt() {
+                    moved.push(keys.len());
+                    keys.push(self.keys[i]);
+                    degs.push(self.degs[i]);
+                    i += 1;
+                }
+                if i < self.keys.len() && (self.degs[i], self.keys[i]) == x {
+                    moved.push(keys.len());
+                    i += 1;
+                }
+                keys.push(x.1);
+                degs.push(x.0);
+            }
+            for i in i..self.keys.len() {
+                moved.push(keys.len());
+                keys.push(self.keys[i]);
+                degs.push(self.degs[i]);
+            }
+            let w = self.width;
+            for col in &mut self.columns {
+                let mut c = vec![0; n * w];
+                for (old, &to) in moved.iter().enumerate() {
+                    c[to * w..(to + 1) * w].copy_from_slice(&col[old * w..(old + 1) * w]);
+                }
+                *col = c;
+            }
+            (self.keys, self.degs) = (keys, degs);
+        }
+        let n = self.width * self.keys.len();
         self.columns.extend((0..NL).map(|_| vec![0; n]));
         let first = self.columns.len() - NL;
-        for i in 0..values.len() {
-            let (s, created) = self.curves.insert(values.keys()[i], values.degs()[i]);
-            if created {
-                for col in &mut self.columns {
-                    col.resize(col.len() + self.width, 0);
-                }
-            }
-            let at = s as usize * self.width;
-            for (k, &v) in values.values(i).iter().enumerate() {
-                for (l, r) in ring.residues(v).into_iter().enumerate() {
+        for (v, &s) in at.iter().enumerate() {
+            let at = s * self.width;
+            for (k, &x) in values.values(v).iter().enumerate() {
+                for (l, r) in ring.residues(x).into_iter().enumerate() {
                     self.columns[first + l][at + k] = r;
                 }
             }
@@ -197,7 +246,7 @@ impl<K: Key> Residues<K> {
             return false;
         }
         let lift = Lift::new(&self.primes);
-        (0..self.curves.len() * self.width)
+        (0..self.keys.len() * self.width)
             .into_par_iter()
             .map_init(
                 || vec![0; n - check],
@@ -214,27 +263,27 @@ impl<K: Key> Residues<K> {
     /// of degree and then key, leaving out the curves where all of them are zero.
     pub fn lift(&self) -> Vec<(K, u32, Vec<Integer>)> {
         let lift = Lift::new(&self.primes);
-        let mut order: Vec<u32> = (0..self.curves.len() as u32).collect();
-        order.par_sort_unstable_by_key(|&s| (self.curves.deg(s), self.curves.key(s)));
         // Collected in place, one entry per curve, and then filtered in place.
-        let lifted: Vec<Option<(K, u32, Vec<Integer>)>> = order
+        let lifted: Vec<Option<(K, u32, Vec<Integer>)>> = (0..self.keys.len())
             .into_par_iter()
             .map_init(
                 || vec![0; self.primes.len()],
                 |digits, s| {
-                    let at = s as usize * self.width;
+                    let at = s * self.width;
                     let values: Vec<Integer> = (at..at + self.width)
                         .map(|i| {
                             lift.digits(|j| self.columns[j][i], digits);
                             lift.integer(digits)
                         })
                         .collect();
-                    (values.iter().any(|v| *v != 0))
-                        .then(|| (self.curves.key(s), self.curves.deg(s), values))
+                    (values.iter().any(|v| *v != 0)).then(|| (self.keys[s], self.degs[s], values))
                 },
             )
             .collect();
-        lifted.into_iter().flatten().collect()
+        // Mapped in place, without a second buffer.
+        let mut lifted = lifted;
+        lifted.retain(Option::is_some);
+        lifted.into_iter().map(Option::unwrap).collect()
     }
 }
 
@@ -243,6 +292,7 @@ mod tests {
     use super::*;
     use crate::modular::field::primes;
     use crate::modular::key::PackedKey;
+    use crate::modular::table::SlotMap;
     use crate::modular::TestRng;
     use malachite::base::num::arithmetic::traits::Mod;
     use malachite::base::num::basic::traits::{NegativeOne, One, Zero};
