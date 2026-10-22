@@ -1386,8 +1386,11 @@ Not scheduled; each can be done after the wrap-up. First those from PR #102:
   with `u128`, and `h11_9` at 18 0.73 / 0.70 s against 0.82 / 0.71 s: the keys are a small
   part of an entry next to its values and the index, and not worth another copy of the
   pipeline in the build.
-- [ ] **Structure-of-arrays level tables** on CPUs with a large L2 (the C chooses at run
-  time); needs a machine with one to measure.
+- [x] **Structure-of-arrays level tables** on CPUs with a large L2 (the C chooses at run
+  time): measured on the Zen 5 of the measurement session below (1 MB of L2 per core) and
+  dropped. `LevelTable` with its hashes and values in two arrays, the prefetch fetching both,
+  ran within 1% of the packed records on `h11_8` at 24, `h11_9` at 22, `h11_10` at 20 and
+  `h11_11` at 24, on 1 and 16 threads.
 
 - [x] **A default grading vector without a fan** (done with the interface redesign of phase
   9), as #102's `2f60687` does without CYTools:
@@ -1481,8 +1484,13 @@ After phase 8e:
 - [ ] **A tree with several values per node**, for n-folds, so that their components share
   the exponentials as the curves do; today an n-fold goes curve by curve unless a depth is
   asked for.
-- [ ] **The depth of the tree** was chosen on this 4-core machine; check it on a larger one
-  (a third row helps on one thread at $h^{1,1} = 10$).
+- [x] **The depth of the tree**, checked on the Zen 5 of the measurement session below: the
+  default stays. A third row, forced, is 2–8% faster on one thread (`h11_10` at 20: 14.61 →
+  13.41 s) and up to 5% on two, a wash on four, and up to 6% slower on 16, while raising
+  the cap to three or four rows changes little, since `AUTO_SHARE` stops most models at
+  two; four rows are slower everywhere. Taking three rows on one or two threads was tried
+  and dropped: it raised the peak memory of one thread by 22–55% (`h11_8` at 24: 505 →
+  789 MB), the third row's nodes holding many more terms.
 - [ ] **Prune the rest of the extraction to the lightcones.** The tree drops the terms
   outside them only at its nodes' sources and at the emission: the powers of the shared rows
   and each curve's exponential along the other rows are still built up to the maximum degree.
@@ -1526,23 +1534,56 @@ After phase 8e:
 
 Other follow-ups, not from #102:
 
-- [ ] **A measurement session on a newer machine.** Everything here was measured on a 4-core
-  Haswell laptop CPU (AVX2 and FMA, no AVX-512, 256 KB of L2) in a VM. Once a newer one is at
-  hand, ideally a recent x86 with AVX-512 (Zen 4/5, Ice Lake or later) with 16 or more cores,
-  and an ARM machine (Apple M-series or Graviton) if possible, measure in one session, with
-  the C of #102 rerun there as the baseline and hardware counters next to the wall clock:
-  - SIMD modular arithmetic (the constant factors of `ALGORITHMS.md`): 50-bit primes with
-    the double-precision FMA mulmod, or 52-bit AVX-512 IFMA, against the scalar 62-bit
-    Montgomery of today, at the price of more primes. Cannot be tried here at all.
-  - Structure-of-arrays level tables (above), which only pay with a large L2.
-  - The block size of the cache-blocked products of the tree (above); the products' misses
-    should show everywhere, so that follow-up can start here.
-  - The tree's depth and the tuning constants of `extraction::Tuning` (layer thresholds,
-    chunk counts, the prefetch distance), and the scaling of the products near the root on
-    many cores.
-  Not on that list, because they barely depend on the CPU: more lanes per pass (`NL` up to
-  8, one pass instead of two), 64-bit keys, and the lane probe, all of which can be measured
-  here.
+- [x] **A measurement session on a newer machine** (2026-10-22, branch `perf-zen5`): an AMD
+  Ryzen 7 9700X (Zen 5, 8 cores and 16 threads, AVX-512 with IFMA, 1 MB of L2 per core, 32 MB
+  of L3, 30 GB), rustc 1.91.1, `perf` with hardware counters. The bench models with their
+  Mori cones as inequalities only (the Hilbert bases computed natively, since the Normaliz
+  cone data stops at degree 16–20); the CLI, best of two, outputs identical throughout.
+  - Where the time went: on one thread `h11_10` at 20 ran at IPC 2.3 (1.7 on the Haswell),
+    the exponentials of the curves 55% of the tree and its products 29%, the products at
+    about 8 ns a pair (35–55 ns on the Haswell); 26% of the samples in `field.rs`. On 16
+    threads it scaled only 2.8×: the exponentials 8×, but the products 1.5× and the
+    instanton 2×, about 4.5 threads busy on average.
+  - The products, fixed: see *Products of the tree split between the threads* above (rayon
+    ran the largest tasks one after the other; the tables of the root and its children are
+    now in parts). Then `mul_scalar` split its work by the terms of $c_0^{-1}$, a handful
+    (25 on `h11_8`, 2 on `h11_11`), so the instanton's products by it ran on a few threads;
+    now by the longer factor. And the CLI's output (1.17 M invariants, 89 MB, ~0.4 s on one
+    thread after the passes) formats each line into a buffer.
+  - SIMD modular arithmetic, with AVX-512 IFMA: not adopted, kept on the branch
+    `perf-zen5-ifma`. Built for it (`-C target-cpu=native`), primes below $2^{52}$ and
+    `LaneField` computing its lanes at once in a 256-bit vector, four IFMA multiply-adds a
+    product. Masked loads and stores made it twice as slow at first (they cannot forward:
+    1.2e9 failed store-to-load forwards on `h11_11` at 22), plain 128- and 64-bit ones fixed
+    that. At the same number of lanes a pass is 10–35% faster, and four lanes cost what two
+    do (scalar: about +20% a lane); three cost more than four. But the primes are ten bits
+    shorter, so a run needs more lanes and keeps wider values: end to end 13–16% faster on
+    one thread where the scalar build takes three lanes (`h11_8` at 24 and 26), and up to
+    18% slower with up to 56% more memory where it takes two, and on 16 threads, where the
+    run is bound by memory (`h11_10` at 20: 4.05 → 4.74 s, 1.3 → 2.0 GB). The 50-bit FMA
+    variant would lose the same bits and was not tried. A dispatch at run time would also
+    compile the pipeline twice.
+  - Structure-of-arrays level tables: no gain (above). The prefetch distance of the scatter
+    and the products: 1 to 16 within noise, 4 kept. The tree's depth: the default stays
+    (above). The parts of the tables in the split products (1–16 per thread) and the
+    buffers (128–2048 terms): within 10%, one part per thread kept.
+  - The C of #102 as the baseline: not rerun. On the bench models its saturation check of
+    the cone data fails and it falls back to enumerating the semigroup of the generators,
+    about $10^8$ points at these degrees, which ran this machine out of memory once; it has
+    no tree, so the comparison of phase 8d no longer says much anyway.
+  - Result, before (`ee45d46`) and after the session, 1 / 8 / 16 threads:
+
+    | Case | Before | After |
+    |------|--------|-------|
+    | `h11_8` at 24 | 6.30 / 2.47 / 2.22 s | 6.22 / 1.94 / 1.74 s |
+    | `h11_10` at 20 | 15.00 / 6.16 / 5.50 s | 14.90 / 4.48 / 3.97 s |
+    | `h11_11` at 24 | 9.02 / 3.90 / 3.55 s | 8.80 / 3.11 / 2.80 s |
+
+    Peak memory within 5% either way. What is left on 16 threads is mostly the products
+    into the large tables (the split pieces cost about twice a direct product per pair, the
+    inserts missing the caches), then the serial tail of the CRT lift, the sort and the
+    output (~0.5 s on `h11_10` at 20), and the candidates and the lane probe.
+  Not measured: an ARM machine.
 
 - [ ] **Certifying vex phases** (`Error::CertifyStrata` today, as in the C): the stratum
   terms need bounds of their own in the majorant run.

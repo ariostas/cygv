@@ -375,7 +375,8 @@ indices differently (the first index is a reference surface in the n-fold case).
   parallel code) checks that over repeated runs, and `reference_tests::test_threads` forces
   trees of several depths and both modes of the curve-by-curve extraction on a few threads in
   every test run. The tuning constants were measured on a
-  4-core machine with hyperthreading and are provisional.
+  4-core machine with hyperthreading, and checked on a 16-thread Zen 5 (`PLAN.md` 5.3, the
+  measurement session).
 
 ### Command line interface
 
