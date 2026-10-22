@@ -421,17 +421,30 @@ impl Input {
             return writeln!(writer, "results: []");
         }
         writeln!(writer, "results:")?;
+        // Each line is formatted into a buffer, the integers by hand, and written in one call:
+        // through `write!` the formatting took longer than the rest of a large run's tail.
+        let mut line = Vec::new();
         for e in &invariants.entries {
-            write!(writer, "  - {{curve_class: ")?;
-            write_int_seq(writer, e.curve.iter())?;
-            write!(writer, ", degree: {}", e.degree)?;
+            line.clear();
+            line.extend_from_slice(b"  - {curve_class: [");
+            for (i, &c) in e.curve.iter().enumerate() {
+                if i > 0 {
+                    line.extend_from_slice(b", ");
+                }
+                push_int(&mut line, c as i64);
+            }
+            line.extend_from_slice(b"], degree: ");
+            push_int(&mut line, e.degree as i64);
             if let Some(surface) = e.surface {
-                write!(writer, ", surface: {surface}")?;
+                line.extend_from_slice(b", surface: ");
+                push_int(&mut line, surface as i64);
             }
             match kind {
-                InvariantKind::GV => writeln!(writer, ", {key}: {}}}", e.value)?,
-                InvariantKind::GW => writeln!(writer, ", {key}: '{}'}}", e.value)?,
+                InvariantKind::GV => write!(line, ", {key}: {}}}", e.value)?,
+                InvariantKind::GW => write!(line, ", {key}: '{}'}}", e.value)?,
             }
+            line.push(b'\n');
+            writer.write_all(&line)?;
         }
         Ok(())
     }
@@ -764,6 +777,25 @@ fn as_indices(indices: &[i32]) -> Result<(usize, usize, usize), IoError> {
         indices[1] as usize,
         indices[2] as usize,
     ))
+}
+
+/// Appends the decimal digits of `x` to `buf`.
+fn push_int(buf: &mut Vec<u8>, x: i64) {
+    if x < 0 {
+        buf.push(b'-');
+    }
+    let mut n = x.unsigned_abs();
+    let mut digits = [0u8; 20];
+    let mut i = digits.len();
+    loop {
+        i -= 1;
+        digits[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    buf.extend_from_slice(&digits[i..]);
 }
 
 /// Write a sequence of integers as a YAML flow sequence.
