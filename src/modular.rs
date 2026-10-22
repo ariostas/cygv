@@ -597,8 +597,8 @@ pub struct CurveInvariants<T = Integer> {
 }
 
 /// Computes the GV invariants of the curve classes of degree at most `max_deg` that the
-/// candidates of `source` give, in increasing order of degree and then key, leaving out those
-/// where all of them vanish.
+/// candidates of `source` give, in increasing order of degree and then curve class, leaving
+/// out those where all of them vanish.
 ///
 /// With `targets`, only the curve classes in their backward lightcones are computed, i.e.
 /// those that some target minus the class leaves in the Mori cone (see [`lightcone`]), and
@@ -902,7 +902,12 @@ fn run_in<W: Lift, T>(
             lift.shrink_to_fit();
         }
     }
-    gv.reverse();
+    // In the order of the output, by degree and then curve class, which the keys do not
+    // follow.
+    prep.pool.install(|| {
+        use rayon::slice::ParallelSliceMut;
+        gv.par_sort_unstable_by(|a, b| (a.degree, &a.curve).cmp(&(b.degree, &b.curve)));
+    });
     Ok(finish(gv, prep.max_deg, &in_lightcone))
 }
 

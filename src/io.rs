@@ -93,12 +93,13 @@ pub mod error;
 
 use crate::cone::CandidateCone;
 use crate::{
-    compute, Ambient, Computed, Error, Geometry, InvariantKind, Invariants, Method, MoriCone,
-    Options, Problem, Selection, Stratum,
+    compute, Ambient, Computed, Error, Geometry, Invariant, InvariantKind, Invariants, Method,
+    MoriCone, Options, Problem, Selection, Stratum,
 };
 use error::IoError;
 use malachite::Rational;
 use nalgebra::DMatrix;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::Write;
 use std::str::FromStr;
@@ -393,7 +394,7 @@ impl Input {
         }
     }
 
-    fn write<T: std::fmt::Display>(
+    fn write<T: std::fmt::Display + Sync>(
         &self,
         writer: &mut impl Write,
         invariants: &Invariants<T>,
@@ -421,16 +422,21 @@ impl Input {
             return writeln!(writer, "results: []");
         }
         writeln!(writer, "results:")?;
-        for e in &invariants.entries {
-            write!(writer, "  - {{curve_class: ")?;
-            write_int_seq(writer, e.curve.iter())?;
-            write!(writer, ", degree: {}", e.degree)?;
-            if let Some(surface) = e.surface {
-                write!(writer, ", surface: {surface}")?;
-            }
-            match kind {
-                InvariantKind::GV => writeln!(writer, ", {key}: {}}}", e.value)?,
-                InvariantKind::GW => writeln!(writer, ", {key}: '{}'}}", e.value)?,
+        // Formatted in parallel, a chunk of entries per task and a batch of chunks at a time,
+        // and written in order.
+        for batch in invariants.entries.chunks(WRITE_CHUNK * WRITE_BATCH) {
+            let texts: Vec<String> = batch
+                .par_chunks(WRITE_CHUNK)
+                .map(|chunk| {
+                    let mut text = String::new();
+                    for e in chunk {
+                        write_entry(&mut text, e, kind);
+                    }
+                    text
+                })
+                .collect();
+            for text in texts {
+                writer.write_all(text.as_bytes())?;
             }
         }
         Ok(())
@@ -767,6 +773,31 @@ fn as_indices(indices: &[i32]) -> Result<(usize, usize, usize), IoError> {
 }
 
 /// Write a sequence of integers as a YAML flow sequence.
+/// The entries of the output formatted by one task.
+const WRITE_CHUNK: usize = 1 << 12;
+
+/// The chunks of entries formatted before they are written.
+const WRITE_BATCH: usize = 64;
+
+/// Appends the line of the output of one invariant to `text`.
+fn write_entry<T: std::fmt::Display>(text: &mut String, e: &Invariant<T>, kind: InvariantKind) {
+    use std::fmt::Write;
+    let key = kind.as_str();
+    // Writing to a string does not fail.
+    let _ = write!(text, "  - {{curve_class: [");
+    for (i, c) in e.curve.iter().enumerate() {
+        let _ = write!(text, "{}{c}", if i > 0 { ", " } else { "" });
+    }
+    let _ = write!(text, "], degree: {}", e.degree);
+    if let Some(surface) = e.surface {
+        let _ = write!(text, ", surface: {surface}");
+    }
+    let _ = match kind {
+        InvariantKind::GV => writeln!(text, ", {key}: {}}}", e.value),
+        InvariantKind::GW => writeln!(text, ", {key}: '{}'}}", e.value),
+    };
+}
+
 fn write_int_seq<'a>(
     writer: &mut impl Write,
     values: impl Iterator<Item = &'a i32>,
@@ -814,7 +845,7 @@ fn quote_string(data: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Invariant, Report};
+    use crate::Report;
     use malachite::Integer;
     use nalgebra::dmatrix;
 
