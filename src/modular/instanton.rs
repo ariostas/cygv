@@ -115,6 +115,9 @@ fn par_accumulate<K: Key, E: Copy + Default + PartialEq + Send + Sync>(
 
 /// Adds $a \cdot b$, truncated at `max_deg`, to `acc`, where `a` has one value per term and
 /// `b` as many as `acc`.
+///
+/// The work is split by the terms of the longer factor: $a$ is mostly $c_0^{-1}$, whose
+/// terms are those of $K_\emptyset$, often only a few, which would leave the threads idle.
 fn mul_scalar_into<R: Ring, K: Key>(
     ring: &R,
     a: &SparsePoly<K, R::Elem>,
@@ -123,6 +126,28 @@ fn mul_scalar_into<R: Ring, K: Key>(
     acc: &ShardedMap<K, R::Elem>,
 ) {
     debug_assert_eq!(a.width(), 1);
+    if a.len_upto(max_deg) < b.len_upto(max_deg) {
+        let inner = |y: usize| a.len_upto(max_deg - b.degs()[y]);
+        par_accumulate(
+            acc,
+            b.width(),
+            b.len_upto(max_deg),
+            inner,
+            |y, local| {
+                let (ky, dy, vy) = (b.keys()[y], b.degs()[y], b.values(y));
+                for x in 0..inner(y) {
+                    let ax = a.values(x)[0];
+                    let out = local.get_or_insert(a.keys()[x] + ky, a.degs()[x] + dy);
+                    for (o, &v) in out.iter_mut().zip(vy) {
+                        ring.fma(o, ax, v);
+                    }
+                }
+            },
+            |out, v| add_into(ring, out, v),
+            R::EXACT,
+        );
+        return;
+    }
     let inner = |x: usize| b.len_upto(max_deg - a.degs()[x]);
     par_accumulate(
         acc,
