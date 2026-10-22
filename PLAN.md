@@ -1451,11 +1451,33 @@ which is the extraction):
 
 After phase 8e:
 
+- [x] **Products of the tree split between the threads** (2026-10-22, on the Zen 5 machine of
+  the measurement session below; the cache blocking itself is left open). The products into
+  the tables near the root were one task per table, and those into one table are up to a
+  third of the pairs of a layer (`h11_10` at 20: 21–37%). Two changes:
+  - The lists of tasks sorted largest first (the products, the powers, the sums up the tree,
+    the level-synchronous scatters of the curve-by-curve extraction) go through rayon with
+    `with_max_len(1)`. Rayon cuts a `Vec` into about twice as many runs as threads and runs
+    each in order, so the first run took the largest tasks one after the other: on 16 threads
+    only about three were busy in the products. That alone took them from 2.18 to 1.35 s.
+  - The tables of the root and its children are in one part per thread (`Tab`, by
+    `part_of`, as the sinks are), and a product into one of them goes in pieces of its
+    sources (`PIECES_PER_THREAD`, at least `PIECE_MIN_PAIRS` pairs), which the threads add
+    to the parts through buffers as `sink_push` does; the sinks take their products in pieces
+    too. Only for an exact ring, as the sinks: the certifier keeps one part. 1.35 → 0.97 s.
+    The pieces cost about twice the time per pair of a direct product (they buffer every
+    pair), and neither the number of parts (1, 2, 4 or 16 per thread) nor the size of the
+    buffers (128 to 2048 terms) changed that.
+
+  `h11_10` at 20 on 16 threads: the products 2.18 → 0.97 s, the pass 4.55 → 3.3 s. End to end
+  (CLI, identical outputs, best of the runs): `h11_8` at 24 2.20 → 1.82 s, at 26 5.24 →
+  4.33 s; `h11_10` at 20 5.35 → 4.17 s; `h11_11` at 22 1.37 → 1.20 s, at 24 3.49 → 3.02 s;
+  13–22% on 8 threads too; one thread unchanged; peak memory within 5%.
 - [ ] **Cache-blocked products of the tree.** The products into the tables near the root run
-  at 35–55 ns a pair, out of cache, and those into one table are one task. Partitioning each
-  product's pairs by the top bits of their hashes (the bucket ranges of the target table)
-  before adding them would keep the target in cache, and would let the partitions of one
-  table run in parallel. The largest remaining share of the extraction on `h11_10`.
+  out of cache (a table of the root's children at degree 20 on `h11_10` is ~50 MB, above a
+  32 MB L3). Partitioning each product's pairs by the top bits of their hashes before adding
+  them would keep the target in cache; the pieces above buffer by part already, but each part
+  is still a table of its own size.
 - [ ] **A tree with several values per node**, for n-folds, so that their components share
   the exponentials as the curves do; today an n-fold goes curve by curve unless a depth is
   asked for.

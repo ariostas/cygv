@@ -39,11 +39,14 @@
 //!
 //! Each kind of work runs in parallel: the curves of a layer, as by [`extract`]; the sums by
 //! parent; the subtractions by table; and the products by target table, each writing one table
-//! of one node. Unless the ring is exact, every sum is taken in an order that does not depend
-//! on the threads: the curves of a layer are sorted, their terms kept until those of a group of
-//! them are all built and then added in that order (a group keeps about a million terms), the
-//! subtractions buffered a batch of pieces of the tables at a time and taken in their order,
-//! and there are no sinks.
+//! of one node. The tables of the root and its children, the largest, are split by hash into
+//! one part per thread, and the products into them go in pieces of their sources, which the
+//! threads add to the parts through buffers, as they fill the sinks. Unless the ring is exact,
+//! every sum is taken in an order that does not depend on the threads: the curves of a layer
+//! are sorted, their terms kept until those of a group of them are all built and then added in
+//! that order (a group keeps about a million terms), the subtractions buffered a batch of
+//! pieces of the tables at a time and taken in their order, and there are no sinks, nor tables
+//! in parts.
 //!
 //! A series with several values per term (an n-fold) is extracted one component at a time,
 //! since the components do not mix.
@@ -88,6 +91,11 @@ type NodeTerms<W, E> = (usize, u32, Vec<(W, E)>);
 /// among the [`NodeTerms`], and the range of the terms of the power.
 type Task = ((usize, u32), usize, usize, usize);
 
+/// The products into one table that one thread computes: their cost, the products, and for a
+/// table in parts, which of them, and which range of the terms of its source; all of them
+/// otherwise.
+type Item<'a> = (usize, &'a [Task], Option<(usize, Range<usize>)>);
+
 /// A node of the tree: the curves with a prefix $(m_1, \dots, m_j)$ of the exponents of the
 /// rows of the tree, with the terms known so far in a table per degree.
 struct Node<W, E> {
@@ -95,7 +103,77 @@ struct Node<W, E> {
     depth: usize,
     /// The last entry of the prefix, the exponent of the power of its row.
     m: i64,
-    tabs: Vec<Mutex<CompactTable<W, E>>>,
+    tabs: Vec<Tab<W, E>>,
+}
+
+/// The table of a node for one degree, in parts by hash ([`part_of`]): a single one for most
+/// nodes, and several for the root and its children, whose tables are the largest, so that a
+/// product into one of them can be split between the threads, which fill its parts through
+/// buffers as they fill a [`Sink`].
+struct Tab<W, E>(Sink<W, E>);
+
+impl<W: LevelWord, E: Copy + Default> Tab<W, E> {
+    fn new(marker: W, parts: usize) -> Self {
+        Self(
+            (0..parts)
+                .map(|_| Mutex::new(CompactTable::new(marker)))
+                .collect(),
+        )
+    }
+
+    /// Takes the locks of all of its parts.
+    fn lock(&self) -> TabGuard<'_, W, E> {
+        TabGuard(self.0.iter().map(|t| t.lock().unwrap()).collect())
+    }
+
+    fn is_empty_mut(&mut self) -> bool {
+        self.0.iter_mut().all(|t| t.get_mut().unwrap().is_empty())
+    }
+
+    /// Adds the term $(h, v)$.
+    fn add_mut<R: Ring<Elem = E>>(&mut self, ring: &R, h: W, v: E) {
+        let n = self.0.len();
+        let t = self.0[part_of(h, n)].get_mut().unwrap().get_or_insert(h);
+        *t = ring.add(*t, v);
+    }
+
+    fn release(&mut self) {
+        for t in self.0.iter_mut() {
+            t.get_mut().unwrap().release();
+        }
+    }
+}
+
+/// A [`Tab`] with the locks of all of its parts.
+struct TabGuard<'a, W, E>(Vec<MutexGuard<'a, CompactTable<W, E>>>);
+
+impl<W: LevelWord, E: Copy + Default> TabGuard<'_, W, E> {
+    fn is_empty(&self) -> bool {
+        self.0.iter().all(|t| t.is_empty())
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (W, E)> + '_ {
+        self.0.iter().flat_map(|t| t.iter())
+    }
+
+    fn release(&mut self) {
+        for t in self.0.iter_mut() {
+            t.release();
+        }
+    }
+
+    /// Adds the terms of `sources`.
+    fn add_all<R: Ring<Elem = E>>(&mut self, ring: &R, sources: impl IntoIterator<Item = (W, E)>) {
+        let n = self.0.len();
+        if n == 1 {
+            add_all(ring, sources, &mut self.0[0]);
+            return;
+        }
+        for (h, v) in sources {
+            let t = self.0[part_of(h, n)].get_or_insert(h);
+            *t = ring.add(*t, v);
+        }
+    }
 }
 
 /// A curve of a layer.
@@ -196,29 +274,36 @@ fn node_of<W: LevelWord, E: Copy + Default>(
     index: &mut HashMap<Vec<i64>, usize>,
     marker: W,
     max_deg: u32,
+    parts: usize,
 ) -> usize {
     if let Some(&n) = index.get(prefix) {
         return n;
     }
-    let parent = node_of(&prefix[..prefix.len() - 1], nodes, index, marker, max_deg);
+    let parent = node_of(
+        &prefix[..prefix.len() - 1],
+        nodes,
+        index,
+        marker,
+        max_deg,
+        parts,
+    );
     nodes.push(Node {
         parent,
         depth: prefix.len(),
         m: prefix[prefix.len() - 1],
-        tabs: new_tabs(marker, max_deg),
+        tabs: new_tabs(marker, max_deg, if prefix.len() <= 1 { parts } else { 1 }),
     });
     index.insert(prefix.to_vec(), nodes.len() - 1);
     nodes.len() - 1
 }
 
-/// The tables of a node, one per degree up to `max_deg`, empty.
+/// The tables of a node, one per degree up to `max_deg`, empty, in `parts` parts.
 fn new_tabs<W: LevelWord, E: Copy + Default>(
     marker: W,
     max_deg: u32,
-) -> Vec<Mutex<CompactTable<W, E>>> {
-    (0..=max_deg)
-        .map(|_| Mutex::new(CompactTable::new(marker)))
-        .collect()
+    parts: usize,
+) -> Vec<Tab<W, E>> {
+    (0..=max_deg).map(|_| Tab::new(marker, parts)).collect()
 }
 
 /// Adds the terms of `sources` to `target`.
@@ -528,11 +613,18 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             })
         })
         .collect();
+    // The tables of the root and its children are in parts when the threads can share the
+    // products into them, which needs an exact ring, whose sums may be taken in any order.
+    let wide = if R::EXACT && threads > 1 {
+        TAB_PARTS * threads
+    } else {
+        1
+    };
     let mut nodes: Vec<Node<W, R::Elem>> = vec![Node {
         parent: usize::MAX,
         depth: 0,
         m: 0,
-        tabs: new_tabs(marker, max_deg),
+        tabs: new_tabs(marker, max_deg, wide),
     }];
     let mut index: HashMap<Vec<i64>, usize> = HashMap::from([(Vec::new(), 0)]);
     // The nodes whose tables of each degree have terms, possibly with repetitions.
@@ -610,12 +702,13 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
                     .chunk_by(|a, b| a.0 == b.0)
                     .collect::<Vec<_>>()
                     .into_par_iter()
+                    .with_max_len(1)
                     .filter_map(|g| {
                         let p = g[0].0;
-                        let mut t = nodes[p].tabs[xi].lock().unwrap();
+                        let mut t = nodes[p].tabs[xi].lock();
                         let was_empty = t.is_empty();
                         for &(_, n) in g {
-                            add_all(ring, nodes[n].tabs[xi].lock().unwrap().iter(), &mut t);
+                            t.add_all(ring, nodes[n].tabs[xi].lock().iter());
                         }
                         (was_empty && !t.is_empty()).then_some(p)
                     })
@@ -633,7 +726,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             let sink = (x >= root_from).then(|| &sinks[(x - root_from) as usize]);
             let tables: Vec<MutexGuard<CompactTable<W, R::Elem>>> = emitted
                 .iter()
-                .map(|&n| &nodes[n].tabs[xi])
+                .flat_map(|&n| nodes[n].tabs[xi].0.iter())
                 .chain(sink.into_iter().flatten())
                 .map(|t| t.lock().unwrap())
                 .collect();
@@ -688,7 +781,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             }
         }
         for x in d..top {
-            nodes[0].tabs[x as usize].get_mut().unwrap().release();
+            nodes[0].tabs[x as usize].release();
             if x >= root_from {
                 for part in &sinks[(x - root_from) as usize] {
                     part.lock().unwrap().release();
@@ -735,7 +828,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
                 .iter()
                 .map(|&r| super::super::dot(&c, &rows[r]))
                 .collect();
-            t.leaf = node_of(&prefix, &mut nodes, &mut index, marker, max_deg);
+            t.leaf = node_of(&prefix, &mut nodes, &mut index, marker, max_deg, wide);
         }
 
         // Build the exponentials of the curves along the other rows, as far as the window.
@@ -761,11 +854,11 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
         for t in &layer {
             let mut n = t.leaf;
             while n != 0 {
-                let tab = nodes[n].tabs[t.deg as usize].get_mut().unwrap();
-                if tab.is_empty() {
+                let tab = &mut nodes[n].tabs[t.deg as usize];
+                if tab.is_empty_mut() {
                     active[t.deg as usize].push(n);
                 }
-                add_all(ring, [(t.hash, t.val)], tab);
+                tab.add_mut(ring, t.hash, t.val);
                 n = nodes[n].parent;
             }
         }
@@ -780,7 +873,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             list.dedup();
             let (nodes, keys) = (&nodes, &keys);
             srcs.par_extend(list.into_par_iter().filter_map(|n| {
-                let mut t = nodes[n].tabs[x as usize].lock().unwrap();
+                let mut t = nodes[n].tabs[x as usize].lock();
                 // Every term of a power but the first has degree at least delta.
                 if x + delta > max_deg {
                     t.release();
@@ -808,6 +901,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
         need.dedup_by_key(|&mut (j, m, _)| (j, m));
         let computed: Vec<(PowerKey, Power<W, R::Elem>)> = need
             .into_par_iter()
+            .with_max_len(1)
             .map(|(j, m, top)| ((j, m), power(j, m, top)))
             .collect();
         powers.extend(computed);
@@ -834,36 +928,74 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             })
             .collect();
         by_target.sort_by_key(|&(cost, _)| core::cmp::Reverse(cost));
+        // A product into a table in parts goes in pieces of its sources, which the threads
+        // add to the parts through buffers; one into a table of one part is a single task.
         let filled: Vec<(usize, u32)> = {
-            let (nodes, powers, srcs, sinks) = (&nodes, &powers, &srcs, &sinks);
-            by_target
+            let (nodes, powers, srcs, sinks, workers) = (&nodes, &powers, &srcs, &sinks, &workers);
+            let parts_of = |p: usize, y: u32| -> &Sink<W, R::Elem> {
+                if y >= root_from {
+                    &sinks[(y - root_from) as usize]
+                } else {
+                    &nodes[p].tabs[y as usize].0
+                }
+            };
+            let total: usize = by_target.iter().map(|t| t.0).sum();
+            let piece = (total / (PIECES_PER_THREAD * threads)).max(PIECE_MIN_PAIRS);
+            let mut items: Vec<Item<'_>> = Vec::new();
+            for &(cost, g) in &by_target {
+                let (p, y) = g[0].0;
+                if parts_of(p, y).len() == 1 {
+                    items.push((cost, g, None));
+                    continue;
+                }
+                for (k, &(_, si, j0, j1)) in g.iter().enumerate() {
+                    let (n, w) = (srcs[si].2.len(), (j1 - j0).max(1));
+                    let per = (piece / w).max(1);
+                    let mut a = 0;
+                    while a < n {
+                        let b = (a + per).min(n);
+                        items.push((w * (b - a), g, Some((k, a..b))));
+                        a = b;
+                    }
+                }
+            }
+            items.sort_by_key(|&(cost, ..)| core::cmp::Reverse(cost));
+            // One item per task: left to itself, rayon would run the list in about twice as many
+            // runs as there are threads, each one in order, and the first run would take the
+            // largest items one after the other.
+            items
                 .into_par_iter()
-                .filter_map(|(_, g)| {
+                .with_max_len(1)
+                .filter_map(|(_, g, piece)| {
                     let (p, y) = g[0].0;
-                    if y >= root_from {
-                        let sink = &sinks[(y - root_from) as usize];
-                        let mut bufs = vec![Vec::new(); sink.len()];
+                    let parts = parts_of(p, y);
+                    let Some((k, range)) = piece else {
+                        let mut t = parts[0].lock().unwrap();
+                        let was_empty = t.is_empty();
                         for &(_, si, j0, j1) in g {
                             let (n, _, s) = &srcs[si];
                             let pw = &powers[&(nodes[*n].depth - 1, nodes[*n].m)];
-                            let (hs, vs) = (&pw.hashes[j0..j1], &pw.vals[j0..j1]);
-                            for &(hb, fb) in s {
-                                for (&hu, &lu) in hs.iter().zip(vs) {
-                                    sink_push(ring, sink, &mut bufs, hb.wadd(hu), ring.mul(lu, fb));
-                                }
-                            }
+                            product(ring, s, &pw.hashes[j0..j1], &pw.vals[j0..j1], &mut t);
                         }
-                        sink_flush(ring, sink, &mut bufs);
-                        return None;
+                        return (y < root_from && was_empty && !t.is_empty()).then_some((p, y));
+                    };
+                    let (_, si, j0, j1) = g[k];
+                    let (n, _, s) = &srcs[si];
+                    let pw = &powers[&(nodes[*n].depth - 1, nodes[*n].m)];
+                    let (hs, vs) = (&pw.hashes[j0..j1], &pw.vals[j0..j1]);
+                    let w = rayon::current_thread_index().unwrap_or(0);
+                    let mut worker = workers[w].lock().unwrap();
+                    let bufs = &mut worker.bufs;
+                    if bufs.len() < parts.len() {
+                        bufs.resize_with(parts.len(), Vec::new);
                     }
-                    let mut t = nodes[p].tabs[y as usize].lock().unwrap();
-                    let was_empty = t.is_empty();
-                    for &(_, si, j0, j1) in g {
-                        let (n, _, s) = &srcs[si];
-                        let pw = &powers[&(nodes[*n].depth - 1, nodes[*n].m)];
-                        product(ring, s, &pw.hashes[j0..j1], &pw.vals[j0..j1], &mut t);
+                    for &(hb, fb) in &s[range] {
+                        for (&hu, &lu) in hs.iter().zip(vs) {
+                            sink_push(ring, parts, bufs, hb.wadd(hu), ring.mul(lu, fb));
+                        }
                     }
-                    (was_empty && !t.is_empty()).then_some((p, y))
+                    sink_flush(ring, parts, bufs);
+                    (y < root_from).then_some((p, y))
                 })
                 .collect()
         };
@@ -881,6 +1013,16 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
         .collect();
     Ok(SparsePoly::merge(1, parts))
 }
+
+/// The parts of the tables of the root and its children, per thread.
+const TAB_PARTS: usize = 1;
+
+/// About how many pieces per thread the products into tables in parts are split into, at
+/// least [`PIECE_MIN_PAIRS`] pairs each.
+const PIECES_PER_THREAD: usize = 8;
+
+/// The fewest pairs of a piece of a product into a table in parts.
+const PIECE_MIN_PAIRS: usize = 1 << 16;
 
 /// The most entries of a table in a piece of what the root and its children emit, when the
 /// terms are subtracted in order.
@@ -1112,10 +1254,10 @@ fn add_terms<R: Ring, W: LevelWord>(
             sink_add(ring, sink, run.iter().map(|&(h, _, f)| (h, f)), bufs);
             continue;
         }
-        let mut t = nodes[n].tabs[x as usize].lock().unwrap();
+        let mut t = nodes[n].tabs[x as usize].lock();
         if t.is_empty() {
             filled.push((n, x));
         }
-        add_all(ring, run.iter().map(|&(h, _, f)| (h, f)), &mut t);
+        t.add_all(ring, run.iter().map(|&(h, _, f)| (h, f)));
     }
 }

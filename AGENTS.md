@@ -348,7 +348,11 @@ indices differently (the first index is a reference surface in the n-fold case).
   to it in batches (a chunk's own map, or per-shard buffers of `FLUSH` terms), so each lock is
   taken rarely. The extraction's tree builds the curves' exponentials in parallel by curve,
   sums up the tree by parent, subtracts by table and multiplies by target table (its products
-  into one table are one task, and those near the root scale badly). The curve-by-curve
+  into one table are one task, but for the tables of the root and its children, which are in
+  one part per thread and take the products in pieces of their sources through buffers).
+  Lists of tasks sorted largest first go through rayon with `with_max_len(1)`: left to itself
+  it runs such a list in about twice as many runs as threads, each in order, and the first run
+  takes the largest tasks one after the other. The curve-by-curve
   extraction applies the curves of a layer (degrees $[d, d + \delta)$, $\delta$
   the lowest degree of $\alpha$) in parallel, each worker indexed by
   `rayon::current_thread_index` with its own level tables; layers of few large curves (the first

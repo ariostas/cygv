@@ -716,8 +716,10 @@ impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
                     tasks.push((c.sources.len() * (j1 - j0), i, q));
                 }
             }
+            // Largest first, and one task each, since rayon would otherwise run them in a few
+            // runs in order, the first of which would take the largest one after the other.
             tasks.sort_unstable_by(|a, b| b.cmp(a));
-            tasks.par_iter().for_each(|&(_, i, q)| {
+            tasks.par_iter().with_max_len(1).for_each(|&(_, i, q)| {
                 let c = &curves[i];
                 let g = c.l.groups[q].0;
                 let mut target = c.levels[(e + g) as usize].lock().unwrap();
