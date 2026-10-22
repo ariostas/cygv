@@ -3,12 +3,14 @@
 //!
 //! The majorant run computes the pipeline over nonnegative reals, with subtraction replaced
 //! by addition and negation by the identity, so that every value bounds the absolute value of
-//! the exact one. [`BoundRing`] does that arithmetic on [`Bound`]s: an `f64` mantissa with a
-//! separate exponent, since the factorial tables leave the range of `f64` from $171!$ on (the
-//! quintic at degree 35), each operation rounded to nearest and then moved up by one ulp, which
-//! keeps it an upper bound. That costs one ulp per operation, far below the slack of the
-//! bounds themselves; malachite's `Float` rounds up exactly, but is not `Copy` and is about
-//! nine times slower.
+//! the exact one. [`BoundRing`] does that arithmetic on [`Bound`]s: an `f32` mantissa with a
+//! separate `i32` exponent, since the factorial tables leave the range of floating point
+//! from $35!$ on, each operation rounded to nearest and then moved up by one ulp, which keeps it
+//! an upper bound. That costs one ulp, $2^{-23}$, per operation: a sum of a million terms is
+//! at most a third of a bit above its exact value, far below the slack of the bounds
+//! themselves, while a bound takes 8 bytes, which halves the memory of the majorant pass's
+//! tables. (An `f64` mantissa with an `i64` exponent took 16 bytes; malachite's `Float` rounds
+//! up exactly, but is not `Copy` and is about nine times slower.)
 
 use super::field::Ring;
 use malachite::base::num::logic::traits::SignificantBits;
@@ -20,24 +22,24 @@ use malachite::{Integer, Rational};
 /// most millions of bits.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Bound {
-    m: f64,
-    e: i64,
+    m: f32,
+    e: i32,
 }
 
 impl Bound {
     /// $m \, 2^e$ for a positive normal `m`, normalized, which is exact: it only moves the
     /// exponent of `m` into `e`.
     #[inline]
-    fn new(m: f64, e: i64) -> Self {
-        const EXP: u64 = 0x7ff << 52;
+    fn new(m: f32, e: i32) -> Self {
+        const EXP: u32 = 0xff << 23;
         let bits = m.to_bits();
         Self {
-            m: f64::from_bits((bits & !EXP) | (1023 << 52)),
-            e: e + ((bits & EXP) >> 52) as i64 - 1023,
+            m: f32::from_bits((bits & !EXP) | (127 << 23)),
+            e: e + ((bits & EXP) >> 23) as i32 - 127,
         }
     }
 
-    /// A bound on the absolute value of `n`: its leading 53 bits, moved up by one ulp if any
+    /// A bound on the absolute value of `n`: its leading 24 bits, moved up by one ulp if any
     /// bit below them is set.
     pub fn from_integer(n: &Integer) -> Self {
         let a = n.unsigned_abs_ref();
@@ -45,14 +47,14 @@ impl Bound {
         if bits == 0 {
             return Self::default();
         }
-        let shift = bits.saturating_sub(53);
-        let top = u64::try_from(&(a >> shift)).expect("53 bits fit");
+        let shift = bits.saturating_sub(24);
+        let top = u32::try_from(&(a >> shift)).expect("24 bits fit");
         let m = if a.trailing_zeros().is_some_and(|z| z < shift) {
-            (top as f64).next_up()
+            (top as f32).next_up()
         } else {
-            top as f64
+            top as f32
         };
-        Self::new(m, shift as i64)
+        Self::new(m, i32::try_from(shift).expect("the exponent fits"))
     }
 
     /// The base-2 logarithm, approximately, or $-\infty$ for zero.
@@ -60,13 +62,13 @@ impl Bound {
         if self.m == 0.0 {
             f64::NEG_INFINITY
         } else {
-            self.m.log2() + self.e as f64
+            f64::from(self.m).log2() + f64::from(self.e)
         }
     }
 
     /// The exact value.
     pub fn to_rational(self) -> Rational {
-        Rational::try_from(self.m).expect("the mantissa is finite") << self.e
+        Rational::try_from(f64::from(self.m)).expect("the mantissa is finite") << self.e
     }
 }
 
@@ -94,8 +96,8 @@ impl Ring for BoundRing {
         let a = v.unsigned_abs();
         match a {
             0 => Bound::default(),
-            1..0x20_0000_0000_0000 => Bound::new(a as f64, 0),
-            _ => Bound::new((a as f64).next_up(), 0),
+            1..0x100_0000 => Bound::new(a as f32, 0),
+            _ => Bound::new((a as f32).next_up(), 0),
         }
     }
 
@@ -109,12 +111,12 @@ impl Ring for BoundRing {
         }
         let (a, b) = if a.e >= b.e { (a, b) } else { (b, a) };
         let d = a.e - b.e;
-        if d > 60 {
-            // b < 2^(b.e + 1) <= 2^(a.e - 60), below the ulp 2^(a.e - 52) of a.
+        if d > 30 {
+            // b < 2^(b.e + 1) <= 2^(a.e - 30), below the ulp 2^(a.e - 23) of a.
             Bound::new(a.m.next_up(), a.e)
         } else {
-            // Exact: b.m times a power of two no smaller than 2^-60.
-            let b = b.m * f64::from_bits((1023 - d as u64) << 52);
+            // Exact: b.m times a power of two no smaller than 2^-30.
+            let b = b.m * f32::from_bits((127 - d as u32) << 23);
             Bound::new((a.m + b).next_up(), a.e)
         }
     }
@@ -164,11 +166,11 @@ mod tests {
     use crate::modular::period::Tables;
     use crate::modular::TestRng;
 
-    /// Checks that `got` bounds `exact` from above, within `ulps` units of $2^{-52}$.
+    /// Checks that `got` bounds `exact` from above, within `ulps` units of $2^{-23}$.
     fn check(got: Bound, exact: &Rational, ulps: u32, what: &str) {
         let g = got.to_rational();
         assert!(g >= *exact, "{what}: {got:?} is below the exact value");
-        let slack = Rational::from(1) + Rational::from(ulps) / Rational::from(1u64 << 52);
+        let slack = Rational::from(1) + Rational::from(ulps) / Rational::from(1u64 << 23);
         assert!(g <= exact * slack, "{what}: {got:?} is too far above it");
         if got.m != 0.0 {
             assert!(
@@ -182,8 +184,8 @@ mod tests {
         if rng.range(0, 9) == 0 {
             return Bound::default();
         }
-        let m = 1.0 + rng.next_u64() as f64 / u64::MAX as f64 * 0.999;
-        Bound::new(m, rng.range(-80, 80))
+        let m = 1.0 + (rng.next_u64() >> 40) as f32 / (1u32 << 24) as f32 * 0.999;
+        Bound::new(m, rng.range(-80, 80) as i32)
     }
 
     #[test]
@@ -226,7 +228,18 @@ mod tests {
         let r = BoundRing;
         assert_eq!(r.int(0), Bound::default());
         assert_eq!(r.one(), r.int(1));
-        for v in [1, -1, 6, -1000, 1 << 53, (1 << 53) + 1, i64::MAX, i64::MIN] {
+        for v in [
+            1,
+            -1,
+            6,
+            -1000,
+            1 << 24,
+            (1 << 24) + 1,
+            1 << 53,
+            (1 << 53) + 1,
+            i64::MAX,
+            i64::MIN,
+        ] {
             let exact = Rational::from(v.unsigned_abs());
             check(r.int(v), &exact, 2, &format!("int {v}"));
         }
@@ -238,6 +251,9 @@ mod tests {
         for n in [
             Integer::from(0),
             Integer::from(-5),
+            Integer::from((1u64 << 24) - 1),
+            Integer::from(1u64 << 24),
+            Integer::from((1u64 << 24) + 1),
             Integer::from((1u64 << 53) - 1),
             Integer::from(1u64 << 53),
             Integer::from((1u64 << 53) + 1),

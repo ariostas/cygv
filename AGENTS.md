@@ -140,8 +140,8 @@ tuned. It computes modulo word-sized primes and lifts the results with the CRT, 
 code with `reference`. Its primitives are `field` (Montgomery arithmetic,
 `Lanes<NL>` residues, and the `Ring` trait the stages are written against, which takes the
 primes as a context), `bound` (`BoundRing`, the other `Ring`: upward-rounded nonnegative
-bounds for the certifier of `PLAN.md` phase 8, an `f64` mantissa with an `i64` exponent moved
-up by `next_up` after each operation, subtraction being addition), `key` (curve classes packed
+bounds for the certifier of `PLAN.md` phase 8, an `f32` mantissa with an `i32` exponent, 8
+bytes, moved up by `next_up` after each operation, subtraction being addition), `key` (curve classes packed
 into keys of 128, 256 or 512 bits that add like the classes, `PackedLayout<W>` over a
 `Word`, `u128` or `Wide<N>` of `N` words, with field widths sized per run from coordinate
 bounds; `Setup` takes the narrowest word that fits, `Tuning::min_key_bits` forces a wider
@@ -198,8 +198,8 @@ on: `sinks`, which sends the terms of the degrees no power reaches beyond straig
 root, into tables split by hash that the threads fill through buffers, and `leaf_window`,
 which has the leaves take a window of degrees at a time, every curve building its
 exponential again for each later window) and `multicover` (the GV
-invariants from those, by gcd of the coordinates; exponent 3 and a division by the degree for
-threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats passes with the
+invariants from those, by gcd of the coordinates, solved in place in order of degree;
+exponent 3 and a division by the degree for threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats passes with the
 next primes until `crt::Residues` gives a stable lift (the lift from all but the last
 `check_primes` primes must agree with those), skipping a pass whose primes cannot invert a
 denominator of the strata (`Error::NotInvertible`), with `Options` for the lane count (1 to 4 primes
@@ -358,13 +358,15 @@ indices differently (the first index is a reference surface in the n-fold case).
   depend on their order, and for a `Ring` that is not `EXACT` the stages fix it: the
   instanton products use chunks that do not depend on the threads and merge them in order
   (`ShardedMap::add_in_order`), the exponentials sort their sources by hash, the tree sorts
-  each layer by key before numbering its nodes, adds the curves' terms in their order and
-  folds the subtractions in the order of their tables (each depth groups the bounds' sums
-  differently, so the bounds depend on it), and the curve-by-curve
+  each layer by key before numbering its nodes, adds the curves' terms in their order (kept
+  a group of about a million terms at a time, `KEEP_TERMS`) and folds the subtractions in the
+  order of pieces of their tables, a batch at a time (`EMIT_PIECE`, `EMIT_BATCH`; each depth
+  groups the bounds' sums differently, so the bounds depend on it), and the curve-by-curve
   extraction sorts each layer and applies it in groups of curves (`GROUP_TERMS`,
   `GROUP_CURVES`), whose terms record their curve and are kept until the group is done, when
   each shard takes its terms in the order of the curves (`Shard::fold_ordered`;
-  `modular::tests::test_bounds_threads`). That costs a certified run about 10%; `tests/stress.rs` (ignored, run with
+  `modular::tests::test_bounds_threads`). That costs a certified run 3–13% of its time and
+  4–14% of its memory (measured again in `PLAN.md` phase 10, and kept); `tests/stress.rs` (ignored, run with
   `cargo test --release --test stress -- --ignored` before releases and after changes to the
   parallel code) checks that over repeated runs, and `reference_tests::test_threads` forces
   trees of several depths and both modes of the curve-by-curve extraction on a few threads in

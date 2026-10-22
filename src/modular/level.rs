@@ -19,6 +19,7 @@
 use super::key::{Key, Wide};
 use core::cmp::Reverse;
 use core::fmt::Debug;
+use core::ops::Range;
 
 /// A word that offsets are packed into: `u64`, or `u128` when the box needs more bits, or for
 /// keys wider than 128 bits, a [`Wide`] word of theirs.
@@ -850,6 +851,15 @@ impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
     pub fn iter(&self) -> impl Iterator<Item = (W, V)> + '_ {
         let marker = self.marker;
         self.entries
+            .iter()
+            .filter(|e| e.0 != W::default())
+            .map(move |&(k, v)| (k.xor(marker), v))
+    }
+
+    /// The terms of the entries in `range`, a range of `0..capacity()`, as hashes and values.
+    pub fn iter_range(&self, range: Range<usize>) -> impl Iterator<Item = (W, V)> + '_ {
+        let marker = self.marker;
+        self.entries[range]
             .iter()
             .filter(|e| e.0 != W::default())
             .map(move |&(k, v)| (k.xor(marker), v))

@@ -41,14 +41,17 @@
 //! parent; the subtractions by table; and the products by target table, each writing one table
 //! of one node. Unless the ring is exact, every sum is taken in an order that does not depend
 //! on the threads: the curves of a layer are sorted, their terms kept until those of a group of
-//! them are all built and then added in that order, the subtractions buffered until the layer's
-//! sums are done, and there are no sinks.
+//! them are all built and then added in that order (a group keeps about a million terms), the
+//! subtractions buffered a batch of pieces of the tables at a time and taken in their order,
+//! and there are no sinks.
 //!
 //! A series with several values per term (an n-fold) is extracted one component at a time,
 //! since the components do not mix.
 
 use super::*;
+use core::ops::Range;
 use std::collections::HashMap;
+use std::sync::MutexGuard;
 
 /// When [`Tuning::tree_depth`] leaves the depth open, the rows of the tree are those with at
 /// least this fraction of the terms of the row of the most terms, at most [`AUTO_MAX_DEPTH`] of
@@ -627,29 +630,62 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
                 .collect();
             emitted.sort_unstable();
             emitted.dedup();
-            let (nodes, shards, workers, keys) = (&nodes, &shards, &workers, &keys);
             let sink = (x >= root_from).then(|| &sinks[(x - root_from) as usize]);
-            let tables: Vec<&Mutex<CompactTable<W, R::Elem>>> = emitted
+            let tables: Vec<MutexGuard<CompactTable<W, R::Elem>>> = emitted
                 .iter()
                 .map(|&n| &nodes[n].tabs[xi])
                 .chain(sink.into_iter().flatten())
+                .map(|t| t.lock().unwrap())
                 .collect();
-            tables.par_iter().enumerate().for_each(|(i, tab)| {
-                let t = tab.lock().unwrap();
-                let w = rayon::current_thread_index().unwrap_or(0);
-                let mut worker = workers[w].lock().unwrap();
-                let TreeWorker { curve, out, .. } = &mut *worker;
-                let src = (!R::EXACT).then_some(i as u32);
-                for (h, f) in t.iter() {
-                    if ring.is_zero(f) {
-                        continue;
-                    }
-                    let key = keys.key(h, x);
-                    if in_lightcone(key, curve) {
-                        emit(ring, shards, out, src, key, x, &[one], f);
-                    }
+            // An exact ring subtracts the terms as its buffers fill. Otherwise they are kept
+            // until they are subtracted in order, so the tables go in pieces, a batch of them
+            // at a time, a piece taking the place of a curve.
+            let (piece, batch) = if R::EXACT {
+                (usize::MAX, usize::MAX)
+            } else {
+                (EMIT_PIECE, EMIT_BATCH)
+            };
+            let mut pieces: Vec<(usize, Range<usize>)> = Vec::new();
+            for (t, tab) in tables.iter().enumerate() {
+                let n = tab.capacity();
+                let mut a: usize = 0;
+                while a < n {
+                    let b = a.saturating_add(piece).min(n);
+                    pieces.push((t, a..b));
+                    a = b;
                 }
-            });
+            }
+            let mut at = 0;
+            while at < pieces.len() {
+                let (mut end, mut size) = (at + 1, pieces[at].1.len());
+                while end < pieces.len() && size.saturating_add(pieces[end].1.len()) <= batch {
+                    size += pieces[end].1.len();
+                    end += 1;
+                }
+                let (shards_r, workers_r, keys, tables) = (&shards, &workers, &keys, &tables);
+                pieces[at..end]
+                    .par_iter()
+                    .enumerate()
+                    .for_each(|(i, (t, range))| {
+                        let w = rayon::current_thread_index().unwrap_or(0);
+                        let mut worker = workers_r[w].lock().unwrap();
+                        let TreeWorker { curve, out, .. } = &mut *worker;
+                        let src = (!R::EXACT).then_some(i as u32);
+                        for (h, f) in tables[*t].iter_range(range.clone()) {
+                            if ring.is_zero(f) {
+                                continue;
+                            }
+                            let key = keys.key(h, x);
+                            if in_lightcone(key, curve) {
+                                emit(ring, shards_r, out, src, key, x, &[one], f);
+                            }
+                        }
+                    });
+                if !R::EXACT {
+                    fold_outs(ring, &mut workers, &mut shards);
+                }
+                at = end;
+            }
         }
         for x in d..top {
             nodes[0].tabs[x as usize].get_mut().unwrap().release();
@@ -659,26 +695,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
                 }
             }
         }
-        let mut outs: Vec<Vec<&mut OutBuf<L::Key, R::Elem>>> =
-            (0..n_shards).map(|_| Vec::new()).collect();
-        for worker in workers.iter_mut() {
-            for (s, o) in worker.get_mut().unwrap().out.iter_mut().enumerate() {
-                outs[s].push(o);
-            }
-        }
-        shards
-            .par_iter_mut()
-            .zip(outs)
-            .for_each(|(shard, mut outs)| {
-                let shard = shard.get_mut().unwrap();
-                if R::EXACT {
-                    for o in outs {
-                        shard.fold(ring, o);
-                    }
-                } else {
-                    shard.fold_ordered(ring, &mut outs);
-                }
-            });
+        fold_outs(ring, &mut workers, &mut shards);
 
         // The curves of the layer, with their leaves, sorted by leaf and then key.
         layer.clear();
@@ -865,6 +882,43 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
     Ok(SparsePoly::merge(1, parts))
 }
 
+/// The most entries of a table in a piece of what the root and its children emit, when the
+/// terms are subtracted in order.
+const EMIT_PIECE: usize = 1 << 14;
+
+/// About the most entries of the pieces of a batch of what the root and its children emit,
+/// whose terms are kept until they are subtracted, when that is in order.
+const EMIT_BATCH: usize = 1 << 20;
+
+/// Subtracts the terms in the buffers of the workers from the shards, and empties them; in
+/// order of their sources unless the ring is exact.
+fn fold_outs<R: Ring, K: Key, W: LevelWord>(
+    ring: &R,
+    workers: &mut [Worker<K, W, R::Elem>],
+    shards: &mut [Mutex<Shard<K, R::Elem>>],
+) {
+    let mut outs: Vec<Vec<&mut OutBuf<K, R::Elem>>> =
+        (0..shards.len()).map(|_| Vec::new()).collect();
+    for worker in workers.iter_mut() {
+        for (s, o) in worker.get_mut().unwrap().out.iter_mut().enumerate() {
+            outs[s].push(o);
+        }
+    }
+    shards
+        .par_iter_mut()
+        .zip(outs)
+        .for_each(|(shard, mut outs)| {
+            let shard = shard.get_mut().unwrap();
+            if R::EXACT {
+                for o in outs {
+                    shard.fold(ring, o);
+                }
+            } else {
+                shard.fold_ordered(ring, &mut outs);
+            }
+        });
+}
+
 /// Builds the exponentials of `curves` along the rows that are not in the tree, up to degree
 /// `hi`, and adds $n_C\, z^C$ times their terms of degree `lo` to `hi` to the leaves of the
 /// curves, recording in `active` the tables that had no terms. An exact ring adds the terms
@@ -886,22 +940,49 @@ fn push_exps<R: Ring, L: KeyLayout, W: LevelWord>(
     threads: usize,
     active: &mut [Vec<usize>],
 ) {
-    // The terms that are kept until they are added in order are kept a group of curves at a
-    // time, which bounds their memory and keeps each leaf's order.
-    let group = if R::EXACT {
-        curves.len().max(1)
-    } else {
-        GROUP_CURVES
-    };
-    for curves in curves.chunks(group) {
+    if R::EXACT {
         push_group(
             ring, layout, tree_rows, ints, inv, nodes, workers, curves, lo, hi, sinks, threads,
             active,
         );
+        return;
+    }
+    // The terms that are kept until they are added in order are kept a group of curves at a
+    // time, of about KEEP_TERMS terms by the terms per curve of the last group, at most twice
+    // its curves and GROUP_CURVES. Each leaf takes the terms of its curves in their order
+    // whatever the groups, so they only bound the memory.
+    let (mut start, mut size) = (0, threads.max(1));
+    while start < curves.len() {
+        let end = (start + size).min(curves.len());
+        let kept = push_group(
+            ring,
+            layout,
+            tree_rows,
+            ints,
+            inv,
+            nodes,
+            workers,
+            &curves[start..end],
+            lo,
+            hi,
+            sinks,
+            threads,
+            active,
+        );
+        let n = end - start;
+        size = (KEEP_TERMS * n / kept.max(1))
+            .min(2 * n)
+            .min(GROUP_CURVES)
+            .max(threads.max(1));
+        start = end;
     }
 }
 
-/// [`push_exps`] for one group of curves.
+/// About the most terms the curves of a group of [`push_exps`] keep until the leaves take
+/// them, when their sums must be taken in order.
+const KEEP_TERMS: usize = 1 << 20;
+
+/// [`push_exps`] for one group of curves, which returns the number of terms they kept.
 #[allow(clippy::too_many_arguments)]
 fn push_group<R: Ring, L: KeyLayout, W: LevelWord>(
     ring: &R,
@@ -917,7 +998,7 @@ fn push_group<R: Ring, L: KeyLayout, W: LevelWord>(
     sinks: (u32, &[Sink<W, R::Elem>]),
     threads: usize,
     active: &mut [Vec<usize>],
-) {
+) -> usize {
     let apply = |i: usize| {
         let t = &curves[i];
         if t.deg >= hi {
@@ -1001,13 +1082,16 @@ fn push_group<R: Ring, L: KeyLayout, W: LevelWord>(
             active[x as usize].push(n);
         }
     }
+    let mut kept = 0;
     for worker in workers.iter_mut() {
         let worker = worker.get_mut().unwrap();
+        kept += worker.terms.len();
         worker.terms.clear();
         for (n, x) in worker.filled.drain(..) {
             active[x as usize].push(n);
         }
     }
+    kept
 }
 
 /// Adds `terms`, as hashes, degrees and values in order of degree, to the tables of `node`,

@@ -46,7 +46,7 @@ pub use candidates::CandidateSource;
 use core::fmt;
 use crt::Residues;
 use field::{LaneField, Ring};
-use key::{field_widths, KeyError, KeyLayout, PackedKey, PackedLayout, Wide, Word};
+use key::{field_widths, Key, KeyError, KeyLayout, PackedKey, PackedLayout, Wide, Word};
 use lightcone::Lightcone;
 use malachite::base::num::logic::traits::SignificantBits;
 use malachite::{Integer, Natural, Rational};
@@ -694,14 +694,15 @@ fn bound_gv_in<W: Word>(
         return Ok(Vec::new());
     }
     let layout = &prep.layout;
-    let known: HashMap<_, Vec<Bound>> = candidates
-        .iter()
-        .filter_map(|c| {
+    let known = Known::new(
+        geometry.n_forms(),
+        candidates.iter().filter_map(|c| {
             let curve = prep.coords(&c.curve)?;
-            let vals = c.values.iter().map(Bound::from_integer).collect();
-            layout.fits(&curve).then(|| (layout.pack(&curve), vals))
-        })
-        .collect();
+            layout
+                .fits(&curve)
+                .then(|| (layout.pack(&curve), c.values.as_slice()))
+        }),
+    );
     let run = prep.run(geometry, options);
     let bounds = prep.pool.install(|| bounds(&run, &known))?;
     (0..bounds.len())
@@ -715,10 +716,58 @@ fn bound_gv_in<W: Word>(
         .collect()
 }
 
+/// Bounds on the absolute values of known GV invariants, by key, for [`bounds`].
+struct Known<K> {
+    width: usize,
+    /// The keys, sorted.
+    keys: Vec<K>,
+    /// `width` bounds per key.
+    vals: Vec<Bound>,
+}
+
+impl<K: Key> Known<K> {
+    /// The bounds of `entries`, with `width` values each, or zeros for those they lack.
+    fn new<'a>(width: usize, entries: impl Iterator<Item = (K, &'a [Integer])>) -> Self {
+        let (mut keys, mut vals) = (Vec::new(), Vec::new());
+        for (key, values) in entries {
+            keys.push(key);
+            vals.extend(
+                (0..width).map(|j| values.get(j).map_or(Bound::default(), Bound::from_integer)),
+            );
+        }
+        let mut order: Vec<u32> = (0..keys.len() as u32).collect();
+        order.sort_unstable_by_key(|&i| keys[i as usize]);
+        let at = |i: u32| i as usize * width..(i as usize + 1) * width;
+        Self {
+            width,
+            keys: order.iter().map(|&i| keys[i as usize]).collect(),
+            vals: order
+                .iter()
+                .flat_map(|&i| vals[at(i)].iter().copied())
+                .collect(),
+        }
+    }
+
+    /// The bounds of a lift.
+    fn from_lift(width: usize, lift: &[(K, u32, Vec<Integer>)]) -> Self {
+        Self::new(
+            width,
+            lift.iter()
+                .map(|(key, _, values)| (*key, values.as_slice())),
+        )
+    }
+
+    /// The bounds of `key`, if it is known.
+    fn get(&self, key: K) -> Option<&[Bound]> {
+        let i = self.keys.binary_search(&key).ok()?;
+        Some(&self.vals[i * self.width..(i + 1) * self.width])
+    }
+}
+
 /// The majorant pass of [`bound_gv`], with the candidates as bounds on their absolute values.
 fn bounds<L: KeyLayout>(
     run: &Run<'_, L>,
-    candidates: &HashMap<L::Key, Vec<Bound>>,
+    candidates: &Known<L::Key>,
 ) -> Result<SparsePoly<L::Key, Bound>, Error> {
     if !run.geometry.strata().is_empty() {
         return Err(Error::CertifyStrata);
@@ -742,7 +791,7 @@ fn bounds<L: KeyLayout>(
             for (y, &x) in cn.iter_mut().zip(curve) {
                 *y = x / n as i32;
             }
-            if let Some(gv) = candidates.get(&layout.pack(&cn)) {
+            if let Some(gv) = candidates.get(layout.pack(&cn)) {
                 for (v, &x) in vals.iter_mut().zip(gv) {
                     ring.fma(v, x, inv_pow[n as usize]);
                 }
@@ -1356,25 +1405,24 @@ fn lifted<const NL: usize, L: KeyLayout>(
         if !options.certify {
             return Ok(lift);
         }
-        match primes_needed(run, &lift, residues.primes())? {
-            None => return Ok(lift),
+        // The lift is taken again once the bounds hold rather than kept through their pass.
+        let known = Known::from_lift(width, &lift);
+        drop(lift);
+        match primes_needed(run, &known, residues.primes())? {
+            None => return Ok(residues.lift()),
             Some(n) => residues = passes::<NL, _>(run, options, residues, n)?,
         }
     }
 }
 
-/// `None` if the bounds of [`bounds`] on the invariants of `lift`, from `primes`, are all
+/// `None` if the bounds of [`bounds`] on the invariants of `candidates`, from `primes`, are all
 /// below half the product of the primes, and the number of primes they need otherwise.
 fn primes_needed<L: KeyLayout>(
     run: &Run<'_, L>,
-    lift: &[(L::Key, u32, Vec<Integer>)],
+    candidates: &Known<L::Key>,
     primes: &[u64],
 ) -> Result<Option<usize>, Error> {
-    let candidates: HashMap<L::Key, Vec<Bound>> = lift
-        .iter()
-        .map(|(key, _, values)| (*key, values.iter().map(Bound::from_integer).collect()))
-        .collect();
-    let bounds = bounds(run, &candidates)?;
+    let bounds = bounds(run, candidates)?;
     let modulus: Natural = primes.iter().map(|&p| Natural::from(p)).product();
     let half = Rational::from(&modulus) / Rational::from(2u32);
     // Far below the threshold the logarithms decide; near it, the exact values.
@@ -1454,7 +1502,7 @@ fn pass<R: Ring, L: KeyLayout>(
         tuning,
         source,
     )?;
-    let mut gv = multicover::multicover(ring, layout, geometry.kind(), &coeffs, inv, max_deg)?;
+    let mut gv = multicover::multicover(ring, layout, geometry.kind(), coeffs, inv, max_deg)?;
     // The products of curves in the lightcones reach curves outside them, where the values
     // miss the curves that were dropped.
     if !lightcone.is_all() {
@@ -1805,13 +1853,16 @@ mod tests {
         let residues = passes::<2, _>(&run, &options, Residues::new(1), 0).unwrap();
         assert_eq!(residues.primes().len(), 6);
         let lift = residues.lift();
-        assert_eq!(primes_needed(&run, &lift, residues.primes()), Ok(None));
         assert_eq!(
-            primes_needed(&run, &lift, &residues.primes()[..4]),
+            primes_needed(&run, &Known::from_lift(1, &lift), residues.primes()),
             Ok(None)
         );
         assert_eq!(
-            primes_needed(&run, &lift, &residues.primes()[..3]),
+            primes_needed(&run, &Known::from_lift(1, &lift), &residues.primes()[..4]),
+            Ok(None)
+        );
+        assert_eq!(
+            primes_needed(&run, &Known::from_lift(1, &lift), &residues.primes()[..3]),
             Ok(Some(4))
         );
         // More passes continue with the next primes and keep the lift.

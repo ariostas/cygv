@@ -362,11 +362,23 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
         self.vals.append(&mut other.vals);
     }
 
+    /// The values of the `i`-th term, to change in place. A term must not be left with only
+    /// zeros but by [`SparsePoly::retain_terms`] dropping it.
+    #[inline]
+    pub fn values_mut(&mut self, i: usize) -> &mut [V] {
+        &mut self.vals[i * self.width..(i + 1) * self.width]
+    }
+
     /// Keeps only the terms whose key satisfies `keep`, in their order.
     pub fn retain(&mut self, mut keep: impl FnMut(K) -> bool) {
+        self.retain_terms(|key, _, _| keep(key));
+    }
+
+    /// Keeps only the terms whose key, degree and values satisfy `keep`, in their order.
+    pub fn retain_terms(&mut self, mut keep: impl FnMut(K, u32, &[V]) -> bool) {
         let mut n = 0;
         for i in 0..self.len() {
-            if !keep(self.keys[i]) {
+            if !keep(self.keys[i], self.degs[i], self.values(i)) {
                 continue;
             }
             self.keys[n] = self.keys[i];
@@ -378,6 +390,40 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
         self.keys.truncate(n);
         self.degs.truncate(n);
         self.vals.truncate(n * self.width);
+    }
+
+    /// Adds the terms of `other`, which has the same width and no key in common with `self`,
+    /// merging them into their places from the end, without a second buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the widths differ.
+    pub fn merge_from(&mut self, other: Self) {
+        assert_eq!(self.width, other.width, "merged series need the same width");
+        let (w, n, m) = (self.width, self.len(), other.len());
+        self.keys.reserve_exact(m);
+        self.degs.reserve_exact(m);
+        self.vals.reserve_exact(m * w);
+        self.keys.extend_from_slice(&other.keys);
+        self.degs.extend_from_slice(&other.degs);
+        self.vals.extend_from_slice(&other.vals);
+        let (mut i, mut j) = (n, m);
+        while j > 0 {
+            let k = i + j - 1;
+            if i > 0
+                && (self.degs[i - 1], self.keys[i - 1]) > (other.degs[j - 1], other.keys[j - 1])
+            {
+                i -= 1;
+                self.keys[k] = self.keys[i];
+                self.degs[k] = self.degs[i];
+                self.vals.copy_within(i * w..(i + 1) * w, k * w);
+            } else {
+                j -= 1;
+                self.keys[k] = other.keys[j];
+                self.degs[k] = other.degs[j];
+                self.vals[k * w..(k + 1) * w].copy_from_slice(other.values(j));
+            }
+        }
     }
 
     /// The number of terms of degree at most `deg`, i.e. the end of their range.

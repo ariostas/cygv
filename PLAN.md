@@ -870,7 +870,7 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     both methods now give the full result, with or without cone data.
 - [x] **8. Certifier** (6.5).
   - [x] The number type (decided with you): `modular::bound`, a `Bound` of an `f64` mantissa
-    in $[1, 2)$ and an `i64` exponent, each operation rounded to nearest and moved up by one
+    in $[1, 2)$ and an `i64` exponent (an `f32` and an `i32` since phase 10), each operation rounded to nearest and moved up by one
     ulp (`next_up`), as the ring `BoundRing` (subtraction is addition, negation the
     identity, `inverses` inverting each integer by itself since the default would invert a
     bound). Rust cannot set the rounding mode the way the C does (`FE_UPWARD` in every
@@ -1173,10 +1173,44 @@ extraction is (section 2). Phases 1–4 need no decision except 6.5–6.7.
     a million of the 1.17 M invariants are at classes that are not candidates, whose period
     vanishes but whose invariants do not); 64-bit keys (5.3); lightcone chunks and
     symmetries (5.3).
-  - Left: certifying in the mode gains little (395 against 411 MB on `h11_8` at 22), since
-    the majorant pass has 16-byte bounds and no sinks (its sums must be taken in order); a
-    deterministic sink, or bounds in 8 bytes, would bring it down. The output itself
-    (`Invariant`s with a vector each) is about 136 bytes an invariant, 0.4 GB at 3 M.
+  - The certifier's memory, afterwards. Reverting the fixed order of the bounds' sums was
+    measured first and kept: certified at 20 (22 for `h11_8`) on 8 threads, taking them in
+    any order saved 3–13% of the time and 4–14% of the resident memory, for bounds that
+    would vary from run to run. A certified `h11_10` at 20 then took 2.4 times the memory of
+    an uncertified one (3.0 against 1.26 GiB), all of it in the majorant pass, whose live
+    peak was 2.36 GB against the exact passes' 0.94: a majorant does not cancel, so its
+    series has a bound at 9.5 M classes (against 1.17 M invariants) and its root emits 7 M
+    terms a layer (against 0.25 M). Where it went, and what took it out:
+    - The multicover built a table of twice its 9.5 M terms (1.4 GB at its peak): it now
+      solves in the place of the coefficients, in order of degree, finding the $C/m$ by
+      binary search in the terms of their degree, with a table only for the multiples that
+      have no coefficient. It is also faster (4.5 → 1.6 s there).
+    - The tree's curves kept their terms 4096 curves at a time until the leaves took them in
+      order (450 MB): a group now keeps about a million terms, sized by the terms per curve
+      of the last one (each leaf takes its curves' terms in their order whatever the
+      groups, so the bounds do not change).
+    - What the root and its children emit was kept for the whole layer (340 MB, and as much
+      again in the shards' space to order it): the tables now go in pieces of $2^{14}$
+      entries, a batch of about $2^{20}$ at a time, each piece taking the place of a curve.
+    - The lift, and the candidates as a hash map of vectors, were held through the pass
+      (210 MB): the candidates are now sorted arrays (`Known`), and the lift is dropped
+      and taken again once the bounds hold.
+    - `Bound` takes 8 bytes, an `f32` mantissa and an `i32` exponent, rather than 16: an
+      ulp of $2^{-23}$ per operation, a third of a bit over a sum of a million terms, against
+      bounds tens of bits above the invariants (`test_bounds`), and the tables of the pass
+      take half the memory.
+
+    Certified, as committed against now: `h11_10` at 20, 70.0 s and 2.92 GB resident against
+    61.6 s and 1.61 GB (the live peak 2.36 → 1.11 GB, the exact passes' 0.94); `h11_8` at 22,
+    8.5 s and 590 MB against 8.1 s and 372 MB; `h11_11` at 20, 4.9 s and 440 MB against
+    4.4 s and 258 MB; the same invariants.
+  - Left: in the low-memory mode a certified `h11_10` at 20 still peaks at 1.11 GB, against
+    0.48 GB uncertified, at the end of the majorant pass, which keeps its 9.5 M final terms
+    for the multicover. Only the classes up to half the degree are ever a $C/m$, so the
+    certifier could take the bounds of the others as they become final, keeping only the
+    largest against the primes, rather than all of them (`bound_gv` would keep them). The
+    output itself (`Invariant`s with a vector each) is about 136 bytes an invariant, 0.4 GB
+    at 3 M.
 
 Outside the phases:
 

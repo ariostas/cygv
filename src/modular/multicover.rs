@@ -8,7 +8,7 @@
 //! Solving for the GV invariants,
 //! $\mathrm{GV}_C = A_C - \sum_{m \ge 2,\, m \mid C} \mathrm{GV}_{C/m} / m^e$ with $e = 3$ or
 //! $2$, where $m$ runs over the divisors of the gcd of the coordinates of $C$. The curves are
-//! taken in increasing order of that gcd, so that the GV invariants of the $C/m$ are final
+//! taken in increasing order of degree, so that the GV invariants of the $C/m$ are final
 //! when $C$ is reached.
 //!
 //! A multiple of a curve with a nonzero GV invariant can have one of its own even when it has
@@ -39,12 +39,15 @@ pub(crate) fn gcd(c: &[i32]) -> u32 {
 /// The GV invariants, from the coefficients $n_C$ of the instanton series at the curve
 /// classes of degree at most `max_deg`, as a series with as many values per term as `coeffs`.
 ///
-/// `inv` holds the inverses of the integers up to `max_deg` at least.
+/// `inv` holds the inverses of the integers up to `max_deg` at least. The values are solved
+/// for in the place of the coefficients, in order of degree, each looking up the $C/m$ by
+/// binary search among the terms of its degree; only the multiples that have no coefficient
+/// take a table of their own.
 pub fn multicover<R: Ring, L: KeyLayout>(
     ring: &R,
     layout: &L,
     kind: CYKind,
-    coeffs: &SparsePoly<L::Key, R::Elem>,
+    mut coeffs: SparsePoly<L::Key, R::Elem>,
     inv: &[R::Elem],
     max_deg: u32,
 ) -> Result<SparsePoly<L::Key, R::Elem>, Error> {
@@ -58,62 +61,88 @@ pub fn multicover<R: Ring, L: KeyLayout>(
         .map(|&x| (1..exponent).fold(x, |p, _| ring.mul(p, x)))
         .collect();
 
-    // A at every curve of positive degree, and the curves by the gcd of their coordinates.
-    let mut map = SlotMap::new(width, 2 * coeffs.len());
-    let mut by_gcd: Vec<Vec<u32>> = vec![Vec::new(); max_deg as usize + 1];
-    let mut c = vec![0; layout.dim()];
-    for i in 0..coeffs.len() {
-        let d = coeffs.degs()[i];
-        if d == 0 || d > max_deg {
-            continue;
-        }
-        let (s, _) = map.insert(coeffs.keys()[i], d);
-        let vals = map.values_mut(s);
-        vals.copy_from_slice(coeffs.values(i));
-        if kind.is_threefold() {
-            for v in vals {
-                *v = ring.mul(*v, inv[d as usize]);
+    // A at every curve of positive degree.
+    coeffs.retain_terms(|_, d, _| d != 0 && d <= max_deg);
+    if kind.is_threefold() {
+        for i in 0..coeffs.len() {
+            let d = coeffs.degs()[i] as usize;
+            for v in coeffs.values_mut(i) {
+                *v = ring.mul(*v, inv[d]);
             }
         }
-        layout.unpack(coeffs.keys()[i], &mut c);
-        by_gcd[gcd(&c) as usize].push(s);
     }
+    // The terms of degree e are those from starts[e] to starts[e + 1].
+    let starts: Vec<usize> = (0..=max_deg + 1)
+        .map(|e| coeffs.degs().partition_point(|&d| d < e))
+        .collect();
+    let find = |coeffs: &SparsePoly<L::Key, R::Elem>, key: L::Key, deg: u32| {
+        let (a, b) = (starts[deg as usize], starts[deg as usize + 1]);
+        coeffs.keys()[a..b].binary_search(&key).ok().map(|i| a + i)
+    };
+    // The multiples without a coefficient, by degree.
+    let mut extra: SlotMap<L::Key, R::Elem> = SlotMap::new(width, 16);
+    let mut extra_by_deg: Vec<Vec<u32>> = vec![Vec::new(); max_deg as usize + 1];
 
-    let mut cn = vec![0; layout.dim()];
+    let (mut c, mut cn) = (vec![0; layout.dim()], vec![0; layout.dim()]);
     let mut gv = vec![R::Elem::default(); width];
-    for g in 1..=max_deg as usize {
-        for s in core::mem::take(&mut by_gcd[g]) {
-            gv.copy_from_slice(map.values(s));
-            let key = map.key(s);
+    for d in 1..=max_deg {
+        let main = (starts[d as usize]..starts[d as usize + 1]).map(Ok);
+        let more = core::mem::take(&mut extra_by_deg[d as usize])
+            .into_iter()
+            .map(Err);
+        for term in main.chain(more) {
+            let key = match term {
+                Ok(i) => {
+                    gv.copy_from_slice(coeffs.values(i));
+                    coeffs.keys()[i]
+                }
+                Err(s) => {
+                    gv.copy_from_slice(extra.values(s));
+                    extra.key(s)
+                }
+            };
+            layout.unpack(key, &mut c);
+            let g = gcd(&c);
             if g > 1 {
-                layout.unpack(key, &mut c);
                 for m in (2..=g).filter(|m| g.is_multiple_of(*m)) {
                     for (y, &x) in cn.iter_mut().zip(&c) {
                         *y = x / m as i32;
                     }
-                    if let Some(t) = map.get(layout.pack(&cn)) {
-                        for (v, &w) in gv.iter_mut().zip(map.values(t)) {
-                            *v = ring.sub(*v, ring.mul(w, inv_pow[m]));
-                        }
+                    let low = layout.pack(&cn);
+                    let vals = match find(&coeffs, low, d / m) {
+                        Some(j) => coeffs.values(j),
+                        None => match extra.get(low) {
+                            Some(t) => extra.values(t),
+                            None => continue,
+                        },
+                    };
+                    for (v, &w) in gv.iter_mut().zip(vals) {
+                        *v = ring.sub(*v, ring.mul(w, inv_pow[m as usize]));
                     }
                 }
-                map.values_mut(s).copy_from_slice(&gv);
+                match term {
+                    Ok(i) => coeffs.values_mut(i).copy_from_slice(&gv),
+                    Err(s) => extra.values_mut(s).copy_from_slice(&gv),
+                }
             }
             if gv.iter().all(|&x| ring.is_zero(x)) {
                 continue;
             }
-            let d = map.deg(s);
             let mut multiple = key;
             for j in 2..=max_deg / d {
                 multiple = multiple + key;
-                let (t, created) = map.insert(multiple, j * d);
-                if created {
-                    by_gcd[j as usize * g].push(t);
+                if find(&coeffs, multiple, j * d).is_none() {
+                    let (t, created) = extra.insert(multiple, j * d);
+                    if created {
+                        extra_by_deg[(j * d) as usize].push(t);
+                    }
                 }
             }
         }
     }
-    Ok(map.take())
+    coeffs.retain_terms(|_, _, v| v.iter().any(|&x| !ring.is_zero(x)));
+    coeffs.merge_from(extra.take());
+    Ok(coeffs)
 }
 
 /// The GW invariants $A_C = \sum_{m \mid C} \mathrm{GV}_{C/m} / m^e$ of the curve classes of
@@ -232,7 +261,7 @@ mod tests {
             let coeffs = map.take();
             assert!(!coeffs.keys().contains(&layout.pack(&[0, 2])));
 
-            let got = multicover(&lf, &layout, kind, &coeffs, &inv, max_deg).unwrap();
+            let got = multicover(&lf, &layout, kind, coeffs, &inv, max_deg).unwrap();
             let got: HashMap<PackedKey, Vec<E>> = (0..got.len())
                 .map(|i| (got.keys()[i], got.values(i).to_vec()))
                 .collect();
@@ -252,10 +281,10 @@ mod tests {
         let coeffs = SparsePoly::new(1);
         let kind = CYKind::Threefold;
         assert_eq!(
-            multicover(&lf, &layout, kind, &coeffs, &inv, 5),
+            multicover(&lf, &layout, kind, coeffs.clone(), &inv, 5),
             Err(Error::DimensionMismatch)
         );
-        assert!(multicover(&lf, &layout, kind, &coeffs, &inv, 4)
+        assert!(multicover(&lf, &layout, kind, coeffs, &inv, 4)
             .unwrap()
             .is_empty());
     }
