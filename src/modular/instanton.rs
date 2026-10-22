@@ -115,6 +115,9 @@ fn par_accumulate<K: Key, E: Copy + Default + PartialEq + Send + Sync>(
 
 /// Adds $a \cdot b$, truncated at `max_deg`, to `acc`, where `a` has one value per term and
 /// `b` as many as `acc`.
+///
+/// The work goes over the terms of `b`, each with those of `a` it pairs with: `a` is $c_0^{-1}$
+/// in the pipeline, with a handful of terms, and `b` a series of thousands.
 fn mul_scalar_into<R: Ring, K: Key>(
     ring: &R,
     a: &SparsePoly<K, R::Elem>,
@@ -123,17 +126,18 @@ fn mul_scalar_into<R: Ring, K: Key>(
     acc: &ShardedMap<K, R::Elem>,
 ) {
     debug_assert_eq!(a.width(), 1);
-    let inner = |x: usize| b.len_upto(max_deg - a.degs()[x]);
+    let inner = |y: usize| a.len_upto(max_deg - b.degs()[y]);
     par_accumulate(
         acc,
         b.width(),
-        a.len_upto(max_deg),
+        b.len_upto(max_deg),
         inner,
-        |x, local| {
-            let (kx, dx, ax) = (a.keys()[x], a.degs()[x], a.values(x)[0]);
-            for y in 0..inner(x) {
-                let out = local.get_or_insert(kx + b.keys()[y], dx + b.degs()[y]);
-                for (o, &v) in out.iter_mut().zip(b.values(y)) {
+        |y, local| {
+            let (ky, dy, by) = (b.keys()[y], b.degs()[y], b.values(y));
+            for x in 0..inner(y) {
+                let ax = a.values(x)[0];
+                let out = local.get_or_insert(a.keys()[x] + ky, a.degs()[x] + dy);
+                for (o, &v) in out.iter_mut().zip(by) {
                     ring.fma(o, ax, v);
                 }
             }
