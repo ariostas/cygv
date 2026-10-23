@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import operator
 import os
+import sys
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from fractions import Fraction
 from multiprocessing import Pipe, Process
-from multiprocessing.connection import Connection, wait
+from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
 
@@ -93,42 +95,113 @@ def _run_subprocess(
     conn.close()
 
 
+def _forward(f: Any) -> None:
+    """Writes what the subprocess wrote to its stderr since the last call to ours."""
+    data = f.read()
+    if data:
+        sys.stderr.write(data.decode(errors="replace"))
+        sys.stderr.flush()
+
+
 # The computation runs in a subprocess, so that ctrl+c interrupts it without exiting the main
-# Python process.
-def _compute_in_subprocess(kind: str, args: dict[str, Any]) -> Any:
+# Python process. Its stderr goes to a file, which is forwarded to ours as it grows if
+# `verbose`, and otherwise only shown if it dies.
+def _compute_in_subprocess(
+    kind: str, args: dict[str, Any], *, verbose: bool = False
+) -> Any:
     parent_conn, child_conn = Pipe(duplex=False)
     with tempfile.NamedTemporaryFile(delete=False) as f:
         stderr_path = Path(f.name)
     process = Process(
         target=_run_subprocess, args=(child_conn, stderr_path, kind, args)
     )
-    process.start()
-    child_conn.close()
-
-    ready = wait([parent_conn, process.sentinel])
-    if parent_conn in ready:
-        result = parent_conn.recv()
+    try:
+        process.start()
+        child_conn.close()
+        # The result, or the end of the pipe if the child died without sending it.
+        try:
+            if verbose:
+                with stderr_path.open("rb") as f:
+                    while not parent_conn.poll(0.2):
+                        _forward(f)
+                    _forward(f)
+            result = parent_conn.recv()
+        except EOFError:
+            process.join()
+            with stderr_path.open("rb") as f:
+                stderr_msg = f.read().decode(errors="replace").strip()
+            msg = f"Computation failed (exit code {process.exitcode})"
+            if stderr_msg:
+                msg += f":\n{stderr_msg}"
+            raise RuntimeError(msg) from None
         process.join()
-        stderr_path.unlink()
-        if isinstance(result, BaseException):
-            raise result
-        return result
+    # Interrupted, ctrl+c or otherwise: the computation stops with the caller.
+    except BaseException:
+        if process.pid is not None:
+            process.terminate()
+            process.join()
+        raise
+    finally:
+        parent_conn.close()
+        stderr_path.unlink(missing_ok=True)
+    if isinstance(result, BaseException):
+        raise result
+    return result
 
-    process.join()
-    with stderr_path.open("rb") as f:
-        stderr_msg = f.read().decode(errors="replace").strip()
-    stderr_path.unlink()
-    msg = f"Computation failed (exit code {process.exitcode})"
-    if stderr_msg:
-        msg += f":\n{stderr_msg}"
-    raise RuntimeError(msg)
+
+def _int(x: Any, name: str) -> int:
+    """An integer, from an int or an integral float."""
+    try:
+        return operator.index(x)
+    except TypeError:
+        pass
+    if isinstance(x, float | np.floating) and float(x).is_integer():
+        return int(x)
+    msg = f"{name} must hold integers, not {x!r}"
+    raise ValueError(msg)
+
+
+def _count(x: Any, name: str) -> int | None:
+    """A nonnegative integer below 2**32, or None."""
+    if x is None:
+        return None
+    v = _int(x, name)
+    if not 0 <= v < 2**32:
+        msg = f"{name} must be a nonnegative int below 2**32, not {v}"
+        raise ValueError(msg)
+    return v
+
+
+def _int_array(x: ArrayLike, name: str) -> Any:
+    """An array of integers that fit in 32 bits."""
+    try:
+        array = np.asarray(x)
+    except ValueError:
+        msg = f"{name} must be a rectangular array of ints, with vectors of the same length"
+        raise ValueError(msg) from None
+    if array.dtype.kind == "f":
+        if not np.all(np.isfinite(array) & (array == np.round(array))):
+            msg = f"{name} must hold integers"
+            raise ValueError(msg)
+        array = array.astype(np.int64)
+    elif array.dtype.kind not in "iub":
+        values = [_int(v, name) for v in array.ravel()]
+        if any(not -(2**31) <= v < 2**31 for v in values):
+            msg = f"{name} must hold integers that fit in 32 bits"
+            raise ValueError(msg)
+        array = np.array(values, dtype=np.int64).reshape(array.shape)
+    array = array.astype(np.int64)
+    if array.size and (array.min() < -(2**31) or array.max() >= 2**31):
+        msg = f"{name} must hold integers that fit in 32 bits"
+        raise ValueError(msg)
+    return array
 
 
 def _vectors(vectors: ArrayLike | None, name: str) -> list[Any] | None:
     """A list of vectors, which may be empty, as a list of lists."""
     if vectors is None:
         return None
-    array = np.array(vectors, dtype=int)
+    array = _int_array(vectors, name)
     if array.size == 0:
         return []
     if array.ndim != 2:
@@ -142,7 +215,7 @@ def _points(points: ArrayLike | None, name: str) -> list[Any] | None:
     """One point or a list of points as a list of lists."""
     if points is None:
         return None
-    array = np.array(points, dtype=int)
+    array = _int_array(points, name)
     if array.ndim == 1 and array.size > 0:
         array = array.reshape(1, -1)
     return _vectors(array, name)
@@ -151,7 +224,7 @@ def _points(points: ArrayLike | None, name: str) -> list[Any] | None:
 def _vector(vector: ArrayLike | None, name: str) -> list[int] | None:
     if vector is None:
         return None
-    array = np.array(vector, dtype=int)
+    array = _int_array(vector, name)
     if array.ndim != 1:
         msg = f"{name} must be a 1D array-like of ints"
         raise ValueError(msg)
@@ -159,10 +232,12 @@ def _vector(vector: ArrayLike | None, name: str) -> list[int] | None:
     return res
 
 
-def _index_lists(lists: Iterable[ArrayLike] | None) -> list[list[int]] | None:
+def _index_lists(
+    lists: Iterable[ArrayLike] | None, name: str
+) -> list[list[int]] | None:
     if lists is None:
         return None
-    return [[int(i) for i in np.asarray(x).ravel()] for x in lists]
+    return [_int_array(x, name).ravel().tolist() for x in lists]
 
 
 def _intnums(intnums: Mapping[Any, int] | Iterable[Sequence[int]]) -> dict[Any, int]:
@@ -171,14 +246,14 @@ def _intnums(intnums: Mapping[Any, int] | Iterable[Sequence[int]]) -> dict[Any, 
     if isinstance(intnums, Mapping):
         items = intnums.items()
     else:
-        entries = [tuple(int(x) for x in e) for e in intnums]
+        entries = [tuple(_int(x, "intnums") for x in e) for e in intnums]
         if any(len(e) != 4 for e in entries):
             msg = "intnums must be a dict or a list of [i, j, k, value] entries"
             raise ValueError(msg)
         items = ((e[:3], e[3]) for e in entries)  # type: ignore[assignment]
     res: dict[Any, int] = {}
     for key, value in items:
-        indices = tuple(int(i) for i in key)
+        indices = tuple(_int(i, "intnums") for i in key)
         if len(indices) != 3 or any(i < 0 for i in indices):
             msg = (
                 "the indices of the intersection numbers must be three nonnegative ints"
@@ -187,7 +262,11 @@ def _intnums(intnums: Mapping[Any, int] | Iterable[Sequence[int]]) -> dict[Any, 
         if indices in res:
             msg = f"the intersection number {indices} is given twice"
             raise ValueError(msg)
-        res[indices] = int(value)
+        v = _int(value, "intnums")
+        if not -(2**31) <= v < 2**31:
+            msg = "the intersection numbers must fit in 32 bits"
+            raise ValueError(msg)
+        res[indices] = v
     return res
 
 
@@ -202,7 +281,7 @@ def _strata(
         fracs = [Fraction(x) for x in cls]
         res.append(
             (
-                [int(d) for d in np.asarray(divisors).ravel()],
+                _int_array(divisors, "strata").ravel().tolist(),
                 [(f.numerator, f.denominator) for f in fracs],
             )
         )
@@ -216,8 +295,8 @@ def _hilbert_bases(
         return None
     return [
         (
-            [int(d) for d in np.asarray(divisors).ravel()],
-            _vectors(basis, "the Hilbert bases"),
+            _int_array(divisors, "hilbert_bases").ravel().tolist(),
+            _vectors(basis, "hilbert_bases"),
         )
         for divisors, basis in bases
     ]
@@ -272,6 +351,7 @@ class Problem:
         certify: bool = False,
         low_memory: bool = False,
         hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
+        verbose: bool | int = False,
     ) -> Invariants:
         """The GV invariants, as integers, of the curve classes selected by one of:
 
@@ -289,7 +369,9 @@ class Problem:
         third of the memory, for about two and a half times the time. ``n_threads`` defaults
         to one per core. ``hilbert_bases`` are the Hilbert bases of the cones ``K_T`` from a program such
         as Normaliz, as ``(divisors, basis)`` pairs, which the modular pipeline then uses
-        instead of computing them.
+        instead of computing them. ``verbose`` writes the progress of the computation to
+        ``sys.stderr``: with ``True`` (or 1) its stages and passes, with 2 also the degrees of
+        each pass.
 
         Invalid input raises a ``ValueError``, and a computation that fails a
         :class:`ComputationError`.
@@ -305,6 +387,7 @@ class Problem:
             certify=certify,
             low_memory=low_memory,
             hilbert_bases=hilbert_bases,
+            verbose=verbose,
         )
 
     def gw(
@@ -319,6 +402,7 @@ class Problem:
         certify: bool = False,
         low_memory: bool = False,
         hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
+        verbose: bool | int = False,
     ) -> Invariants:
         """The GW invariants, as fractions, of the curve classes selected as for :meth:`gv`,
         which describes the other arguments too."""
@@ -333,6 +417,7 @@ class Problem:
             certify=certify,
             low_memory=low_memory,
             hilbert_bases=hilbert_bases,
+            verbose=verbose,
         )
 
     def _compute(
@@ -348,6 +433,7 @@ class Problem:
         certify: bool,
         low_memory: bool,
         hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None,
+        verbose: bool | int,
     ) -> Invariants:
         q = _vectors(self.q, "q")
         if not q:
@@ -356,24 +442,28 @@ class Problem:
         args = {
             "q": q,
             "intnums": _intnums(self.intnums),
-            "nefpart": _index_lists(self.nefpart),
-            "fan": _index_lists(self.fan),
+            "nefpart": _index_lists(self.nefpart, "nefpart"),
+            "fan": _index_lists(self.fan, "fan"),
             "strata": _strata(self.strata),
             "generators": _vectors(self.generators, "generators"),
             "mori_hyperplanes": _vectors(self.mori_hyperplanes, "mori_hyperplanes"),
-            "mori_equations": _vectors(self.mori_equations, "mori_equations"),
+            # No equations is the same as none given.
+            "mori_equations": _vectors(self.mori_equations, "mori_equations") or None,
             "grading_vector": _vector(self.grading_vector, "grading_vector"),
-            "max_deg": max_deg,
+            "max_deg": _count(max_deg, "max_deg"),
             "target_points": _points(target_points, "target_points"),
-            "min_points": min_points,
+            "min_points": _count(min_points, "min_points"),
             "curve_classes": _vectors(curve_classes, "curve_classes"),
             "method": method,
-            "n_threads": n_threads,
+            "n_threads": _count(n_threads, "n_threads"),
             "certify": certify,
             "low_memory": low_memory,
             "hilbert_bases": _hilbert_bases(hilbert_bases),
+            "verbose": _count(verbose, "verbose"),
         }
-        entries, dimension, grading_vector, report = _compute_in_subprocess(kind, args)
+        entries, dimension, grading_vector, report = _compute_in_subprocess(
+            kind, args, verbose=bool(verbose)
+        )
         value = int if kind == "gv" else Fraction
         if dimension == 3:
             pairs = [(tuple(c), value(v)) for ((c, _), v) in entries]

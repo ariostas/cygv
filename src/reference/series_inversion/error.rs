@@ -4,7 +4,7 @@ use crate::reference::polynomial::error::PolynomialError;
 use core::fmt;
 
 /// An error structure for semigroup errors.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SeriesInversionError {
     NonIntegerGVError,
     PolynomialError(PolynomialError),

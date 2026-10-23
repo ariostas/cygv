@@ -45,10 +45,29 @@ jobs:
       - name: Run tests
         run: cargo test --locked --verbose
 
+  # The pre-commit hooks run rustfmt and clippy locally, but pre-commit.ci skips them,
+  # since they need a Rust toolchain.
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run clippy on the Python bindings
+        run: cargo clippy --locked --no-default-features --features python -- -D warnings
+
   check-rust:
     name: Check Rust
     if: always()
-    needs: [build-and-test]
+    needs: [build-and-test, lint]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

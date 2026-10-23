@@ -308,6 +308,22 @@ fn test_invalid_input() {
         ] {
             assert_eq!(field(run(&[], &intnums)).0, "intnums", "{m:?}: {intnums:?}");
         }
+        // Charges and intersection numbers of different geometries give invariants that are
+        // not integers.
+        let wrong = problem(
+            &dmatrix![5; 1; 1; 1; 1],
+            &[],
+            &HashMap::from([((0, 0, 0), 4)]),
+            &dmatrix![1],
+            &[1],
+            Selection::MaxDeg(3),
+        );
+        let res = compute_gv(&wrong, &method(m));
+        assert!(
+            matches!(&res, Err(Error::Modular(_) | Error::Reference(_)))
+                && res.as_ref().unwrap_err().to_string().contains("integer"),
+            "{m:?}: {res:?}"
+        );
     }
 
     // The curve classes are used as given, with zero added, each once.
@@ -332,4 +348,34 @@ fn test_invalid_input() {
         .0,
         "curve_classes"
     );
+
+    // Intersection numbers that leave out a coordinate of the curves, which the reference
+    // pipeline indexed its corrections by.
+    let q = dmatrix![1, 0; 1, 0; 1, 0; 1, 0; 1, 0; 0, 1; 0, 1; 0, 1; 0, 1; 0, 1];
+    let intnums = HashMap::from([((0, 0, 0), 5)]);
+    let gens = dmatrix![1, 0; 0, 1];
+    for m in [Method::Modular, Method::Reference] {
+        let p = problem(&q, &[], &intnums, &gens, &[1, 1], Selection::MaxDeg(2));
+        assert!(compute_gv(&p, &method(m)).is_ok(), "{m:?}");
+    }
+
+    // A Mori cone of the origin alone has no curves, whichever the selection.
+    let point = |selection| Problem {
+        cone: MoriCone::Inequalities {
+            hyperplanes: dmatrix![1, -1],
+            equations: DMatrix::zeros(1, 0),
+        },
+        ..problem(
+            &q.columns(0, 1).into(),
+            &[],
+            &intnums,
+            &dmatrix![1],
+            &[1],
+            selection,
+        )
+    };
+    for selection in [Selection::MaxDeg(3), Selection::MinPoints(5)] {
+        let res = compute_gv(&point(selection), &method(Method::Reference)).unwrap();
+        assert!(res.entries.is_empty());
+    }
 }

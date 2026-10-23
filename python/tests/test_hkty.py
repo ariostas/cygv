@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import multiprocessing
+import os
 import pickle
+import sys
 from fractions import Fraction
+from typing import Any
 
 import pytest
 
@@ -12,6 +16,7 @@ from cygv import (
     Problem,
     compute_gv,
     compute_gw,
+    hkty,
 )
 
 
@@ -279,6 +284,16 @@ def test_compute_functions() -> None:
         compute_gv([[1]], [1], q, intnums, max_deg=4)  # type: ignore[call-arg]
 
 
+def test_verbose(capsys: pytest.CaptureFixture[str]) -> None:
+    # The progress goes to stderr, and the results are those of a quiet run.
+    expected = QUINTIC.gv(max_deg=4)
+    assert not capsys.readouterr().err
+    assert QUINTIC.gv(max_deg=4, verbose=True) == expected
+    assert "pass over primes" in capsys.readouterr().err
+    with pytest.raises(ValueError, match="verbose"):
+        QUINTIC.gv(max_deg=4, verbose=-1)
+
+
 def test_invalid_input() -> None:
     # Invalid input is a ValueError with either method, not a crash of the computation.
     bad_intnums = {(0, 0, 0): 5, (0, 0, 1): 1}
@@ -315,6 +330,67 @@ def test_invalid_input() -> None:
             mori_hyperplanes=[[1]],
             max_deg=3,
         )
+    # No equations are none.
+    assert compute_gv(
+        [[1, 1, 1, 1, 1]],
+        {(0, 0, 0): 5},
+        generators=[[1]],
+        mori_equations=[],
+        max_deg=1,
+    ) == [((1,), 2875)]
+
+
+def test_integers() -> None:
+    def quintic(q: Any = None, intnums: Any = None, **kwargs: Any) -> Any:
+        args = {"generators": [[1]], "max_deg": 2, **kwargs}
+        return compute_gv(
+            [[1, 1, 1, 1, 1]] if q is None else q,
+            {(0, 0, 0): 5} if intnums is None else intnums,
+            **args,
+        )
+
+    expected = quintic()
+    # Integral floats are integers, and anything else is an error, not truncated.
+    assert quintic(q=[[1.0, 1, 1, 1, 1]], max_deg=2.0) == expected
+    for q in ([[1.5, 1, 1, 1, 1]], [["1", 1, 1, 1, 1]]):
+        with pytest.raises(ValueError, match="q must hold integers"):
+            quintic(q=q)
+    with pytest.raises(ValueError, match="intnums must hold integers"):
+        quintic(intnums={(0, 0, 0): 5.5})
+    with pytest.raises(ValueError, match="rectangular"):
+        quintic(q=[[1, 1, 1, 1, 1], [1, 1]])
+    with pytest.raises(ValueError, match="32 bits"):
+        quintic(q=[[2**40, 1, 1, 1, 1]])
+    with pytest.raises(ValueError, match="32 bits"):
+        quintic(intnums={(0, 0, 0): 2**40})
+    for max_deg in (-1, 2.5, 2**40):
+        with pytest.raises(ValueError, match="max_deg"):
+            quintic(max_deg=max_deg)
+    with pytest.raises(ValueError, match="n_threads"):
+        quintic(n_threads=-2)
+    # Target points outside the Mori cone.
+    with pytest.raises(ValueError, match="outside the Mori cone"):
+        compute_gv(
+            [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]],
+            {(0, 0, 0): 8, (0, 0, 1): 4},
+            generators=[[1, 0], [0, 1]],
+            target_points=[[2, -1]],
+        )
+
+
+def test_child_dies(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only a forked child sees the patch.
+    if multiprocessing.get_start_method() != "fork":
+        pytest.skip("needs the fork start method")
+
+    def die(_kind: str, _args: Any) -> None:
+        sys.stderr.write("the end\n")
+        sys.stderr.flush()
+        os._exit(3)
+
+    monkeypatch.setattr(hkty, "_compute", die)
+    with pytest.raises(RuntimeError, match="exit code 3"):
+        compute_gv([[1, 1, 1, 1, 1]], {(0, 0, 0): 5}, generators=[[1]], max_deg=1)
 
 
 def test_vex_phase() -> None:

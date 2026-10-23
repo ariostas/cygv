@@ -420,14 +420,21 @@ fn test_facet_target_points() {
     };
     assert_eq!(results(&input, Method::Modular).unwrap(), expected);
     assert_eq!(results(&input, Method::Reference).unwrap(), expected);
-    // (0, 1, 0, ..., 0) has degree 1 and is off the facet's span.
+    // (0, 1, 0, ..., 0) has degree 1 and is off the facet's span, so nothing is below it,
+    // which is taken for a mistake.
     let mut off = DMatrix::zeros(9, 1);
     off[(1, 0)] = 1;
     input.problem.selection = Selection::TargetPoints {
         points: off,
         max_deg: None,
     };
-    assert_eq!(results(&input, Method::Modular).unwrap(), Results::new());
+    assert!(matches!(
+        results(&input, Method::Modular),
+        Err(Error::Input {
+            field: "target_points",
+            ..
+        })
+    ));
 }
 
 /// On the facet the curve classes span a lattice of rank 8, whose coordinates key them, and

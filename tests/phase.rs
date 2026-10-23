@@ -1229,4 +1229,34 @@ fn test_compute_from_fan() {
         ..problem.clone()
     };
     assert_eq!(gv(&generators, Method::Auto).unwrap(), gv_auto);
+    // A cone given with the fan must contain the walls, here not (1, -1).
+    for cone in [
+        MoriCone::Generators(DMatrix::from_row_slice(2, 2, &[1, -1, 0, 1])),
+        MoriCone::Inequalities {
+            hyperplanes: DMatrix::from_row_slice(2, 2, &[1, 0, 0, 1]),
+            equations: DMatrix::zeros(2, 0),
+        },
+    ] {
+        let wrong = Problem {
+            cone,
+            ..problem.clone()
+        };
+        for m in [Method::Auto, Method::Reference] {
+            assert!(matches!(
+                field(gv(&wrong, m)),
+                "generators" | "mori_hyperplanes"
+            ));
+        }
+    }
+    // Target points are checked to be in the Mori cone.
+    let outside = Problem {
+        selection: Selection::TargetPoints {
+            points: DMatrix::from_row_slice(2, 1, &[-1, 3]),
+            max_deg: None,
+        },
+        ..problem.clone()
+    };
+    for m in [Method::Auto, Method::Reference] {
+        assert_eq!(field(gv(&outside, m)), "target_points");
+    }
 }

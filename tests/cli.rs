@@ -146,6 +146,24 @@ fn test_invalid_input() {
 }
 
 #[test]
+fn test_verbose() {
+    // The progress goes to stderr, and the results are those of a quiet run.
+    let quintic = "q: [[1, 1, 1, 1, 1]]\nintnums: [[0, 0, 0, 5]]\ngenerators: [[1]]\nmax_deg: 4\n";
+    let quiet = run(&[], quintic);
+    assert!(quiet.status.success());
+    assert!(quiet.stderr.is_empty());
+    let output = run(&["-v"], quintic);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, quiet.stdout);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("pass over primes"), "{stderr}");
+    assert!(!stderr.contains("degree 2:"), "{stderr}");
+    let output = run(&["-vv", "--method", "modular"], quintic);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("degree 2:"), "{stderr}");
+}
+
+#[test]
 fn test_missing_file() {
     let output = run(&["--file", "does_not_exist.yaml"], "");
     assert!(!output.status.success());

@@ -175,7 +175,8 @@ pub(crate) fn check_nefpart(nefpart: &[Vec<usize>], n_divisors: usize) -> Result
 }
 
 /// Checks that the intersection numbers are indexed by the `h11` divisors of the basis (but
-/// the first index of an n-fold, a reference surface), that each one is given in one
+/// the first index of an n-fold, a reference surface, numbered from 0 without gaps), that
+/// each one is given in one
 /// ordering of its indices only, and that some of them do not vanish, returning what is
 /// wrong otherwise.
 pub(crate) fn check_intnums(
@@ -207,6 +208,17 @@ pub(crate) fn check_intnums(
     }
     if seen.is_empty() {
         return Err("there must be at least one nonzero intersection number");
+    }
+    // An n-fold's first index numbers the reference surfaces, and every table holds one
+    // component per number up to the largest.
+    if !cy_kind.is_threefold() {
+        let surfaces: std::collections::BTreeSet<usize> = seen.iter().map(|idx| idx[0]).collect();
+        if surfaces.last() != Some(&(surfaces.len() - 1)) {
+            return Err(
+                "the reference surfaces, the first indices of the intersection numbers, \
+                 must be numbered from 0 without gaps",
+            );
+        }
     }
     Ok(())
 }
@@ -293,6 +305,47 @@ pub fn return_freed_memory() {
     }
 }
 
+/// Writes the progress messages of the computations to the standard error, each line
+/// stamped with the seconds since this was first called: with a `verbosity` of 1 the stages
+/// and passes, with 2 also the degrees of each pass, and with 0 nothing.
+///
+/// The messages go through the [`log`](https://docs.rs/log) facade, at the levels `info`
+/// and `debug`, so library users can route them through any logger instead. This one is
+/// what the command line's `--verbose` and the Python keyword `verbose` install; once a
+/// logger is set, later calls only change the verbosity.
+pub fn log_to_stderr(verbosity: u8) {
+    use std::io::Write;
+    use std::time::Instant;
+
+    struct Stderr(Instant);
+
+    impl log::Log for Stderr {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            metadata.target().starts_with("cygv")
+        }
+
+        fn log(&self, record: &log::Record) {
+            if self.enabled(record.metadata()) {
+                let secs = self.0.elapsed().as_secs_f64();
+                // A failed write to the standard error has nowhere to be reported.
+                let _ = writeln!(std::io::stderr(), "[{secs:9.2}s] {}", record.args());
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    static LOGGER: std::sync::OnceLock<Stderr> = std::sync::OnceLock::new();
+    let logger = LOGGER.get_or_init(|| Stderr(Instant::now()));
+    // Fails only when a logger is already set, which keeps it.
+    let _ = log::set_logger(logger);
+    log::set_max_level(match verbosity {
+        0 => log::LevelFilter::Off,
+        1 => log::LevelFilter::Info,
+        _ => log::LevelFilter::Debug,
+    });
+}
+
 // Re-export the big-number crate of the results, so that callers can name its types and
 // traits without depending on a matching version themselves.
 pub use malachite;
@@ -327,8 +380,11 @@ mod tests {
         assert_eq!(check_intnums(&zero, 2, CYKind::Threefold), Ok(()));
         // For an n-fold the first index is a reference surface, and only the other two are
         // unordered.
-        let nfold = HashMap::from([((0, 0, 1), 2), ((1, 0, 1), 3), ((5, 1, 1), 1)]);
+        let nfold = HashMap::from([((0, 0, 1), 2), ((1, 0, 1), 3), ((2, 1, 1), 1)]);
         assert_eq!(check_intnums(&nfold, 2, CYKind::Nfold), Ok(()));
+        // The surfaces are numbered without gaps, since each number takes a component.
+        let gap = HashMap::from([((0, 0, 1), 2), ((5, 1, 1), 1), ((3, 1, 1), 0)]);
+        assert!(check_intnums(&gap, 2, CYKind::Nfold).is_err());
         assert!(check_intnums(&nfold, 2, CYKind::Threefold).is_err());
         let twice = HashMap::from([((0, 0, 1), 2), ((0, 1, 0), 2)]);
         assert!(check_intnums(&twice, 2, CYKind::Nfold).is_err());

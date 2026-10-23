@@ -41,6 +41,35 @@ use super::Error;
 use rayon::prelude::*;
 use std::sync::Mutex;
 
+/// Returns `$go` from the function with `$level` the level layout of the box `$level_box` in
+/// the narrowest word that fits: 64 bits, 128, or for keys `$key` wider than 128 bits a word
+/// as wide as theirs ([`Key::Level`]; [`Tuning::wide_levels`] forces the widest), or else
+/// [`KeyError::TooWide`].
+macro_rules! with_level {
+    ($key:ty, $level_box:expr, $grading:expr, $tuning:expr, |$level:ident| $go:expr) => {{
+        let wide = <<$key as Key>::Level as LevelWord>::BITS > u128::BITS;
+        if !$tuning.wide_levels {
+            if let Some($level) = LevelLayout::<u64>::new($level_box, $grading) {
+                return $go;
+            }
+        }
+        if !$tuning.wide_levels || !wide {
+            if let Some($level) = LevelLayout::<u128>::new($level_box, $grading) {
+                return $go;
+            }
+        }
+        if wide {
+            if let Some($level) = LevelLayout::<<$key as Key>::Level>::new($level_box, $grading) {
+                return $go;
+            }
+        }
+        Err(Error::Key(KeyError::TooWide {
+            bits: $level_box.bits(),
+            max_bits: <<$key as Key>::Level as LevelWord>::BITS - 1,
+        }))
+    }};
+}
+
 mod tree;
 
 /// Level tables larger than this are freed after each curve rather than kept for the next.
@@ -249,7 +278,7 @@ fn finalize<R: Ring, W: LevelWord>(
 }
 
 /// The working space for the exponentials, kept from one curve to the next.
-struct ExpWorkspace<W, E> {
+struct ExpWorkspace<W: LevelWord, E> {
     /// The terms of each degree, from zero to the maximum degree.
     levels: Vec<LevelTable<W, E>>,
     l: LTerms<W, E>,
@@ -312,8 +341,6 @@ impl<W: LevelWord, E: Copy + Default + PartialEq> ExpWorkspace<W, E> {
 struct Shard<K, E> {
     map: SlotMap<K, E>,
     heap: DegreeHeap,
-    /// The final terms taken out of the map, nonzero, each part in order of degree and key.
-    done: Vec<SparsePoly<K, E>>,
     /// Space for [`Shard::fold_ordered`]: the terms in order, by curve, buffer and index,
     /// and the hashes of their keys.
     order: Vec<(u32, u32, u32)>,
@@ -322,13 +349,9 @@ struct Shard<K, E> {
 
 impl<K: Key, E: Copy + Default + PartialEq> Shard<K, E> {
     /// Takes the terms of degree below `below` out of the map, which are final once the
-    /// curves below it are applied, when they are a ninth of it or more: the nonzero ones to
-    /// [`Shard::done`], and the zero ones, most of them, away. Every term left is still in the
-    /// heap.
-    fn evict(&mut self, below: u32) {
-        if 8 * self.map.len() < 9 * self.heap.len() + 4096 {
-            return;
-        }
+    /// curves below it are applied: the nonzero ones, in order of degree and key, and the
+    /// zero ones, most of them, away. Every term left is still in the heap.
+    fn evict(&mut self, below: u32) -> SparsePoly<K, E> {
         let width = self.map.width();
         let (mut fin, mut keep) = (Vec::new(), Vec::new());
         for s in 0..self.map.len() as u32 {
@@ -343,9 +366,6 @@ impl<K: Key, E: Copy + Default + PartialEq> Shard<K, E> {
         for &s in &fin {
             part.push(self.map.key(s), self.map.deg(s), self.map.values(s));
         }
-        if !part.is_empty() {
-            self.done.push(part);
-        }
         let mut map = SlotMap::new(width, keep.len() + keep.len() / 4 + 16);
         let mut heap = DegreeHeap::new();
         for &s in &keep {
@@ -354,13 +374,7 @@ impl<K: Key, E: Copy + Default + PartialEq> Shard<K, E> {
             heap.push(map.deg(t), t);
         }
         (self.map, self.heap) = (map, heap);
-    }
-
-    /// The nonzero terms, in parts.
-    fn finish(mut self) -> Vec<SparsePoly<K, E>> {
-        let rest = self.map.take();
-        self.done.push(rest);
-        self.done
+        part
     }
 
     /// Subtracts the terms of `out` and empties it.
@@ -430,6 +444,32 @@ impl<K: Key, E: Copy + Default + PartialEq> Shard<K, E> {
     }
 }
 
+/// Hands `out` the terms of the shards of degree below `below`, which are final once the
+/// curves below it are applied, as one series of `width` values per term, when they are a
+/// ninth of the shards' terms or more, or always with `all`: the nonzero ones, and the zero
+/// ones, most of them, away. The result is built as the layers finish, rather than from parts
+/// merged at the end, which would hold it twice.
+fn evict<K: Key + Send, E: Copy + Default + PartialEq + Send>(
+    shards: &mut [Mutex<Shard<K, E>>],
+    below: u32,
+    all: bool,
+    width: usize,
+    out: Out<'_, K, E>,
+) {
+    let (terms, pending) = shards.iter_mut().fold((0, 0), |(t, p), s| {
+        let s = s.get_mut().unwrap();
+        (t + s.map.len(), p + s.heap.len())
+    });
+    if !all && 8 * terms < 9 * pending + 4096 * shards.len() {
+        return;
+    }
+    let parts: Vec<SparsePoly<K, E>> = shards
+        .par_iter_mut()
+        .map(|s| s.get_mut().unwrap().evict(below))
+        .collect();
+    out(SparsePoly::merge(width, parts));
+}
+
 /// The shards of the series `inst`, each with a heap of its terms.
 fn new_shards<K: Key, E: Copy + Default + PartialEq>(
     inst: &SparsePoly<K, E>,
@@ -440,7 +480,6 @@ fn new_shards<K: Key, E: Copy + Default + PartialEq>(
             Mutex::new(Shard {
                 map: SlotMap::new(inst.width(), (inst.len() + inst.len() / 8) / n_shards + 16),
                 heap: DegreeHeap::new(),
-                done: Vec::new(),
                 order: Vec::new(),
                 hashes: Vec::new(),
             })
@@ -502,11 +541,32 @@ fn emit<R: Ring, K: Key>(
     n_c: &[R::Elem],
     f: R::Elem,
 ) {
+    emit_values(
+        ring,
+        shards,
+        out,
+        src,
+        key,
+        deg,
+        n_c.iter().map(|&n| ring.mul(n, f)),
+    );
+}
+
+/// [`emit`] with the values to subtract given.
+fn emit_values<R: Ring, K: Key>(
+    ring: &R,
+    shards: &[Mutex<Shard<K, R::Elem>>],
+    out: &mut [OutBuf<K, R::Elem>],
+    src: Option<u32>,
+    key: K,
+    deg: u32,
+    values: impl IntoIterator<Item = R::Elem>,
+) {
     let s = shard_of(key, shards.len());
     let o = &mut out[s];
     o.keys.push(key);
     o.degs.push(deg);
-    o.vals.extend(n_c.iter().map(|&n| ring.mul(n, f)));
+    o.vals.extend(values);
     if let Some(src) = src {
         o.srcs.push(src);
     } else if o.keys.len() >= FLUSH {
@@ -553,12 +613,16 @@ fn group_end<K: Key>(layer: &[(K, u32)], start: usize, upto: &[usize], max_deg: 
 /// The result of an extraction.
 type Extracted<K, E> = Result<SparsePoly<K, E>, Error>;
 
+/// Where an extraction puts its result: the terms as they are final, a series at a time, each
+/// after the last in the order of degree, then key.
+pub type Out<'a, K, E> = &'a mut dyn FnMut(SparsePoly<K, E>);
+
 /// The workers of an extraction, one per thread, each behind a lock that only its thread
 /// takes.
 type Workers<W, K, E> = [Mutex<Worker<W, K, E>>];
 
 /// What a worker thread keeps from one curve to the next.
-struct Worker<W, K, E> {
+struct Worker<W: LevelWord, K, E> {
     ws: ExpWorkspace<W, E>,
     curve: Vec<i32>,
     /// One buffer per shard.
@@ -567,7 +631,7 @@ struct Worker<W, K, E> {
 
 /// A curve whose exponential is built together with those of the other curves of its layer,
 /// one degree at a time, so that the scatters into the levels of every curve run in parallel.
-struct SyncCurve<W, K, E> {
+struct SyncCurve<W: LevelWord, K, E> {
     key: K,
     deg: u32,
     /// The highest degree of its exponential.
@@ -716,8 +780,10 @@ impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
                     tasks.push((c.sources.len() * (j1 - j0), i, q));
                 }
             }
+            // The costliest first, one task per job, so that a run of them does not stay on one
+            // thread.
             tasks.sort_unstable_by(|a, b| b.cmp(a));
-            tasks.par_iter().for_each(|&(_, i, q)| {
+            tasks.par_iter().with_max_len(1).for_each(|&(_, i, q)| {
                 let c = &curves[i];
                 let g = c.l.groups[q].0;
                 let mut target = c.levels[(e + g) as usize].lock().unwrap();
@@ -786,6 +852,41 @@ pub fn extract<R: Ring, L: KeyLayout>(
     tuning: &Tuning,
     source: Option<Source<'_, R::Elem>>,
 ) -> Extracted<L::Key, R::Elem> {
+    let mut res = SparsePoly::new(inst.width());
+    extract_into(
+        ring,
+        layout,
+        grading,
+        alpha,
+        rows,
+        inst,
+        inv,
+        max_deg,
+        lightcone,
+        tuning,
+        source,
+        &mut |part| res.append(part),
+    )?;
+    res.shrink_to_fit();
+    Ok(res)
+}
+
+/// [`extract`], handing the terms to `out` as they are final instead of returning them.
+#[allow(clippy::too_many_arguments)]
+pub fn extract_into<R: Ring, L: KeyLayout>(
+    ring: &R,
+    layout: &L,
+    grading: &[i32],
+    alpha: SparsePoly<L::Key, R::Elem>,
+    rows: Option<&[Vec<i32>]>,
+    inst: SparsePoly<L::Key, R::Elem>,
+    inv: &[R::Elem],
+    max_deg: u32,
+    lightcone: &Lightcone<L::Key>,
+    tuning: &Tuning,
+    source: Option<Source<'_, R::Elem>>,
+    out: Out<'_, L::Key, R::Elem>,
+) -> Result<(), Error> {
     let h11 = layout.dim();
     let n_alpha = rows.map_or(h11, |r| r.len());
     if alpha.width() != n_alpha
@@ -801,34 +902,18 @@ pub fn extract<R: Ring, L: KeyLayout>(
     );
     if let Some(rows) = rows.filter(|_| tuning.uses_tree(inst.width())) {
         return tree::extract_tree(
-            ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
+            ring, layout, grading, alpha, rows, inst, inv, max_deg, lightcone, tuning, source, out,
         );
     }
-    // The narrowest level word that fits.
     let n_terms = alpha.len_upto(max_deg);
-    let level_box = offset_box(layout, grading, &alpha, n_terms, max_deg).1;
-    let wide = <<L::Key as Key>::Level as LevelWord>::BITS > u128::BITS;
-    macro_rules! go {
-        ($w:ty) => {
-            extract_in::<R, L, $w>(
-                ring, layout, grading, &alpha, rows, inst, inv, max_deg, lightcone, tuning, source,
-            )
-            .expect("the level layout fits")
-        };
-    }
-    if !tuning.wide_levels && LevelLayout::<u64>::new(&level_box, grading).is_some() {
-        return go!(u64);
-    }
-    if (!tuning.wide_levels || !wide) && LevelLayout::<u128>::new(&level_box, grading).is_some() {
-        return go!(u128);
-    }
-    if wide && LevelLayout::<<L::Key as Key>::Level>::new(&level_box, grading).is_some() {
-        return go!(<L::Key as Key>::Level);
-    }
-    Err(Error::Key(KeyError::TooWide {
-        bits: level_box.bits(),
-        max_bits: <<L::Key as Key>::Level as LevelWord>::BITS - 1,
-    }))
+    let (terms, level_box) = offset_box(layout, grading, &alpha, n_terms, max_deg);
+    with_level!(L::Key, &level_box, grading, tuning, |level| {
+        extract_in(
+            ring, layout, &level, &terms, &alpha, rows, inst, inv, max_deg, lightcone, tuning,
+            source, out,
+        );
+        Ok(())
+    })
 }
 
 /// The coordinates of the terms of `alpha` up to the `n_terms`-th, one after the other, and
@@ -853,12 +938,14 @@ fn offset_box<L: KeyLayout, E: Copy + Default + PartialEq>(
     (terms, level_box)
 }
 
-/// [`extract`] with the offsets packed into `W`, or `None` if they do not fit.
+/// [`extract`] with the offsets packed by `level`, given the coordinates of the terms of
+/// `alpha` from [`offset_box`].
 #[allow(clippy::too_many_arguments)]
 fn extract_in<R: Ring, L: KeyLayout, W: LevelWord>(
     ring: &R,
     layout: &L,
-    grading: &[i32],
+    level: &LevelLayout<W>,
+    terms: &[i32],
     alpha: &SparsePoly<L::Key, R::Elem>,
     rows: Option<&[Vec<i32>]>,
     inst: SparsePoly<L::Key, R::Elem>,
@@ -867,11 +954,10 @@ fn extract_in<R: Ring, L: KeyLayout, W: LevelWord>(
     lightcone: &Lightcone<L::Key>,
     tuning: &Tuning,
     source: Option<Source<'_, R::Elem>>,
-) -> Option<Extracted<L::Key, R::Elem>> {
+    out: Out<'_, L::Key, R::Elem>,
+) {
     let h11 = layout.dim();
     let n_terms = alpha.len_upto(max_deg);
-    let (terms, level_box) = offset_box(layout, grading, alpha, n_terms, max_deg);
-    let level = LevelLayout::<W>::new(&level_box, grading)?;
     let hashes: Vec<W> = terms
         .chunks_exact(h11.max(1))
         .take(n_terms)
@@ -886,10 +972,10 @@ fn extract_in<R: Ring, L: KeyLayout, W: LevelWord>(
         })
         .collect();
     let keys = level.offset_keys(&units);
-    Some(extract_with(
-        ring, layout, &level, &keys, &hashes, alpha, rows, inst, inv, max_deg, lightcone, tuning,
-        source,
-    ))
+    extract_with(
+        ring, layout, level, &keys, &hashes, alpha, rows, inst, inv, max_deg, lightcone, tuning,
+        source, out,
+    );
 }
 
 /// [`extract`] with the level tables of `level`, and `hashes` the hashes of the offsets of
@@ -909,7 +995,9 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
     lightcone: &Lightcone<L::Key>,
     tuning: &Tuning,
     source: Option<Source<'_, R::Elem>>,
-) -> Extracted<L::Key, R::Elem> {
+    out: Out<'_, L::Key, R::Elem>,
+) {
+    log::debug!("level hashes of {} bits", W::BITS);
     let h11 = layout.dim();
     let width = inst.width();
     let ints: Vec<R::Elem> = (0..=max_deg).map(|n| ring.int(n as i64)).collect();
@@ -973,6 +1061,7 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
         if layer.is_empty() {
             continue;
         }
+        log::debug!("degree {d}: {} curves", layer.len());
         if !R::EXACT {
             sort_layer(&mut layer, &mut layer_vals, width);
         }
@@ -1033,15 +1122,9 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
                 });
             start = end;
         }
-        shards
-            .par_iter_mut()
-            .for_each(|s| s.get_mut().unwrap().evict(top));
+        evict(&mut shards, top, false, width, out);
     }
-    let parts = shards
-        .into_iter()
-        .flat_map(|s| s.into_inner().unwrap().finish())
-        .collect();
-    Ok(SparsePoly::merge(width, parts))
+    evict(&mut shards, u32::MAX, true, width, out);
 }
 
 #[cfg(test)]
@@ -1178,10 +1261,14 @@ mod tests {
             assert_eq!(got, expected, "width {width}");
 
             // The same with the offsets in 128 bits.
-            let wide = extract_in::<_, _, u128>(
+            let n_terms = alpha.len_upto(max_deg);
+            let (terms, level_box) = offset_box(&layout, &[1, 1], &alpha, n_terms, max_deg);
+            let mut wide = SparsePoly::new(width);
+            extract_in(
                 &lf,
                 &layout,
-                &[1, 1],
+                &LevelLayout::<u128>::new(&level_box, &[1, 1]).unwrap(),
+                &terms,
                 &alpha,
                 None,
                 inst.clone(),
@@ -1190,9 +1277,8 @@ mod tests {
                 &Lightcone::All,
                 &Tuning::default(),
                 None,
-            )
-            .unwrap()
-            .unwrap();
+                &mut |part| wide.append(part),
+            );
             let wide: HashMap<PackedKey, Vec<E>> = (0..wide.len())
                 .map(|i| (wide.keys()[i], wide.values(i).to_vec()))
                 .collect();

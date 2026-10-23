@@ -3,7 +3,7 @@
 use core::fmt;
 
 /// An error structure for non-positive degrees of non-identity elements.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FundamentalPeriodError {
     CYDimLessThanThree,
     InconsistentNefPartition,

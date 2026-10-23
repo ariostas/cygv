@@ -4,6 +4,7 @@
 
 use crate::cone::ConeError;
 use crate::modular::Error as ModularError;
+use crate::reference::{self, series_inversion::error::SeriesInversionError};
 use crate::{
     compute, Ambient, CandidateCone, Computed, Error, Geometry, InvariantKind, Invariants, Method,
     MoriCone, Options, Problem, Selection, Stratum,
@@ -73,7 +74,9 @@ fn parse(args: &Bound<'_, PyDict>) -> PyResult<(Problem, Options)> {
         get(args, "intnums")?.ok_or_else(|| value_error("intnums is required"))?;
     let nefpart: Vec<Vec<usize>> = get(args, "nefpart")?.unwrap_or_default();
     let fan: Option<Vec<Vec<usize>>> = get(args, "fan")?;
-    let strata: Option<Vec<(Vec<usize>, Vec<(i64, i64)>)>> = get(args, "strata")?;
+    // Each stratum as its divisors and its class, a fraction per entry.
+    type Strata = Vec<(Vec<usize>, Vec<(i64, i64)>)>;
+    let strata: Option<Strata> = get(args, "strata")?;
     let ambient = match (fan, strata) {
         (Some(_), Some(_)) => {
             return Err(value_error(
@@ -157,7 +160,9 @@ fn parse(args: &Bound<'_, PyDict>) -> PyResult<(Problem, Options)> {
             ))
         })?,
     };
-    let hilbert_bases: Option<Vec<(Vec<usize>, Vec<Vec<i32>>)>> = get(args, "hilbert_bases")?;
+    // Each cone as its divisors and the columns of its Hilbert basis.
+    type Bases = Vec<(Vec<usize>, Vec<Vec<i32>>)>;
+    let hilbert_bases: Option<Bases> = get(args, "hilbert_bases")?;
     let hilbert_bases = hilbert_bases
         .map(|bases| {
             bases
@@ -198,8 +203,15 @@ fn parse(args: &Bound<'_, PyDict>) -> PyResult<(Problem, Options)> {
 fn to_py_err(e: Error) -> PyErr {
     let computation = matches!(
         e,
-        Error::MoriCone(ConeError::TooLarge)
-            | Error::Modular(ModularError::NotStable | ModularError::NotInvertible)
+        Error::MoriCone(ConeError::TooLarge | ConeError::Parallelepiped(_))
+            | Error::Modular(
+                ModularError::NotStable { .. }
+                    | ModularError::CertifyPrimes { .. }
+                    | ModularError::NotInvertible
+            )
+            | Error::Reference(reference::Error::SeriesInversion(
+                SeriesInversionError::NonIntegerGVError
+            ))
     );
     if computation {
         ComputationError::new_err(e.to_string())
@@ -249,6 +261,9 @@ pub fn compute_py(kind: &str, args: &Bound<'_, PyDict>) -> PyResult<Output> {
     };
     let (problem, options) = parse(args)?;
     // The computation runs in a process of its own (see hkty.py).
+    if let Some(verbosity) = get::<u8>(args, "verbose")? {
+        crate::log_to_stderr(verbosity);
+    }
     if options.low_memory {
         crate::return_freed_memory();
     }

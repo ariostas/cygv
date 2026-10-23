@@ -77,6 +77,10 @@ pub fn facets(generators: &DMatrix<i32>) -> Result<Inequalities, TooLarge> {
 
 /// The extreme rays and the lineality space of the cone cut out by the columns of
 /// `hyperplanes` and `equations`, which must have the same number of rows (or no columns).
+///
+/// # Panics
+///
+/// Panics if both have columns and their numbers of rows differ.
 pub fn rays(hyperplanes: &DMatrix<i32>, equations: &DMatrix<i32>) -> Result<Generators, TooLarge> {
     let n = if hyperplanes.ncols() > 0 {
         hyperplanes.nrows()
@@ -175,7 +179,11 @@ fn insert(set: &mut [u64], i: usize) {
 /// `n`-dimensional `vectors`, both canonical as [`Inequalities`] describes.
 fn dual(n: usize, mut vectors: Vectors) -> Result<(Vectors, Vectors), TooLarge> {
     vectors.retain(|v| v.iter().any(|&x| x != 0));
-    vectors.sort_by_cached_key(|v| (v.iter().map(|x| x.unsigned_abs()).sum::<u128>(), v.clone()));
+    // By 1-norm and then entries, the vectors moved next to their norms rather than cloned.
+    let norm = |v: &[i128]| v.iter().map(|x| x.unsigned_abs()).sum::<u128>();
+    let mut keyed: Vec<(u128, Vec<i128>)> = vectors.into_iter().map(|v| (norm(&v), v)).collect();
+    keyed.sort_unstable();
+    let mut vectors: Vectors = keyed.into_iter().map(|(_, v)| v).collect();
     vectors.dedup();
     let words = vectors.len().div_ceil(64);
 
@@ -227,12 +235,19 @@ fn dual(n: usize, mut vectors: Vectors) -> Result<(Vectors, Vectors), TooLarge> 
             .collect::<Result<Vec<_>, _>>()?;
         let positive: Vec<usize> = (0..rays.len()).filter(|&i| sides[i] > 0).collect();
         let negative: Vec<usize> = (0..rays.len()).filter(|&i| sides[i] < 0).collect();
+        // Two rays of a cone of dimension n with a lineality space of dimension l span a
+        // face of it of dimension l + 2 only if they are tight on n - l - 2 inequalities or
+        // more, which is cheap to check first.
+        let need = (n - lineality.len()).saturating_sub(2) as u32;
         let mut new = Vec::new();
         for &i in &positive {
             for &j in &negative {
                 let common: Vec<u64> = (rays[i].tight.iter().zip(&rays[j].tight))
                     .map(|(a, b)| a & b)
                     .collect();
+                if common.iter().map(|c| c.count_ones()).sum::<u32>() < need {
+                    continue;
+                }
                 let adjacent = (0..rays.len()).all(|m| {
                     m == i || m == j || common.iter().zip(&rays[m].tight).any(|(c, t)| c & !t != 0)
                 });

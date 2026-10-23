@@ -26,6 +26,11 @@ use nalgebra::{DMatrix, RowDVector};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+/// The largest entry of a ray. The determinant of four rays by fraction-free elimination
+/// multiplies two minors of three, each at most $3^{3/2} B^3$, which for $B = 2^{20}$ is
+/// below $2^{125}$.
+const MAX_RAY: i64 = 1 << 20;
+
 /// Why the fan or the intersection numbers were rejected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FanError {
@@ -42,6 +47,8 @@ pub enum FanError {
     NotReflexive,
     /// A ray is interior to a facet of the convex hull of the rays.
     InteriorToFacet(usize),
+    /// A ray is interior to the convex hull of the rays, on none of its facets.
+    InteriorToPolytope(usize),
     /// A 2-cone of the fan is vex, which is impossible for a fine fan on a reflexive polytope.
     Vex2Cone([usize; 2]),
     /// The Mori cone contains a line, i.e. the fan is not regular.
@@ -78,6 +85,10 @@ impl fmt::Display for FanError {
                 f,
                 "the ray of divisor {i} is interior to a facet of the polytope of the rays"
             ),
+            Self::InteriorToPolytope(i) => write!(
+                f,
+                "the ray of divisor {i} is interior to the polytope of the rays"
+            ),
             Self::Vex2Cone(s) => write!(
                 f,
                 "the 2-cone {s:?} is vex, which is impossible for a fine fan on a reflexive \
@@ -87,7 +98,8 @@ impl fmt::Display for FanError {
             Self::NotRegular => write!(f, "the fan is not regular (its Mori cone has a line)"),
             Self::NonpositiveGrading => write!(
                 f,
-                "the grading vector must have h11 entries and be positive on the Mori cone"
+                "the grading vector must have h11 entries and be positive on the Mori cone, \
+                 which has none if the fan is not regular"
             ),
             Self::InvalidIntnums => write!(
                 f,
@@ -157,6 +169,10 @@ impl Fan {
         let rays: Vec<[i64; 4]> = (0..n)
             .map(|i| std::array::from_fn(|k| kernel[k][i]))
             .collect();
+        // Bounded so that they fit an `i32` and the determinants of four of them an `i128`.
+        if rays.iter().flatten().any(|x| x.abs() > MAX_RAY) {
+            return Err(FanError::TooLarge);
+        }
         let q: Vec<Vec<i64>> = (0..n)
             .map(|i| charges.iter().map(|r| r[i]).collect())
             .collect();
@@ -276,6 +292,9 @@ impl Fan {
                     .collect()
             })
             .collect();
+        if let Some(i) = on.iter().position(Vec::is_empty) {
+            return Err(FanError::InteriorToPolytope(i));
+        }
         if let Some(i) = on.iter().position(|f| f.len() < 2) {
             return Err(FanError::InteriorToFacet(i));
         }
@@ -337,7 +356,7 @@ impl Fan {
                         .collect()
                 })
                 .collect();
-            mult = gcd(mult, det(&minor).unwrap());
+            mult = gcd(mult, det(&minor).expect("the rays are bounded"));
         }
         let sigma: Vec<Vec<i64>> = [u1, wall[0], wall[1], wall[2]]
             .iter()
@@ -345,7 +364,7 @@ impl Fan {
             .collect();
         let d_u1 = Rational::from_integers(
             Integer::from(mult),
-            Integer::from(det(&sigma).unwrap().abs()),
+            Integer::from(det(&sigma).expect("the rays are bounded").abs()),
         );
         let mut d = vec![Rational::from(0); self.n()];
         d[u1] = d_u1.clone();
@@ -410,17 +429,36 @@ impl Fan {
     }
 
     /// Checks that the grading vector is positive on the Mori cone, i.e. on every wall class.
-    /// That shows the Mori cone pointed, i.e. the fan regular, without computing it; otherwise
-    /// it is computed, to tell [`FanError::NotRegular`] apart.
+    /// That shows the Mori cone pointed, i.e. the fan regular, without computing it. A fan
+    /// that is not regular has no such vector, which the error does not tell apart: that would
+    /// take the Mori cone, which takes minutes for a large fan.
     pub fn check_grading(&self, grading_vector: &RowDVector<i32>) -> Result<(), FanError> {
-        if grading_vector.len() != self.h11() {
-            return Err(FanError::NonpositiveGrading);
-        }
-        if positive(grading_vector, &self.wall_classes()?) {
+        if grading_vector.len() == self.h11() && positive(grading_vector, &self.wall_classes()?) {
             return Ok(());
         }
-        self.mori_cone()?;
         Err(FanError::NonpositiveGrading)
+    }
+
+    /// The first class of a wall, primitive, that is outside the cone of the inequalities
+    /// `hyperplanes` ($h \cdot C \ge 0$) and `equations` ($e \cdot C = 0$), one per column,
+    /// or `None` if the cone contains the Mori cone. The check of a Mori cone given with the
+    /// fan, without computing the fan's: a cone that misses a wall misses curves.
+    pub fn wall_outside(
+        &self,
+        hyperplanes: &DMatrix<i32>,
+        equations: &DMatrix<i32>,
+    ) -> Result<Option<Vec<i32>>, FanError> {
+        let dot = |a: &[i32], b: &[i32]| -> i64 {
+            a.iter().zip(b).map(|(&x, &y)| x as i64 * y as i64).sum()
+        };
+        let classes = self.wall_classes()?;
+        let outside = columns(&classes)
+            .find(|c| {
+                columns(hyperplanes).any(|h| dot(h, c) < 0)
+                    || columns(equations).any(|e| dot(e, c) != 0)
+            })
+            .map(<[i32]>::to_vec);
+        Ok(outside)
     }
 
     /// The strata of the vex 3-cones, sorted by their divisors; none in a non-vex phase. The
@@ -566,7 +604,8 @@ impl Ring<'_> {
         }
         let value = if distinct.len() == 4 {
             let rows: Vec<Vec<i64>> = m.iter().map(|&i| fan.rays[i].to_vec()).collect();
-            Rational::from_integers(Integer::from(1), Integer::from(det(&rows).unwrap()).abs())
+            let det = det(&rows).expect("the rays are bounded");
+            Rational::from_integers(Integer::from(1), Integer::from(det).abs())
         } else {
             // A repeated divisor D_i is replaced by a linearly equivalent combination of the
             // divisors outside the face: with <u, v_i> = 1 and <u, v_j> = 0 on the face's other

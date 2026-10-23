@@ -129,8 +129,9 @@ pub struct Options {
     pub low_memory: bool,
     /// The Hilbert bases of the cones $K_T$ (see [`crate::cone::ConeData`]), computed by an
     /// external program such as Normaliz, which the modular pipeline then uses instead of
-    /// computing them (the reference pipeline does not need them). They are trusted: an
-    /// element missing from them drops curve classes.
+    /// computing them (the reference pipeline only checks them). They must list every set
+    /// $T$ of one or two divisors, and in a vex phase the divisors of every stratum, and are
+    /// trusted: an element missing from them drops curve classes.
     pub hilbert_bases: Option<Vec<CandidateCone>>,
     /// The tuning of the modular pipeline.
     pub tuning: modular::Tuning,

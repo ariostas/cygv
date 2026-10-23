@@ -52,14 +52,34 @@ pub trait LevelWord: Copy + Ord + Default + Debug + Send + Sync + 'static {
 
     /// The top `bits` bits, for `bits` between 1 and 32.
     fn top(self, bits: u32) -> usize;
+
+    /// The word as the tables store it: a `u128` as two `u64`, whose alignment of 8 keeps an
+    /// entry of it and an 8-byte value at 24 bytes rather than 32. Zero stores as the default.
+    type Stored: Copy + Default + PartialEq + Debug + Send + Sync;
+
+    fn store(self) -> Self::Stored;
+
+    fn load(stored: Self::Stored) -> Self;
 }
 
 /// The inverse of an odd number modulo $2^{64}$ or $2^{128}$, by Newton's iteration, which
 /// doubles the number of correct low bits each time, starting from three ($m m \equiv 1
 /// \pmod 8$).
 macro_rules! level_word {
-    ($t:ty, $mul:expr) => {
+    ($t:ty, $mul:expr, $stored:ty, $store:expr, $load:expr) => {
         impl LevelWord for $t {
+            type Stored = $stored;
+
+            #[inline]
+            fn store(self) -> $stored {
+                $store(self)
+            }
+
+            #[inline]
+            fn load(stored: $stored) -> Self {
+                $load(stored)
+            }
+
             const BITS: u32 = <$t>::BITS;
             const MUL: Self = $mul;
             const MUL_INV: Self = {
@@ -120,8 +140,14 @@ macro_rules! level_word {
     };
 }
 
-level_word!(u64, 0x9E37_79B9_7F4A_7C15);
-level_word!(u128, 0x9E37_79B9_7F4A_7C15_D6E8_FEB8_6659_FD93);
+level_word!(u64, 0x9E37_79B9_7F4A_7C15, u64, |x| x, |x| x);
+level_word!(
+    u128,
+    0x9E37_79B9_7F4A_7C15_D6E8_FEB8_6659_FD93,
+    [u64; 2],
+    |x: u128| [x as u64, (x >> 64) as u64],
+    |x: [u64; 2]| x[0] as u128 | (x[1] as u128) << 64
+);
 
 /// $a b \bmod 2^{64 N}$.
 const fn wide_mul<const N: usize>(a: &[u64; N], b: &[u64; N]) -> [u64; N] {
@@ -187,6 +213,18 @@ const fn wide_inverse<const N: usize>(m: &[u64; N]) -> [u64; N] {
 }
 
 impl<const N: usize> LevelWord for Wide<N> {
+    type Stored = Self;
+
+    #[inline]
+    fn store(self) -> Self {
+        self
+    }
+
+    #[inline]
+    fn load(stored: Self) -> Self {
+        stored
+    }
+
     const BITS: u32 = 64 * N as u32;
     const MUL: Self = Wide(wide_multiplier::<N>());
     const MUL_INV: Self = Wide(wide_inverse::<N>(&wide_multiplier::<N>()));
@@ -508,8 +546,8 @@ const LEVEL_MIN_CAPACITY: usize = 256;
 /// clearing it cost the number of entries rather than the capacity. Memory is only
 /// allocated on first use, and the table grows when it is three quarters full.
 #[derive(Debug, Clone)]
-pub struct LevelTable<W, V> {
-    entries: Vec<(W, V)>,
+pub struct LevelTable<W: LevelWord, V> {
+    entries: Vec<(W::Stored, V)>,
     /// The indices of the entries in use, in order of insertion.
     used: Vec<u32>,
     /// The base-2 logarithm of the capacity, when there is one.
@@ -550,14 +588,14 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
     #[inline]
     fn probe(&self, h: W) -> Result<usize, usize> {
         let mask = self.entries.len() - 1;
-        let x = h.xor(self.marker);
+        let x = h.xor(self.marker).store();
         let mut i = h.top(self.log2);
         loop {
             let k = self.entries[i].0;
             if k == x {
                 return Ok(i);
             }
-            if k == W::default() {
+            if k == W::Stored::default() {
                 return Err(i);
             }
             i = (i + 1) & mask;
@@ -582,7 +620,7 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
         if self.entries.is_empty() {
             return self.insert(h, None);
         }
-        let x = h.xor(self.marker);
+        let x = h.xor(self.marker).store();
         let mask = self.entries.len() - 1;
         let mut i = h.top(self.log2);
         loop {
@@ -590,7 +628,7 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
             if k == x {
                 return &mut self.entries[i].1;
             }
-            if k == W::default() {
+            if k == W::Stored::default() {
                 return self.insert(h, Some(i));
             }
             i = (i + 1) & mask;
@@ -604,7 +642,7 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
     fn insert(&mut self, h: W, at: Option<usize>) -> &mut V {
         let at = match at {
             None => {
-                self.entries = vec![(W::default(), V::default()); LEVEL_MIN_CAPACITY];
+                self.entries = vec![(W::Stored::default(), V::default()); LEVEL_MIN_CAPACITY];
                 self.log2 = LEVEL_MIN_CAPACITY.trailing_zeros();
                 self.probe(h).unwrap_err()
             }
@@ -614,7 +652,7 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
             }
             Some(i) => i,
         };
-        self.entries[at] = (h.xor(self.marker), V::default());
+        self.entries[at] = (h.xor(self.marker).store(), V::default());
         self.used.push(at as u32);
         &mut self.entries[at].1
     }
@@ -625,13 +663,13 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
         assert!(capacity <= 1 << 32, "too many entries for a level table");
         let old = core::mem::replace(
             &mut self.entries,
-            vec![(W::default(), V::default()); capacity],
+            vec![(W::Stored::default(), V::default()); capacity],
         );
         self.log2 += 1;
         for i in self.used.iter_mut() {
             let entry = old[*i as usize];
-            let mut j = entry.0.xor(self.marker).top(self.log2);
-            while self.entries[j].0 != W::default() {
+            let mut j = W::load(entry.0).xor(self.marker).top(self.log2);
+            while self.entries[j].0 != W::Stored::default() {
                 j = (j + 1) & (capacity - 1);
             }
             self.entries[j] = entry;
@@ -662,14 +700,14 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
     pub fn iter(&self) -> impl Iterator<Item = (W, V)> + '_ {
         self.used.iter().map(|&i| {
             let (k, v) = self.entries[i as usize];
-            (k.xor(self.marker), v)
+            (W::load(k).xor(self.marker), v)
         })
     }
 
     /// Removes all entries, keeping the memory.
     pub fn clear(&mut self) {
         for &i in &self.used {
-            self.entries[i as usize].0 = W::default();
+            self.entries[i as usize].0 = W::Stored::default();
         }
         self.used.clear();
     }
@@ -688,8 +726,8 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
 /// grows by [`COMPACT_GROWTH`], and no list of the entries in use, so that it holds about
 /// 1.4 entries per term rather than [`LevelTable`]'s two to three.
 #[derive(Debug, Clone)]
-pub struct CompactTable<W, V> {
-    entries: Vec<(W, V)>,
+pub struct CompactTable<W: LevelWord, V> {
+    entries: Vec<(W::Stored, V)>,
     len: usize,
     marker: W,
 }
@@ -739,14 +777,14 @@ impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
         if n == 0 {
             return None;
         }
-        let x = h.xor(self.marker);
+        let x = h.xor(self.marker).store();
         let mut i = Self::bucket(h, n);
         loop {
             let k = self.entries[i].0;
             if k == x {
                 return Some(&mut self.entries[i].1);
             }
-            if k == W::default() {
+            if k == W::Stored::default() {
                 return None;
             }
             i += 1;
@@ -764,14 +802,14 @@ impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
         if n == 0 {
             return self.insert(h);
         }
-        let x = h.xor(self.marker);
+        let x = h.xor(self.marker).store();
         let mut i = Self::bucket(h, n);
         loop {
             let k = self.entries[i].0;
             if k == x {
                 return &mut self.entries[i].1;
             }
-            if k == W::default() {
+            if k == W::Stored::default() {
                 break;
             }
             i += 1;
@@ -800,12 +838,12 @@ impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
         assert!(capacity <= 1 << 32, "too many entries for a compact table");
         let old = core::mem::replace(
             &mut self.entries,
-            vec![(W::default(), V::default()); capacity],
+            vec![(W::Stored::default(), V::default()); capacity],
         );
         for entry in old {
-            if entry.0 != W::default() {
-                let mut j = Self::bucket(entry.0.xor(self.marker), capacity);
-                while self.entries[j].0 != W::default() {
+            if entry.0 != W::Stored::default() {
+                let mut j = Self::bucket(W::load(entry.0).xor(self.marker), capacity);
+                while self.entries[j].0 != W::Stored::default() {
                     j += 1;
                     if j == capacity {
                         j = 0;
@@ -814,9 +852,9 @@ impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
                 self.entries[j] = entry;
             }
         }
-        let x = h.xor(self.marker);
+        let x = h.xor(self.marker).store();
         let mut i = Self::bucket(h, capacity);
-        while self.entries[i].0 != W::default() {
+        while self.entries[i].0 != W::Stored::default() {
             i += 1;
             if i == capacity {
                 i = 0;
@@ -852,8 +890,8 @@ impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
         let marker = self.marker;
         self.entries
             .iter()
-            .filter(|e| e.0 != W::default())
-            .map(move |&(k, v)| (k.xor(marker), v))
+            .filter(|e| e.0 != W::Stored::default())
+            .map(move |&(k, v)| (W::load(k).xor(marker), v))
     }
 
     /// The terms of the entries in `range`, a range of `0..capacity()`, as hashes and values.
@@ -861,8 +899,8 @@ impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
         let marker = self.marker;
         self.entries[range]
             .iter()
-            .filter(|e| e.0 != W::default())
-            .map(move |&(k, v)| (k.xor(marker), v))
+            .filter(|e| e.0 != W::Stored::default())
+            .map(move |&(k, v)| (W::load(k).xor(marker), v))
     }
 
     /// Removes all entries and frees the memory.
@@ -878,6 +916,14 @@ mod tests {
     use crate::modular::key::{KeyLayout, PackedKey, PackedLayout, Word};
     use crate::modular::TestRng;
     use std::collections::HashMap;
+
+    /// An entry of a 128-bit hash and residues of one prime takes 24 bytes, not 32.
+    #[test]
+    fn test_entry_size() {
+        assert_eq!(size_of::<(<u128 as LevelWord>::Stored, u64)>(), 24);
+        assert_eq!(<u128 as LevelWord>::load(u128::MUL.store()), u128::MUL);
+        assert_eq!(0u128.store(), [0, 0]);
+    }
 
     #[test]
     fn test_inverses() {

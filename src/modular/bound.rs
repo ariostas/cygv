@@ -66,6 +66,16 @@ impl Bound {
         }
     }
 
+    /// The larger of two bounds, exactly.
+    pub fn max(self, other: Self) -> Self {
+        // Normalized, nonzero bounds compare by exponent and then mantissa.
+        if self.m == 0.0 || (other.m != 0.0 && (self.e, self.m) < (other.e, other.m)) {
+            other
+        } else {
+            self
+        }
+    }
+
     /// The exact value.
     pub fn to_rational(self) -> Rational {
         Rational::try_from(f64::from(self.m)).expect("the mantissa is finite") << self.e
@@ -90,7 +100,7 @@ impl Ring for BoundRing {
         Bound { m: 1.0, e: 0 }
     }
 
-    /// The absolute value, rounded up above $2^{53}$.
+    /// The absolute value, rounded up from $2^{24}$.
     #[inline]
     fn int(&self, v: i64) -> Bound {
         let a = v.unsigned_abs();

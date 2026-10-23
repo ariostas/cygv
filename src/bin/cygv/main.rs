@@ -5,7 +5,7 @@ use cygv::io::Input;
 use cygv::{InvariantKind, Method};
 use std::error::Error;
 use std::fs::File;
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, BufWriter, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -117,6 +117,10 @@ struct Args {
     /// Prefer memory to speed, for every input
     #[arg(long)]
     low_memory: bool,
+    /// Write the progress to stderr: the stages and passes, and with -vv also the degrees of
+    /// each pass
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
 }
 
 /// Parse the name of a kind of invariants.
@@ -144,6 +148,12 @@ fn is_stdio(path: Option<&PathBuf>) -> bool {
 /// Read the input data from a file or from the standard input.
 fn read_input(path: Option<&PathBuf>) -> Result<String, Box<dyn Error>> {
     if is_stdio(path) {
+        if io::stdin().is_terminal() {
+            eprintln!(
+                "Reading the input from the terminal; end it with Ctrl-D, or give a file with \
+                 --file (see --help)"
+            );
+        }
         let mut data = String::new();
         io::stdin()
             .read_to_string(&mut data)
@@ -167,9 +177,20 @@ fn open_output(path: Option<&PathBuf>) -> Result<Box<dyn Write>, Box<dyn Error>>
 }
 
 fn run(args: &Args) -> Result<(), Box<dyn Error>> {
+    if args.verbose > 0 {
+        cygv::log_to_stderr(args.verbose);
+    }
     let data = read_input(args.file.as_ref())?;
     let mut inputs = Input::load_all(&data)?;
-    for input in inputs.iter_mut() {
+    // With several documents, the errors say which one they are about.
+    let several = inputs.len() > 1;
+    let which = |i: usize, input: &Input| match (several, &input.name) {
+        (false, _) => String::new(),
+        (true, Some(name)) => format!("in document {} ({name}): ", i + 1),
+        (true, None) => format!("in document {}: ", i + 1),
+    };
+    for (i, input) in inputs.iter_mut().enumerate() {
+        let which = which(i, input);
         if let Some(n_threads) = args.threads {
             input.options.n_threads = Some(n_threads as usize);
         }
@@ -177,7 +198,12 @@ fn run(args: &Args) -> Result<(), Box<dyn Error>> {
             input.options.method = method;
         }
         if let Some(max_deg) = args.max_deg {
-            input.set_max_deg(max_deg)?;
+            input.set_max_deg(max_deg).map_err(|_| {
+                format!(
+                    "{which}--max-deg only applies to inputs that give max_deg or \
+                     target_points"
+                )
+            })?;
         }
         if let Some(kind) = args.invariants {
             input.kind = kind;
@@ -189,15 +215,20 @@ fn run(args: &Args) -> Result<(), Box<dyn Error>> {
             input.options.low_memory = true;
         }
         // Every document is checked before any is computed.
-        input.validate()?;
+        input.validate().map_err(|e| format!("{which}{e}"))?;
     }
 
     if inputs.iter().any(|input| input.options.low_memory) {
         cygv::return_freed_memory();
     }
     let mut writer = open_output(args.output.as_ref())?;
-    for input in inputs.iter() {
-        let results = input.compute()?;
+    for (i, input) in inputs.iter().enumerate() {
+        if several {
+            log::info!(target: "cygv", "document {}", i + 1);
+        }
+        let results = input
+            .compute()
+            .map_err(|e| format!("{}{e}", which(i, input)))?;
         input.write_results(&mut writer, &results)?;
         // The results of each document are flushed as they are computed, so that they
         // can be inspected while the remaining ones are still being computed.

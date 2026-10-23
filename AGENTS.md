@@ -55,6 +55,11 @@ name their job `build-and-test`, so each passes its own `key` (`dev` for the Rus
 builds the dev profile, `release` for the Python one); sharing an entry would leave whichever job
 saved second restoring a `target/` built with the wrong profile.
 
+The Rust workflow also has a `lint` job (its own cache key, `lint`): `cargo fmt --check` and
+clippy with `-D warnings`, on all targets and on the Python bindings (`--no-default-features
+--features python`), since pre-commit.ci skips the hooks that need a Rust toolchain. The
+release profile with LTO is built by the Python workflow, through maturin.
+
 `[tool.uv] cache-keys` in `pyproject.toml` lists `src/**/*.rs`; without it uv would not rebuild the
 editable extension when only Rust sources change, and `uv run pytest` would test a stale build.
 `uv.lock` is gitignored — it pins only the dev environment and does not affect consumers.
@@ -70,7 +75,7 @@ so it should be treated as a real test run rather than rubber-stamped.
 
 Every workflow that compiles Rust enforces the lockfile, so a manifest change committed without its
 lockfile update fails instead of silently re-resolving. The Rust workflow passes `--locked` to
-cargo directly; the Python and deploy workflows reach cargo through maturin and set
+cargo directly, as does the deploy workflow's `cargo publish`; the Python and deploy workflows reach cargo through maturin and set
 `MATURIN_PEP517_ARGS=--locked` instead. Two wrinkles there: cibuildwheel needs it repeated inside
 `CIBW_ENVIRONMENT` to reach the container builds, and maturin's `build_sdist` never reads the
 variable, so the sdist job is unaffected by it.
@@ -97,13 +102,18 @@ external program such as Normaliz (`Options::hilbert_bases`, with the cone given
 description method, in `i128` with overflow checks (`TooLarge`), with a canonical output
 (equations in reduced row echelon form, each hyperplane reduced to vanish at their pivots).
 It sorts its input by 1-norm first, which is what makes it fast on Mori cones of thousands of
-generators. `src/cone/hilbert.rs` (phase 7b): `cone::hilbert_basis` and `cone::cone_data`
+generators, and tests two rays for adjacency only if they share at least $n - l - 2$ tight
+inequalities ($l$ the dimension of the lineality space so far), a cheap necessary condition
+that cut a hard case from minutes to seconds. `src/cone/hilbert.rs` (phase 7b): `cone::hilbert_basis` and `cone::cone_data`
 compute Hilbert bases by Pottier's algorithm (Normaliz's dual algorithm): cut a pointed cone
 with a known basis by one inequality at a time, pairing elements of opposite signs and
 dropping the sums an element of the same sign lies below. Its reduction is only sound for a
-pointed cone, so it starts from the simplicial cone of the first independent facets (its
+pointed cone, so it starts from the simplicial cone of the first independent facets (found
+modulo a prime, incrementally, with the exact rank as the fallback), not from $\pm e_i$: its
 basis from the lattice points of the fundamental parallelepiped, at most
-`MAX_PARALLELEPIPED`), not from $\pm e_i$, and a face is handled in a lattice basis of its
+`MAX_PARALLELEPIPED`, enumerated once each from the box of the diagonal of the Hermite normal
+form of the rays' lattice (`representatives`) and kept only while no other lies below them
+(`Antichain`), so that the group is never held, and a face is handled in a lattice basis of its
 span. `cone_data` cuts the Mori cone's basis by the rows $Q_r$ down a tree (each row cut or
 left out, at most two left out, three for a stratum), dropping sums above `max_deg`, which
 is sound because every cone is then inside the Mori cone. As in #102's `ed93fb4`, only the
@@ -151,22 +161,25 @@ width; 64-bit keys were measured and gave nothing, see `PLAN.md` 5.3), `lattice`
 C's `setup_lattice`: when the vectors the candidates are sums of span a lattice of rank
 below $h^{1,1}$, as on a face of the Mori cone, the run keys the curves by their coordinates
 in an LLL-reduced basis of it, which takes a face of rank 24 at $h^{1,1} = 491$ from ~300
-bits to ~120; `Lattice::spanned` goes through the vectors shortest first, solving for the
-coordinates in floating point and checking them exactly, adding a vector independent modulo
-a 61-bit prime, joining one of fractional coordinates exactly, and reducing by Cohen's
-integral LLL in malachite integers; `Setup` moves the source, the targets, the grading
+bits to ~120; `Lattice::spanned` finds the rank modulo a 61-bit prime first, returning
+before any reduction when it is full, reduces the independent vectors once by Cohen's
+integral LLL in malachite integers, and then goes through the vectors shortest first,
+solving for the coordinates in floating point and checking them exactly, and joining one of
+fractional coordinates exactly; `Setup` moves the source, the targets, the grading
 vector and the geometry into it (`Reduced`, `Geometry::in_lattice`), `pass` restricts
 $\alpha$ to it after the instanton (`restrict_series`) unless the extraction goes along the
 rows, and the output goes back; `Tuning::lattice` turns it off), `table` (open-addressing tables and sparse series over those keys, each entry
 holding a run-time number of values; the index of a `SlotMap` has 8-byte buckets of a tag
-and a slot) and `level` (the extraction's level tables, `PLAN.md` phase 8b, after the C of
+and a slot, at most three quarters full) and `level` (the extraction's level tables, `PLAN.md` phase 8b, after the C of
 PR #102: they key the offsets of an exponential by the linear hash $H = \varphi(m) M$, with
 $\varphi$ packing a box of the offsets, less the coordinate the degree fixes, into a `u64`
 when it fits, a `u128` otherwise, and for wide keys into a word as wide as theirs
 (`Key::Level`), so that a scatter's target is one addition, and
 `OffsetKeys` turns a hash back into a key only for the emitted terms; the tree's nodes keep
 their terms in `CompactTable`s, of any capacity and filled to 13/16, which take two thirds of
-the memory of a `LevelTable` and are as fast). A *pass* (`pass`, generic over the `Ring`) runs the
+the memory of a `LevelTable` and are as fast; both store a `u128` hash as two `u64`,
+`LevelWord::Stored`, so that an entry with one prime's residues takes 24 bytes, not 32, and
+`extraction`'s `with_level!` picks the word for both kinds of extraction). A *pass* (`pass`, generic over the `Ring`) runs the
 stages modulo `NL` primes: `candidates` (from a `CandidateSource`: either
 the sums of the Hilbert basis elements of each $K_T$ of the cone data, skipping cones contained
 in another and two-divisor cones whose form $Q_s K^{(k)} Q_u$ vanishes, as the C does, or the
@@ -180,7 +193,8 @@ a vex phase both also keep the curves of negative anticanonical degree on a stra
 $c_1$ and the second derivatives already contracted with the bilinear forms, $S_2$, to which
 a curve on a stratum adds $U_0\,(w \cdot d_S)$, the reference's $c_0^{-1}$ `vex[t]` term
 contracted with the grading; the strata reach `Geometry` through `with_strata`), `instanton` (sparse
-products and reciprocal, $\alpha$, and the instanton series $I$), `extraction` (the
+products and reciprocal, $\alpha$, and the instanton series $I$, which it takes a block of
+degrees at a time so that only one block is accumulated at once), `extraction` (the
 coefficients of $I$ in the basis $z^C \exp(C\cdot\alpha)$, curve by curve in order of degree,
 each exponential built by the Euler recurrence in per-degree level tables, the emitted terms
 subtracted through shards whose buffers are hashed first and prefetched while they are
@@ -193,9 +207,11 @@ exponential of the other rows as before; the pass takes $\beta$ along the rows w
 tree is used, which `extraction::Tuning::tree_depth` and `uses_tree` decide: by default for a
 series of one component, while an n-fold's several components go curve by curve, the tree
 taking them one at a time; the shards evict the final terms after every layer, most of them
-zero, and two options of the tuning trade time for memory, which the low-memory mode turns
+zero, the others handed in order to a callback (`extract_into`; `extract` appends them to its
+result), so that the result is never held twice, and two options of the tuning trade time for memory, which the low-memory mode turns
 on: `sinks`, which sends the terms of the degrees no power reaches beyond straight to the
-root, into tables split by hash that the threads fill through buffers, and `leaf_window`,
+root, into tables split by hash that the threads fill through buffers (for a ring that is
+not exact, by pieces whose buffers each part takes in order, `sink_in_order`), and `leaf_window`,
 which has the leaves take a window of degrees at a time, every curve building its
 exponential again for each later window) and `multicover` (the GV
 invariants from those, by gcd of the coordinates, solved in place in order of degree;
@@ -204,15 +220,21 @@ next primes until `crt::Residues` gives a stable lift (the lift from all but the
 `check_primes` primes must agree with those), skipping a pass whose primes cannot invert a
 denominator of the strata (`Error::NotInvertible`), with `Options` for the lane count (1 to 4 primes
 per pass; by default `choose_lanes` predicts it from a probe run at 3/4 of the degree, as the
-C's driver does), a minimum number of primes, the thread count, the extraction's tuning,
+C's driver does), a minimum number of primes and a maximum (`max_primes`, 32 by default
+whatever the lane count, after which an unstable lift is `Error::NotStable` and bounds that
+need more are `Error::CertifyPrimes`), the thread count, the extraction's tuning,
 `certify` and `low_memory` (`PLAN.md` phase 10: one prime per pass, the sinks and leaf windows
 of one degree, for about a third of the memory in two and a half times the time; the
 command line and the Python module also call `return_freed_memory`, which sets glibc's
 `M_MMAP_THRESHOLD` so that large freed blocks go back to the system, a third less resident
 memory); big integers (`malachite::Integer`) are only built by `crt`, for the final values.
 With `certify` (the certifier, `PLAN.md` phase 8, after the C's `cgv_maj` and `certify.py`),
-`lifted` runs `bounds` on the lift and `primes_needed` compares every bound with half the
-product of the primes, adding passes until it is below: `bounds` is a `pass` over `BoundRing`
+`lifted` runs the majorant pass on the lift and `primes_needed` compares the largest bound
+with half the product of the primes, adding passes until it is below (when the new primes
+leave the lift unchanged, `Residues::is_stable` over them, its bounds are not taken again);
+`largest_bound` folds the bounds into their maximum as the extraction finishes them, keeping
+only those up to half the maximum degree, which the multiples need (`Largest`, exactly the
+maximum of `bounds`), so the certifier's pass holds about as much as an ordinary one. `bounds` is a `pass` over `BoundRing`
 whose extraction `source` makes every curve pass on what the candidates imply,
 $\deg(C) \sum_{n \mid C} \lvert\mathrm{GV}_{C/n}\rvert / n^3$ ($n^2$ and no degree for n-folds), instead of
 its own bound, and whose exponentials go along the rows of the charges ($c_1$ along the rows
@@ -245,8 +267,9 @@ The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
 1. **`semigroup`** — builds the truncated affine semigroup $S_\sigma = \sigma \cap \mathbb{Z}^n$ of
    curve classes in the Mori cone. Four constructors select which points get computed:
    `from_data`, `with_max_degree`, `with_min_elements`, `with_target_points`. Elements are stored
-   as **columns** of a `DMatrix<i32>`, sorted by degree under the grading vector; downstream code
-   relies on that sort order and on element 0 being the identity.
+   as **columns** of a `DMatrix<i32>`, sorted by degree under the grading vector and then
+   lexicographically, so the order does not depend on hashing; downstream code relies on that
+   sort order and on element 0 being the identity. Degrees are taken in `i64`.
 2. **`fundamental_period`** — computes $\omega$, $\omega^{-1}$, and first/second derivatives of its
    coefficients (`FundamentalPeriod { c0, c1, c2, c0_inv, vex }`). Curves are bucketed by how many
    negative intersections they have with the GLSM charge matrix `q` (`group_by_neg_int`), and each
@@ -269,6 +292,14 @@ indices differently (the first index is a reference surface in the n-fold case).
 
 ### Key cross-cutting patterns
 
+- **Progress** goes through the `log` facade: `info!` for the stages, the cone data, each pass
+  of the modular pipeline and the certifier's rounds, `debug!` for each degree of a pass (or of
+  the reference's series inversion). Nothing is printed unless a logger is installed:
+  `log_to_stderr` in `src/lib.rs`, a minimal one stamping the seconds since it was installed,
+  which the CLI's `-v`/`-vv` and the Python keyword `verbose` (read by `src/python.rs`, not
+  part of `Options`) install. `hkty.py` forwards the subprocess's stderr file to `sys.stderr`
+  while it waits when `verbose` is set.
+
 - **One problem, one dispatch.** The public input is `src/problem.rs` (decided in
   `INTERFACE.md`, phase 9): a `Problem` of a `Geometry` (`q` with one row per divisor,
   `intnums`, `nefpart` as divisor indices, and `ambient`: `Plain`, `Fan(cones)` or
@@ -287,24 +318,29 @@ indices differently (the first index is a reference surface in the n-fold case).
   everything that is cheap before computing — `check_nefpart`, the dimension (with a hint
   when `q` looks transposed), `check_intnums`, `check_strata`, the fan (`Fan::new`, its
   intersection ring, its strata), the shapes of the cone and the selection, a given grading
-  vector against the fan and the generators, the target degrees, the Hilbert bases when the
+  vector against the fan's wall classes and the generators, the target degrees, the Hilbert bases when the
   cone is given by inequalities, `method: modular` with a selection it does not support, and
   certify in a vex phase — and returns `Error::Input { field, reason }` naming the field
-  (`Error::Unsupported`, `Error::MoriCone`, `Error::Modular` otherwise). `compute` then
-  resolves the cone's inequalities (given, `cone::facets` of the generators, or
-  `Fan::mori_cone`) and the default grading vector (the primitive sum of those inequalities),
-  and picks the pipeline: `Auto` runs `modular` for `MaxDeg` and `TargetPoints` and the
+  (`Error::Unsupported`, `Error::MoriCone`, `Error::Modular`, `Error::Reference` otherwise).
+  `compute` then resolves the cone's inequalities (given, `cone::facets` of the generators, or
+  `Fan::mori_cone`), checks that a cone given with a fan contains its wall classes
+  (`Fan::wall_outside`; the fan's own cone would take minutes at large $h^{1,1}$) and that the
+  target points lie in the cone, takes the default grading vector (the primitive sum of those
+  inequalities), and picks the pipeline: `Auto` runs `modular` for `MaxDeg` and `TargetPoints` and the
   reference otherwise; curve classes too wide for the modular keys are `Error::Unsupported`
   naming `method: reference`, never a silent fallback. `modular` takes its candidates from
   `Options::hilbert_bases` (checked by `check_cone_data`) or from `cone::cone_data` of the
   inequalities, truncated at the maximum degree lowered to the targets'; the reference runs on
   `cone::hilbert_basis` of the inequalities, or for `CurveClasses` on those classes as given
   (checked to lie in the cone, zero added, duplicates dropped, `Semigroup::from_data`), and
-  ignores the Hilbert bases. With `TargetPoints` and `max_deg` the reference's results are
+  checks the Hilbert bases but does not use them. Errors of the cone computations that come
+  from the input (`NotPointed`, `NonpositiveDegree`) name the Mori cone's field or the grading
+  vector's (`cone_input`). With `TargetPoints` and `max_deg` the reference's results are
   truncated by degree, since its semigroup only takes the targets. `run_hkty<T>` is generic over
   the coefficient type, which is only ever `reference::Rational` (`src/reference/rational.rs`)
-  today, takes the `InvariantKind` and `CYKind` enums at runtime, and still panics on invalid
-  input, which is why the checks come first. Adding an option means a field of `Options` (or
+  today, takes the `InvariantKind` and `CYKind` enums at runtime, and returns the error of
+  the stage that fails (`reference::Error`): the checks come first so that those are about
+  the geometry (invariants that are not integers), not about the shape of the input. Adding an option means a field of `Options` (or
   `Problem`), its key in `src/io.rs` and its keyword in `src/python.rs` and `hkty.py`. The
   computation is always exact: floating-point arithmetic (the old `prec` option) was removed.
 - **`PolynomialCoeff<T>`** (`src/reference/polynomial/coefficient.rs`) is the compound trait the
@@ -338,7 +374,8 @@ indices differently (the first index is a reference surface in the n-fold case).
   thread falls behind (a busy machine is enough), which keeps the peak at its floor instead of
   swinging by tens of MiB from run to run. Where a worker needs bignum scratch space it gets it from
   `for_each_init`, which builds it once per rayon job instead of once per item (see `CScratch` in
-  `src/reference/fundamental_period.rs`).
+  `src/reference/fundamental_period.rs`, which also tabulates the harmonic numbers as far as its
+  curves need them).
 - **Threading in `modular`** follows the same pattern: `modular::run` builds a private pool with
   `Options::threads` workers (the dispatch passes `n_threads`, which must be positive) and installs
   candidates, passes and lift in it. The candidates enumerate the cones in parallel, the period
@@ -359,7 +396,8 @@ indices differently (the first index is a reference surface in the n-fold case).
   instanton products use chunks that do not depend on the threads and merge them in order
   (`ShardedMap::add_in_order`), the exponentials sort their sources by hash, the tree sorts
   each layer by key before numbering its nodes, adds the curves' terms in their order (kept
-  a group of about a million terms at a time, `KEEP_TERMS`) and folds the subtractions in the
+  a group of about a million terms at a time, `KEEP_TERMS`), fills its sinks by pieces
+  whose buffers each part takes in their order (`sink_in_order`), and folds the subtractions in the
   order of pieces of their tables, a batch at a time (`EMIT_PIECE`, `EMIT_BATCH`; each depth
   groups the bounds' sums differently, so the bounds depend on it), and the curve-by-curve
   extraction sorts each layer and applies it in groups of curves (`GROUP_TERMS`,
@@ -377,7 +415,8 @@ indices differently (the first index is a reference surface in the n-fold case).
 
 `src/bin/cygv/main.rs` is a thin clap front end: it reads YAML from a file or stdin, parses it with
 `io::Input::load_all`, applies the overrides (`--threads`, `--method`, `--max-deg` through
-`Input::set_max_deg`, `--invariants`, `--certify`/`--no-certify`, `--low-memory`) and validates every document
+`Input::set_max_deg`, `--invariants`, `--certify`/`--no-certify`, `--low-memory`, and `-v`/`-vv`,
+which installs `log_to_stderr`) and validates every document
 before computing any, and writes one YAML document of results per input document to a file or
 stdout, flushing after each one. All of the parsing and formatting lives in `src/io.rs`, whose
 `Input` holds a `Problem`, the `InvariantKind` and the `Options`, with the field names of the
@@ -399,7 +438,7 @@ threefolds up to $h^{1,1} = 10$, the C program of PR #94 for vex phases and FRST
 FRST side of each pair mapped from its vex phase), with the expected results in the output
 format in the matching `*_gv.yaml`, compared by `tests/fixtures.rs` (the reference method too,
 on the cheap ones). The files say where each geometry comes from, and adding a fixture is a
-document in each. `tests/data/` is excluded from the published crate.
+document in each. `tests/data/` is published with the crate, since the unit tests read it.
 
 The whole CLI sits behind the default `cli` feature: `clap` and `yaml-rust2` are optional
 dependencies, `[[bin]]` declares `required-features = ["cli"]`, and both `io` (in `src/lib.rs`) and
@@ -425,10 +464,14 @@ key a curve tuple, or `(curve, surface)` for an n-fold) with `kind`, `dimension`
 `grading_vector` and a `Report` dataclass attached. The call runs in a `multiprocessing.Process`
 so Ctrl-C interrupts the computation without killing the interpreter (the Rust side installs a
 ctrlc handler that calls `exit(1)`). Exceptions raised in the subprocess keep their type: invalid
-or unsupported input is a `ValueError`, a failed computation (`NotStable`, cones too large) a
+or unsupported input is a `ValueError`, a failed computation (`NotStable`, `CertifyPrimes`,
+invariants that are not integers in the reference, cones too large) a
 `cygv.ComputationError` (a `RuntimeError` created in `src/python.rs`), and panics a
 `RuntimeError`. The subprocess's stderr is redirected to a temp file and surfaced in the raised
-`RuntimeError` when the process dies.
+`RuntimeError` when the process dies before sending a result; an exception in the parent
+(Ctrl-C there, or any other) terminates the child. `hkty.py` checks that the vectors and
+counts are integers (integral floats too) that fit their Rust types, rather than truncating
+them.
 
 Note the transpose convention: the Rust API takes column-major matrices, while the Python API
 takes row-oriented lists (`to_matrix` in `src/python.rs` treats each inner list as a column).
@@ -464,7 +507,7 @@ only run `gv-rational`. Their data comes from an external project's test set and
 against an independent HKTY implementation; the files record where each geometry comes from, and
 some drop generators above the highest degree any scenario reaches. `benches/data/cones/` holds
 their cone data, computed with Normaliz and truncated at the highest degree of the modular
-scenarios; like `tests/data/`, it is excluded from the published crate. `h11_9_plike` has none,
+scenarios; like `tests/data/`, it is published with the crate. `h11_9_plike` has none,
 since the truncation is by the other grading.
 
 - `benches/bench.rs` measures wall clock with criterion. Each scenario carries a `sample_size` and

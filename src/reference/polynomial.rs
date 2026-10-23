@@ -275,6 +275,11 @@ where
         let mut res = Self::one(&poly_props.zero);
         let max_deg = poly_props.semigroup.max_degree;
         let mut p0 = self.clone(&poly_props.zero);
+        debug_assert_eq!(
+            p0.nonzero.first(),
+            Some(&0),
+            "the constant term comes first among the nonzero terms"
+        );
         p0.nonzero.remove(0);
         let const_term = p0.coeffs.remove(&0).unwrap();
         p0.div_scalar_assign(&const_term);

@@ -22,6 +22,8 @@ pub enum IoError {
     Conflicting(&'static str, &'static str),
     /// The input is valid, but cannot be computed as asked, for the reason given.
     Unsupported(String),
+    /// An error in one of several documents, counted from 1.
+    InDocument { number: usize, error: Box<IoError> },
     /// A field has an invalid type, shape, or value.
     InvalidField {
         /// The name of the offending field.
@@ -66,6 +68,7 @@ impl fmt::Display for IoError {
                 write!(f, "the fields \"{a}\" and \"{b}\" cannot be given together")
             }
             IoError::Unsupported(reason) => write!(f, "{reason}"),
+            IoError::InDocument { number, error } => write!(f, "in document {number}: {error}"),
             IoError::InvalidField { field, reason } => {
                 write!(f, "invalid value for the field \"{field}\": {reason}")
             }

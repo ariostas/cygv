@@ -468,16 +468,17 @@ pub fn period<R: Ring, L: KeyLayout>(
             Ok((c0, c1, s2, c1r))
         })
         .collect::<Result<Vec<_>, Error>>()?;
-    let mut c0 = SparsePoly::new(1);
-    let mut c1 = SparsePoly::new(h11);
-    let mut s2 = SparsePoly::new(m);
-    let mut c1_rows = SparsePoly::new(na);
-    for (p0, p1, p2, pr) in parts {
-        c0.append(p0);
-        c1.append(p1);
-        s2.append(p2);
-        c1_rows.append(pr);
+    let (mut p0, mut p1, mut p2, mut pr) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for (a, b, c, d) in parts {
+        p0.push(a);
+        p1.push(b);
+        p2.push(c);
+        pr.push(d);
     }
+    let c0 = SparsePoly::concat(1, p0);
+    let c1 = SparsePoly::concat(h11, p1);
+    let s2 = SparsePoly::concat(m, p2);
+    let c1_rows = SparsePoly::concat(na, pr);
     Ok(PeriodData {
         c0,
         c1,

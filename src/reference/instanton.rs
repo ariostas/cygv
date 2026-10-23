@@ -40,15 +40,13 @@ where
             let Some(x) = intnum_dict.get(&(intnum_ind[0], intnum_ind[1], intnum_ind[2])) else {
                 continue;
             };
-            let mut tmp_poly = f_poly[&(a, b)].clone(&poly_props.zero);
             if a != b {
-                tmp_poly.mul_scalar_assign(*x);
+                p.mul_scalar_add_assign(*x, &f_poly[&(a, b)], &poly_props.zero);
             } else {
                 tmp_num.assign(*x);
                 tmp_num /= 2;
-                tmp_poly.mul_scalar_assign(&tmp_num);
+                p.mul_scalar_add_assign(&tmp_num, &f_poly[&(a, b)], &poly_props.zero);
             }
-            p.add_assign(&tmp_poly, &poly_props.zero);
         }
     }
     p.clean_up();

@@ -10,7 +10,8 @@ rust-version = "1.90"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/ariostas/cygv"
 readme = "README.md"
-exclude = ["tests/data/", "benches/data/cones/"]
+# The tests and benchmarks read their data with `include_str!`, the unit tests of the
+# library among them, so all of it is published (about 300 KB compressed) for them to build.
 keywords = ["calabi-yau", "string-theory", "gopakumar-vafa", "gromov-witten", "mirror-symmetry"]
 categories = ["science", "mathematics", "algorithms"]
 
@@ -37,6 +38,7 @@ python = ["dep:pyo3", "dep:ctrlc"]
 [dependencies]
 clap = { version = "4.5.16", features = ["derive"], optional = true }
 ctrlc = { version = "3.4.4", optional = true }
+log = "0.4"
 # The big integers and rationals: the reference pipeline's coefficients, and the CRT lift
 # and GW invariants of the modular one. Pure Rust, so no C library has to be built.
 # Only integers and rationals are needed, so the floats are left out.

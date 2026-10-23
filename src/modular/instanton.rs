@@ -23,7 +23,7 @@ use super::key::Key;
 use super::period::PeriodData;
 use super::table::{DegreeHeap, ShardedMap, SlotMap, SparsePoly};
 use super::{Error, Geometry};
-use core::ops::Range;
+use core::ops::{Range, RangeInclusive};
 use rayon::prelude::*;
 
 /// The output of the instanton stage.
@@ -113,25 +113,35 @@ fn par_accumulate<K: Key, E: Copy + Default + PartialEq + Send + Sync>(
     );
 }
 
-/// Adds $a \cdot b$, truncated at `max_deg`, to `acc`, where `a` has one value per term and
-/// `b` as many as `acc`.
+/// The terms of `p` of degree below `deg`, i.e. the start of the others.
+#[inline]
+fn len_below<K: Key, E: Copy + Default + PartialEq>(p: &SparsePoly<K, E>, deg: u32) -> usize {
+    deg.checked_sub(1).map_or(0, |d| p.len_upto(d))
+}
+
+/// Adds the terms of $a \cdot b$ of degree in `degs` to `acc`, where `a` has one value per
+/// term and `b` as many as `acc`.
 fn mul_scalar_into<R: Ring, K: Key>(
     ring: &R,
     a: &SparsePoly<K, R::Elem>,
     b: &SparsePoly<K, R::Elem>,
-    max_deg: u32,
+    degs: RangeInclusive<u32>,
     acc: &ShardedMap<K, R::Elem>,
 ) {
     debug_assert_eq!(a.width(), 1);
-    let inner = |x: usize| b.len_upto(max_deg - a.degs()[x]);
+    let (lo, hi) = (*degs.start(), *degs.end());
+    let inner = |x: usize| {
+        let dx = a.degs()[x];
+        len_below(b, lo.saturating_sub(dx))..b.len_upto(hi - dx)
+    };
     par_accumulate(
         acc,
         b.width(),
-        a.len_upto(max_deg),
-        inner,
+        a.len_upto(hi),
+        |x| inner(x).len(),
         |x, local| {
             let (kx, dx, ax) = (a.keys()[x], a.degs()[x], a.values(x)[0]);
-            for y in 0..inner(x) {
+            for y in inner(x) {
                 let out = local.get_or_insert(kx + b.keys()[y], dx + b.degs()[y]);
                 for (o, &v) in out.iter_mut().zip(b.values(y)) {
                     ring.fma(o, ax, v);
@@ -160,7 +170,7 @@ pub fn mul_scalar<R: Ring, K: Key>(
     max_deg: u32,
 ) -> SparsePoly<K, R::Elem> {
     let acc = ShardedMap::new(b.width(), n_shards(), b.len());
-    mul_scalar_into(ring, a, b, max_deg, &acc);
+    mul_scalar_into(ring, a, b, 0..=max_deg, &acc);
     acc.take()
 }
 
@@ -216,6 +226,28 @@ pub fn recip<R: Ring, K: Key>(
     Ok(acc.take())
 }
 
+/// About the number of blocks of degrees that the instanton series is taken in.
+const INSTANTON_BLOCKS: usize = 8;
+
+/// Splits the degrees `0..=max_deg` into ranges `(lo, hi)` in which `p` has about
+/// $1/n$ of its terms each, or the terms of one degree when they are more.
+fn degree_blocks<K: Key, E: Copy + Default + PartialEq>(
+    p: &SparsePoly<K, E>,
+    max_deg: u32,
+    n: usize,
+) -> Vec<(u32, u32)> {
+    let per_block = p.len_upto(max_deg).div_ceil(n.max(1)).max(1);
+    let mut blocks = Vec::new();
+    let mut lo = 0;
+    for d in 0..=max_deg {
+        if d == max_deg || p.len_upto(d) - len_below(p, lo) >= per_block {
+            blocks.push((lo, d));
+            lo = d + 1;
+        }
+    }
+    blocks
+}
+
 /// Computes $\alpha$ and the instanton series from the period data.
 pub fn instanton<R: Ring, K: Key>(
     ring: &R,
@@ -238,10 +270,6 @@ pub fn instanton<R: Ring, K: Key>(
         .c1_rows
         .take()
         .map(|c1| mul_scalar(ring, &c0_inv, &c1, max_deg));
-
-    let acc = ShardedMap::new(m, n_shards(), period.s2.len() + alpha.len());
-    mul_scalar_into(ring, &c0_inv, &period.s2, max_deg, &acc);
-    period.s2 = SparsePoly::new(m);
 
     // sum_a alpha_a V^(k)_a = 1/2 sum_{a, b} K^(k)_ab alpha_a alpha_b, by pairs of columns
     // a <= b with some K_ab nonzero, since each alpha_a has few terms: the product of the two
@@ -277,42 +305,59 @@ pub fn instanton<R: Ring, K: Key>(
         .enumerate()
         .flat_map(|(p, &(a, _, _))| (0..columns[a].len() as u32).map(move |i| (p as u32, i)))
         .collect();
-    let inner = |o: usize| {
+    // The inner terms of an outer one whose products have degree in lo..=hi.
+    let inner = |o: usize, lo: u32, hi: u32| {
         let (p, i) = (outer[o].0 as usize, outer[o].1 as usize);
         let (a, b, _) = &pairs[p];
         let d = term(*a, i).1;
-        let start = if a == b { i } else { 0 };
-        let end = if d > max_deg {
-            0
-        } else {
-            columns[*b].partition_point(|&y| alpha.degs()[y as usize] <= max_deg - d)
-        };
+        if d > hi {
+            return 0..0;
+        }
+        let column = &columns[*b];
+        let deg = |y: &u32| alpha.degs()[*y as usize];
+        let mut start = column.partition_point(|y| deg(y) < lo.saturating_sub(d));
+        if a == b {
+            start = start.max(i);
+        }
+        let end = column.partition_point(|y| deg(y) <= hi - d);
         start..end.max(start)
     };
-    par_accumulate(
-        &acc,
-        m,
-        outer.len(),
-        |o| inner(o).len(),
-        |o, local| {
-            let (p, i) = (outer[o].0 as usize, outer[o].1 as usize);
-            let (a, b, kab) = &pairs[p];
-            let (kx, dx, vx) = term(*a, i);
-            for j in inner(o) {
-                let (ky, dy, vy) = term(*b, j);
-                let mut v = ring.mul(vx, vy);
-                if a == b && i == j {
-                    v = ring.mul(v, half);
+
+    // The instanton series is taken a block of degrees at a time, so that only one block is
+    // accumulated at once, in tables twice to four times the size of the terms.
+    let blocks = degree_blocks(&period.s2, max_deg, INSTANTON_BLOCKS);
+    let mut parts = Vec::with_capacity(blocks.len());
+    for (lo, hi) in blocks {
+        let terms = |p: &SparsePoly<K, R::Elem>| p.len_upto(hi) - len_below(p, lo);
+        let acc = ShardedMap::new(m, n_shards(), terms(&period.s2) + terms(&alpha));
+        mul_scalar_into(ring, &c0_inv, &period.s2, lo..=hi, &acc);
+        par_accumulate(
+            &acc,
+            m,
+            outer.len(),
+            |o| inner(o, lo, hi).len(),
+            |o, local| {
+                let (p, i) = (outer[o].0 as usize, outer[o].1 as usize);
+                let (a, b, kab) = &pairs[p];
+                let (kx, dx, vx) = term(*a, i);
+                for j in inner(o, lo, hi) {
+                    let (ky, dy, vy) = term(*b, j);
+                    let mut v = ring.mul(vx, vy);
+                    if a == b && i == j {
+                        v = ring.mul(v, half);
+                    }
+                    for (out, &k) in local.get_or_insert(kx + ky, dx + dy).iter_mut().zip(kab) {
+                        *out = ring.sub(*out, ring.mul(k, v));
+                    }
                 }
-                for (out, &k) in local.get_or_insert(kx + ky, dx + dy).iter_mut().zip(kab) {
-                    *out = ring.sub(*out, ring.mul(k, v));
-                }
-            }
-        },
-        |out, v| add_into(ring, out, v),
-        R::EXACT,
-    );
-    let inst = acc.take();
+            },
+            |out, v| add_into(ring, out, v),
+            R::EXACT,
+        );
+        parts.push(acc.take());
+    }
+    period.s2 = SparsePoly::new(m);
+    let inst = SparsePoly::concat(m, parts);
     Ok(InstantonData { alpha, inst, beta })
 }
 

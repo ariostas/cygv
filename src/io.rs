@@ -105,8 +105,9 @@ use std::str::FromStr;
 use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
-/// The fields that are accepted in an input document.
-const INPUT_FIELDS: [&str; 21] = [
+/// The fields that are accepted in an input document. Those that were removed, `cones` and
+/// `is_threefold`, are rejected before with what to write instead.
+const INPUT_FIELDS: [&str; 20] = [
     "name",
     "q",
     "intnums",
@@ -127,8 +128,6 @@ const INPUT_FIELDS: [&str; 21] = [
     "certify",
     "low_memory",
     "hilbert_bases",
-    // Rejected below with what to write instead.
-    "cones",
 ];
 
 /// The specification of a single computation of GV or GW invariants.
@@ -161,7 +160,19 @@ impl Input {
         if docs.is_empty() {
             return Err(IoError::EmptyInput);
         }
-        docs.iter().map(Input::from_yaml).collect()
+        let several = docs.len() > 1;
+        docs.iter()
+            .enumerate()
+            .map(|(i, doc)| {
+                Input::from_yaml(doc).map_err(|e| match several {
+                    true => IoError::InDocument {
+                        number: i + 1,
+                        error: Box::new(e),
+                    },
+                    false => e,
+                })
+            })
+            .collect()
     }
 
     /// Parse a single YAML document into an [`Input`], and check it ([`Input::validate`]).
@@ -313,13 +324,13 @@ impl Input {
             None => false,
             Some(y) => y
                 .as_bool()
-                .ok_or_else(|| IoError::invalid_field("certify", "expected a boolean"))?,
+                .ok_or_else(|| IoError::invalid_field("certify", "expected true or false"))?,
         };
         let low_memory = match get_field(hash, "low_memory") {
             None => false,
             Some(y) => y
                 .as_bool()
-                .ok_or_else(|| IoError::invalid_field("low_memory", "expected a boolean"))?,
+                .ok_or_else(|| IoError::invalid_field("low_memory", "expected true or false"))?,
         };
         let method = match get_field(hash, "method") {
             None => Method::default(),

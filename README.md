@@ -117,6 +117,10 @@ For runs that do not fit in memory otherwise, `low_memory=True` makes the modula
 prefer memory to speed: it takes about a third of the memory, for about two and a half times
 the time.
 
+`verbose=True` writes the progress of a long run to `sys.stderr`: the stages, the passes of the
+modular implementation and the certifier's rounds, with `verbose=2` also the degrees of each
+pass.
+
 The modular implementation takes the curve classes from the Hilbert bases of the cones $K_T$ of
 the classes in the Mori cone that only meet the divisors in $T$ negatively, which it computes
 itself. A program such as [Normaliz](https://www.normaliz.uni-osnabrueck.de/) can compute them
@@ -128,7 +132,9 @@ classes.
 Invalid input raises a `ValueError`, and a computation that fails (for instance because the
 invariants are not integers, which usually means inconsistent input) a `cygv.ComputationError`.
 The computation runs in a subprocess, so it can be interrupted with ctrl+c without losing the
-Python session.
+Python session. Where subprocesses are started by `spawn` (the default on macOS and Windows), a
+script that computes invariants needs the usual `if __name__ == "__main__":` guard around its
+top-level code, since each subprocess imports the script again.
 
 ## Rust crate
 
@@ -215,8 +221,10 @@ results:
 ```
 
 Run `cygv --help` for the full list of input fields and options. `--method`, `--threads`,
-`--max-deg`, `--invariants`, `--certify` and `--low-memory` set those for every document, and
-the `examples` directory has complete inputs.
+`--max-deg`, `--invariants`, `--certify` and `--low-memory` set those for every document,
+`-v` (or `-vv`) writes the progress to stderr, and the `examples` directory has complete inputs.
+From Rust, `cygv::log_to_stderr` does the same, and the messages go through the
+[`log`](https://docs.rs/log) facade for any other logger.
 
 ## License
 

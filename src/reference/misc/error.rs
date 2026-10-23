@@ -3,7 +3,7 @@
 use core::fmt;
 
 /// An error enum for miscellaneous errors.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MiscError {
     EmptyIntNums,
     RepeatedIdxIntNums,

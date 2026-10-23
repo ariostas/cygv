@@ -84,30 +84,38 @@ impl Lattice {
             return Err(Error::DimensionMismatch);
         }
         // The shortest first, which makes a basis more likely to span the rest.
-        vectors.sort_by_key(|v| v.iter().map(|&x| x as i64 * x as i64).sum::<i64>());
-        let mut lattice = Self::new(Vec::new(), h11)?;
+        vectors.sort_by_key(|v| v.iter().map(|&x| x as i128 * x as i128).sum::<i128>());
+        // The rank first, modulo the prime, so that a full rank is found before any reduction,
+        // and the independent vectors reduced once.
         let mut span = Span::new(h11);
+        let mut independent = Vec::new();
+        for &v in &vectors {
+            if span.add(v) {
+                if span.rank() == h11 {
+                    return Ok(None);
+                }
+                independent.push(row(v));
+            }
+        }
+        let mut lattice = Self::new(lll(independent), h11)?;
         for v in vectors {
             if lattice.fast_coords(v).is_some() {
                 continue;
             }
-            let rows: Vec<Row> = if span.add(v) {
-                if span.rank() == h11 {
-                    return Ok(None);
+            match lattice.position(v) {
+                Position::In(_) => {}
+                Position::Span(a) => lattice = Self::new(lll(lattice.joined(v, a)), h11)?,
+                // The rank modulo the prime was too low, which a prime of 61 bits makes
+                // vanishingly unlikely: the vector is independent of the lattice.
+                Position::Outside => {
+                    let mut rows = lattice.rows();
+                    rows.push(row(v));
+                    if rows.len() == h11 {
+                        return Ok(None);
+                    }
+                    lattice = Self::new(lll(rows), h11)?;
                 }
-                let mut rows = lattice.rows();
-                rows.push(row(v));
-                rows
-            } else {
-                match lattice.position(v) {
-                    Position::In(_) => continue,
-                    Position::Span(a) => lattice.joined(v, a),
-                    // The rank modulo the prime was too low, which a prime of 61 bits makes
-                    // vanishingly unlikely.
-                    Position::Outside => return Err(Error::LatticeTooLarge),
-                }
-            };
-            lattice = Self::new(lll(rows), h11)?;
+            }
         }
         Ok(Some(lattice))
     }
@@ -127,7 +135,8 @@ impl Lattice {
                     &basis[i * h11..(i + 1) * h11],
                     &basis[j * h11..(j + 1) * h11],
                 );
-                gram[i * k + j] = a.iter().zip(b).map(|(&x, &y)| (x * y) as f64).sum();
+                // In floating point, where the products cannot overflow.
+                gram[i * k + j] = a.iter().zip(b).map(|(&x, &y)| x as f64 * y as f64).sum();
             }
         }
         Ok(Self {
@@ -193,7 +202,7 @@ impl Lattice {
         let y: Vec<f64> = (0..k)
             .map(|j| {
                 let b = self.basis_vector(j);
-                nonzero.iter().map(|&(t, v)| (v * b[t]) as f64).sum()
+                nonzero.iter().map(|&(t, v)| v as f64 * b[t] as f64).sum()
             })
             .collect();
         let mut c = vec![0i64; k];
@@ -383,30 +392,30 @@ pub fn restrict_series<R: Ring, K: super::key::Key>(
 const P: u64 = (1 << 61) - 1;
 
 /// The span of some vectors modulo [`P`], as an echelon form with a one at each pivot.
-struct Span {
+pub(crate) struct Span {
     h11: usize,
     rows: Vec<(usize, Vec<u64>)>,
 }
 
 impl Span {
-    fn new(h11: usize) -> Self {
+    pub(crate) fn new(h11: usize) -> Self {
         Self {
             h11,
             rows: Vec::new(),
         }
     }
 
-    fn rank(&self) -> usize {
+    pub(crate) fn rank(&self) -> usize {
         self.rows.len()
     }
 
     /// Adds `v` if it is independent of the span modulo the prime, and so over the
     /// rationals, and tells whether it was.
-    fn add(&mut self, v: &[i32]) -> bool {
+    pub(crate) fn add<T: Copy + Into<i64>>(&mut self, v: &[T]) -> bool {
         let mul = |a: u64, b: u64| ((a as u128 * b as u128) % P as u128) as u64;
         let mut v: Vec<u64> = v
             .iter()
-            .map(|&x| (x as i64).rem_euclid(P as i64) as u64)
+            .map(|&x| x.into().rem_euclid(P as i64) as u64)
             .collect();
         debug_assert_eq!(v.len(), self.h11);
         for (p, r) in &self.rows {

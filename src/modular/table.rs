@@ -31,10 +31,11 @@ fn all_zero<V: Default + PartialEq>(vals: &[V]) -> bool {
 /// Slots are numbered from zero in order of insertion. Lookups go through an open-addressing
 /// index of 8-byte buckets, each holding a slot number and a 32-bit tag from the high bits
 /// of the key's hash (the low ones pick the bucket), so that a probe only follows the slot
-/// number to compare keys when the tags match. The index is at most half full.
+/// number to compare keys when the tags match. The index is at most three quarters full.
 ///
 /// Slot numbers are `u32`, which limits a table to about four billion slots. That is far
-/// more than fits in memory in any case: each slot takes at least 36 bytes with packed keys.
+/// more than fits in memory in any case: each slot takes at least 31 bytes with packed keys
+/// (16 for the key, 4 for the degree, 8 or more for the values, and 3/8 to 3/4 of a bucket).
 #[derive(Debug, Clone)]
 pub struct SlotMap<K, V> {
     width: usize,
@@ -57,7 +58,7 @@ impl<K: Key, V: Copy + Default + PartialEq> SlotMap<K, V> {
     /// Panics if `width` is zero.
     pub fn new(width: usize, capacity: usize) -> Self {
         assert!(width > 0, "a slot map needs at least one value per slot");
-        let n_buckets = (2 * capacity + 1).max(16).next_power_of_two();
+        let n_buckets = (4 * capacity / 3 + 1).max(16).next_power_of_two();
         Self {
             width,
             index: vec![EMPTY; n_buckets],
@@ -135,7 +136,7 @@ impl<K: Key, V: Copy + Default + PartialEq> SlotMap<K, V> {
         self.degs.push(deg);
         self.vals.resize(self.vals.len() + self.width, V::default());
         self.index[h] = (hash >> 32) << 32 | (s as u64 + 1);
-        if 2 * self.keys.len() >= self.index.len() {
+        if 4 * self.keys.len() >= 3 * self.index.len() {
             self.rehash(2 * self.index.len());
         }
         (s as u32, true)
@@ -360,6 +361,42 @@ impl<K: Key, V: Copy + Default + PartialEq> SparsePoly<K, V> {
         self.keys.append(&mut other.keys);
         self.degs.append(&mut other.degs);
         self.vals.append(&mut other.vals);
+    }
+
+    /// Splits off the terms from the `at`-th on, which it returns.
+    pub fn split_off(&mut self, at: usize) -> Self {
+        Self {
+            width: self.width,
+            keys: self.keys.split_off(at),
+            degs: self.degs.split_off(at),
+            vals: self.vals.split_off(at * self.width),
+        }
+    }
+
+    /// Gives back the memory reserved beyond the terms.
+    pub fn shrink_to_fit(&mut self) {
+        self.keys.shrink_to_fit();
+        self.degs.shrink_to_fit();
+        self.vals.shrink_to_fit();
+    }
+
+    /// The series with the terms of `parts` one after the other, which must have the same
+    /// width and come in order; its space is reserved exactly, where appending them would
+    /// leave it up to twice their length.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the widths differ.
+    pub fn concat(width: usize, parts: Vec<Self>) -> Self {
+        let n: usize = parts.iter().map(Self::len).sum();
+        let mut res = Self::new(width);
+        res.keys.reserve_exact(n);
+        res.degs.reserve_exact(n);
+        res.vals.reserve_exact(n * width);
+        for part in parts {
+            res.append(part);
+        }
+        res
     }
 
     /// The values of the `i`-th term, to change in place. A term must not be left with only

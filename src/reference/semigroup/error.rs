@@ -3,11 +3,13 @@
 use core::fmt;
 
 /// An error structure for semigroup errors.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SemigroupError {
     NonPositiveDegreeError,
     MissingIdentityError,
     DimensionMismatchError,
+    DuplicateElementError,
+    DegreeTooLargeError,
 }
 
 /// Implement Display trait for SemigroupError.
@@ -21,6 +23,8 @@ impl fmt::Display for SemigroupError {
             SemigroupError::DimensionMismatchError => {
                 "the dimensions of the semigroup data do not match"
             }
+            SemigroupError::DuplicateElementError => "an element is given more than once",
+            SemigroupError::DegreeTooLargeError => "a degree does not fit in 32 bits",
         };
         write!(f, "{message}")
     }

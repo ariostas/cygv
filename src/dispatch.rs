@@ -41,6 +41,8 @@ pub enum Error {
     MoriCone(ConeError),
     /// The modular pipeline failed.
     Modular(modular::Error),
+    /// The reference pipeline failed.
+    Reference(reference::Error),
 }
 
 impl fmt::Display for Error {
@@ -50,6 +52,7 @@ impl fmt::Display for Error {
             Self::Unsupported(reason) => write!(f, "{reason}"),
             Self::MoriCone(e) => write!(f, "{e}"),
             Self::Modular(e) => write!(f, "{e}"),
+            Self::Reference(e) => write!(f, "{e}"),
         }
     }
 }
@@ -59,6 +62,12 @@ impl std::error::Error for Error {}
 impl From<modular::Error> for Error {
     fn from(e: modular::Error) -> Self {
         Self::Modular(e)
+    }
+}
+
+impl From<reference::Error> for Error {
+    fn from(e: reference::Error) -> Self {
+        Self::Reference(e)
     }
 }
 
@@ -167,6 +176,33 @@ pub fn compute(
             (m.inequalities.hyperplanes, m.inequalities.equations)
         }
     };
+    log::info!(
+        "Mori cone: {} inequalities and {} equations{}",
+        hyperplanes.ncols(),
+        equations.ncols(),
+        match &problem.cone {
+            MoriCone::Generators(_) => ", from the generators",
+            MoriCone::Inequalities { .. } => "",
+            MoriCone::FromFan => ", from the fan",
+        }
+    );
+    // A Mori cone given with the fan, used as given, must contain the fan's.
+    if let (Some(fan), MoriCone::Generators(_) | MoriCone::Inequalities { .. }) =
+        (&fan, &problem.cone)
+    {
+        if let Some(c) = fan
+            .wall_outside(&hyperplanes, &equations)
+            .map_err(fan_err("fan"))?
+        {
+            return Err(input_err(
+                cone_field(&problem.cone),
+                format!(
+                    "the Mori cone does not contain the curve class {c:?} of a wall of the \
+                     fan; leave it out to derive it from the fan"
+                ),
+            ));
+        }
+    }
     let grading_vector = match &problem.grading_vector {
         // Checked with the problem.
         Some(g) => RowDVector::from_row_slice(g),
@@ -180,68 +216,116 @@ pub fn compute(
     };
     if let Selection::TargetPoints { points, .. } = &problem.selection {
         check_target_degrees(points, grading_vector.as_slice())?;
+        let in_cone = |p: &[i32]| {
+            columns(&hyperplanes).all(|h| dot(h, p) >= 0)
+                && columns(&equations).all(|e| dot(e, p) == 0)
+        };
+        if let Some(p) = columns(points).find(|p| !in_cone(p)) {
+            return Err(input_err(
+                "target_points",
+                format!("the target point {p:?} lies outside the Mori cone"),
+            ));
+        }
     }
     let use_modular = options.method != Method::Reference && problem.selection.modular_supported();
-    let mut res = if use_modular {
-        let generators = match &problem.cone {
-            MoriCone::Generators(g) => g.clone(),
-            _ => DMatrix::zeros(q.ncols(), 0),
-        };
-        let computed;
-        let cone_data = match &options.hilbert_bases {
-            Some(cones) => {
-                computed = check_hilbert_bases(
-                    cones,
-                    &hyperplanes,
-                    &equations,
-                    q,
-                    Some(&generators),
-                    &strata,
-                )?;
-                &computed
+    log::info!(
+        "grading vector {:?}{}, {} method",
+        grading_vector.as_slice(),
+        if problem.grading_vector.is_none() {
+            " (derived)"
+        } else {
+            ""
+        },
+        if use_modular { "modular" } else { "reference" }
+    );
+    let run = || -> Result<Entries, Error> {
+        Ok(if use_modular {
+            let generators = match &problem.cone {
+                MoriCone::Generators(g) => g.clone(),
+                _ => DMatrix::zeros(q.ncols(), 0),
+            };
+            let computed;
+            let cone_data = match &options.hilbert_bases {
+                Some(cones) => {
+                    computed = check_hilbert_bases(
+                        cones,
+                        &hyperplanes,
+                        &equations,
+                        q,
+                        Some(&generators),
+                        &strata,
+                    )?;
+                    &computed
+                }
+                None => {
+                    computed = crate::cone::cone_data(
+                        &hyperplanes,
+                        &equations,
+                        q,
+                        &strata,
+                        grading_vector.as_slice(),
+                        top_degree(&problem.selection, &grading_vector),
+                    )?;
+                    &computed
+                }
+            };
+            log::info!(
+                "cone data: {} cones, {} Hilbert basis elements{}",
+                cone_data.cones.len(),
+                cone_data
+                    .cones
+                    .iter()
+                    .map(|c| c.hilbert_basis.ncols())
+                    .sum::<usize>(),
+                if options.hilbert_bases.is_some() {
+                    ", as given"
+                } else {
+                    ""
+                }
+            );
+            run_modular(
+                problem,
+                cy_kind,
+                &strata,
+                &grading_vector,
+                cone_data,
+                kind,
+                options,
+            )
+            .map_err(|e| match e {
+                Error::Modular(modular::Error::Key(
+                    e @ (KeyError::TooWide { .. } | KeyError::BoundTooLarge),
+                )) => Error::Unsupported(format!(
+                    "the curve classes are too large for the modular method ({e}); the \
+                         reference method can compute them, but slowly"
+                )),
+                e => e,
+            })?
+        } else {
+            // The reference does not use the Hilbert bases, but they are checked all the same.
+            if let Some(cones) = &options.hilbert_bases {
+                check_hilbert_bases(cones, &hyperplanes, &equations, q, None, &strata)?;
             }
-            None => {
-                computed = crate::cone::cone_data(
-                    &hyperplanes,
-                    &equations,
-                    q,
-                    &strata,
-                    grading_vector.as_slice(),
-                    top_degree(&problem.selection, &grading_vector),
-                )?;
-                &computed
-            }
-        };
-        run_modular(
-            problem,
-            cy_kind,
-            &strata,
-            &grading_vector,
-            cone_data,
-            kind,
-            options,
-        )
-        .map_err(|e| match e {
-            Error::Modular(modular::Error::Key(
-                e @ (KeyError::TooWide { .. } | KeyError::BoundTooLarge),
-            )) => Error::Unsupported(format!(
-                "the curve classes are too large for the modular method ({e}); the \
-                     reference method can compute them, but slowly"
-            )),
-            e => e,
-        })?
-    } else {
-        run_reference(
-            problem,
-            cy_kind,
-            strata,
-            &grading_vector,
-            &hyperplanes,
-            &equations,
-            kind,
-            options,
-        )?
+            run_reference(
+                problem,
+                cy_kind,
+                strata,
+                &grading_vector,
+                &hyperplanes,
+                &equations,
+                kind,
+                options,
+            )?
+        })
     };
+    let mut res = run().map_err(|e| cone_input(problem, e))?;
+    log::info!(
+        "done: {} nonzero invariants",
+        match &res {
+            Entries::Gv(e) => e.len(),
+            Entries::Gw(e) => e.len(),
+        }
+    );
     let report = Report {
         method: if use_modular {
             Method::Modular
@@ -268,6 +352,20 @@ pub fn compute(
             report,
         }),
     })
+}
+
+/// An error of the cone computations that comes from the input, as an input error of its
+/// field: the Mori cone's, or the grading vector's if it is given and not positive.
+fn cone_input(problem: &Problem, e: Error) -> Error {
+    match e {
+        Error::MoriCone(e @ ConeError::NonpositiveDegree) if problem.grading_vector.is_some() => {
+            input_err("grading_vector", e.to_string())
+        }
+        Error::MoriCone(e @ (ConeError::NotPointed | ConeError::NonpositiveDegree)) => {
+            input_err(cone_field(&problem.cone), e.to_string())
+        }
+        e => e,
+    }
 }
 
 /// The invariants as a pipeline gives them, before they are sorted.
@@ -470,6 +568,7 @@ fn run_reference(
         selection => {
             // Every lattice point of the Mori cone, from the Hilbert basis.
             let basis = crate::cone::hilbert_basis(hyperplanes, equations)?;
+            log::info!("Hilbert basis of the Mori cone: {} elements", basis.ncols());
             if columns(&basis).any(|g| degree(g, grading_vector) <= 0) {
                 return Err(ConeError::NonpositiveDegree.into());
             }
@@ -500,7 +599,7 @@ fn run_reference(
         geometry.intnums.clone(),
         strata,
         options.n_threads.map(|n| n as u32),
-    );
+    )?;
     if let Some(max_deg) = truncate {
         res.retain(|((c, _), _)| degree(c.as_slice(), grading_vector) <= max_deg as i64);
     }

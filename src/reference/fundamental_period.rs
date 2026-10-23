@@ -3,7 +3,7 @@
 pub mod error;
 
 use super::polynomial::properties::PolynomialProperties;
-use crate::reference::factorial::{factorial_prod, harmonic};
+use crate::reference::factorial::factorial_prod;
 use crate::reference::polynomial::{coefficient::PolynomialCoeff, Polynomial};
 use crate::reference::semigroup::Semigroup;
 use crate::{check_strata, CYKind, Stratum};
@@ -80,6 +80,8 @@ struct CScratch<T> {
     tmp0: T,
     tmp1: T,
     res: T,
+    /// The harmonic numbers $H_{n,1}$ and $H_{n,2}$ by $n$, as far as they were needed.
+    harmonics: [Vec<T>; 2],
 }
 
 impl<T: PolynomialCoeff<T>> CScratch<T> {
@@ -90,8 +92,29 @@ impl<T: PolynomialCoeff<T>> CScratch<T> {
             tmp0: template_var.clone(),
             tmp1: template_var.clone(),
             res: template_var.clone(),
+            harmonics: [vec![template_var.clone()], vec![template_var.clone()]],
         }
     }
+}
+
+/// Sets `res` to the harmonic number $H_{n,m}$, for $m$ of 1 or 2, from `harmonics` of
+/// [`CScratch`], extended as far as needed with the help of `tmp`.
+fn harmonic<T: PolynomialCoeff<T>>(
+    harmonics: &mut [Vec<T>; 2],
+    n: u32,
+    m: u32,
+    res: &mut T,
+    tmp: &mut T,
+) {
+    let table = &mut harmonics[m as usize - 1];
+    while table.len() <= n as usize {
+        tmp.assign((table.len() as u64).pow(m));
+        tmp.recip_mut();
+        let mut next = table[table.len() - 1].clone();
+        next += &*tmp;
+        table.push(next);
+    }
+    res.assign(&table[n as usize]);
 }
 
 /// Computes the c coefficients for a curve that has zero negative
@@ -115,6 +138,7 @@ fn compute_c_0neg<T>(
         tmp0: tmp_num0,
         tmp1: tmp_num1,
         res: tmp_final,
+        harmonics,
     } = scratch;
     // compute the common c0 factor
     let n: Vec<_> = curves_dot_q0.column(t).iter().map(|&c| c as u32).collect();
@@ -125,12 +149,12 @@ fn compute_c_0neg<T>(
     for (i, aa) in a.iter_mut().enumerate() {
         aa.assign(0);
         for (&qq0, &cdq0) in q0.column(i).iter().zip(curves_dot_q0.column(t).iter()) {
-            harmonic(cdq0 as u32, 1, tmp_num0, tmp_num1);
+            harmonic(harmonics, cdq0 as u32, 1, tmp_num0, tmp_num1);
             *tmp_num0 *= qq0;
             *aa += &*tmp_num0;
         }
         for (&qq, &cdq) in q.column(i).iter().zip(curves_dot_q.column(t).iter()) {
-            harmonic(cdq as u32, 1, tmp_num0, tmp_num1);
+            harmonic(harmonics, cdq as u32, 1, tmp_num0, tmp_num1);
             *tmp_num0 *= qq;
             *aa -= &*tmp_num0;
         }
@@ -147,7 +171,7 @@ fn compute_c_0neg<T>(
             .zip(q0.column(bb).iter())
             .zip(curves_dot_q0.column(t).iter())
         {
-            harmonic(cdq0 as u32, 2, tmp_num0, tmp_num1);
+            harmonic(harmonics, cdq0 as u32, 2, tmp_num0, tmp_num1);
             *tmp_num0 *= q0a * q0b;
             *tmp_final -= &*tmp_num0;
         }
@@ -157,7 +181,7 @@ fn compute_c_0neg<T>(
             .zip(q.column(bb).iter())
             .zip(curves_dot_q.column(t).iter())
         {
-            harmonic(cdq as u32, 2, tmp_num0, tmp_num1);
+            harmonic(harmonics, cdq as u32, 2, tmp_num0, tmp_num1);
             *tmp_num0 *= qa * qb;
             *tmp_final += &*tmp_num0;
         }
@@ -190,6 +214,7 @@ fn compute_c_1neg<T>(
         tmp0: tmp_num0,
         tmp1: tmp_num1,
         res: tmp_final,
+        harmonics,
     } = scratch;
     let neg_ints: Vec<_> = curves_dot_q
         .column(t)
@@ -222,12 +247,13 @@ fn compute_c_1neg<T>(
     for (i, aa) in a.iter_mut().enumerate() {
         aa.assign(0);
         for (&qq0, &cdq0) in q0.column(i).iter().zip(curves_dot_q0.column(t).iter()) {
-            harmonic(cdq0 as u32, 1, tmp_num0, tmp_num1);
+            harmonic(harmonics, cdq0 as u32, 1, tmp_num0, tmp_num1);
             *tmp_num0 *= qq0;
             *aa += &*tmp_num0;
         }
         for (&qq, &cdq) in q.column(i).iter().zip(curves_dot_q.column(t).iter()) {
             harmonic(
+                harmonics,
                 if cdq.is_negative() {
                     (-cdq - 1) as u32
                 } else {
@@ -335,6 +361,11 @@ fn compute_c_vex<T>(
 where
     T: PolynomialCoeff<T>,
 {
+    debug_assert_eq!(
+        curves_dot_q0.nrows(),
+        1,
+        "vex phases are threefold hypersurfaces, with one anticanonical row"
+    );
     let m = -curves_dot_q0[(0, t)];
     let mut n = Vec::new();
     let mut d = vec![(m - 1) as u32];

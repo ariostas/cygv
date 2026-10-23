@@ -63,7 +63,9 @@ where
         .zip(poly_props.semigroup.elements.column(t).iter())
         .for_each(|(d, s)| *d = *s);
     let mut closest_dist: f32 = closest_curve_diff.iter().map(curve_diff_cost).sum();
-    // Now check to see if there is a better starting curve
+    // Now check to see if there is a better starting curve, which is multiplied out once
+    // found.
+    let mut closest: Option<(&Polynomial<T>, usize)> = None;
     for (prev_inds, prev_qns) in previous_qn_ind.iter().zip(previous_qn.iter()) {
         for i in prev_inds {
             poly_props
@@ -79,16 +81,19 @@ where
                 let Some(ind) = poly_props.monomial_map.get(&tmp_curve_diff.as_view()) else {
                     continue;
                 };
-                let mut tmp_poly = Polynomial::new();
-                let mut tmp_num = poly_props.zero.clone();
-                tmp_num.assign(1);
-                tmp_poly.coeffs.insert(*ind, tmp_num);
-                tmp_poly.nonzero.push(*ind);
-                closest_curve = prev_qns[i].mul(&tmp_poly, poly_props);
+                closest = Some((&prev_qns[i], *ind));
                 closest_dist = tmp_dist;
                 closest_curve_diff.copy_from(&tmp_curve_diff);
             }
         }
+    }
+    if let Some((qn, ind)) = closest {
+        let mut tmp_poly = Polynomial::new();
+        let mut tmp_num = poly_props.zero.clone();
+        tmp_num.assign(1);
+        tmp_poly.coeffs.insert(ind, tmp_num);
+        tmp_poly.nonzero.push(ind);
+        closest_curve = qn.mul(&tmp_poly, poly_props);
     }
     compute_qn(&closest_curve, &closest_curve_diff, expalpha, poly_props)
 }
@@ -140,6 +145,7 @@ where
     distinct_degs.sort_unstable();
 
     for d in distinct_degs.iter() {
+        log::debug!("series inversion: degree {d}");
         let mut vec_deg = Vec::new();
         let mut qn_to_compute = Vec::new();
         let mut gv_qn_to_compute = HashMap::new();
@@ -228,9 +234,10 @@ where
             })
             .collect::<Result<_, PolynomialError>>()?;
 
-        // Every instanton correction is updated independently of the others, so
-        // the subtraction is parallelized over them. Each one walks the curves
-        // in the same order, which keeps the result independent of scheduling.
+        // Every instanton correction is updated independently of the others,
+        // so the subtraction is parallelized over them. Each one walks the
+        // curves in the same order, which keeps the result independent of
+        // scheduling.
         inst.par_iter_mut().enumerate().for_each(|(k, inst_k)| {
             let mut tmp_gv = poly_props.zero.clone();
             for (j, qn, li2qn) in computed.iter() {
@@ -240,16 +247,14 @@ where
                     if e == 0 {
                         continue;
                     }
-                    let mut tmp_poly = li2qn.clone(&poly_props.zero);
                     tmp_gv.assign(&gv_qn_to_compute[j]);
-                    tmp_gv *= e;
-                    tmp_poly.mul_scalar_assign(&tmp_gv);
-                    inst_k.sub_assign(&tmp_poly, &poly_props.zero);
+                    tmp_gv *= -e;
+                    inst_k.mul_scalar_add_assign(&tmp_gv, li2qn, &poly_props.zero);
                 } else {
                     for kk in h22gv_qn_to_compute[j].iter().filter(|kk| kk.0 == k) {
-                        let mut tmp_poly = li2qn.clone(&poly_props.zero);
-                        tmp_poly.mul_scalar_assign(&kk.1);
-                        inst_k.sub_assign(&tmp_poly, &poly_props.zero);
+                        tmp_gv.assign(&kk.1);
+                        tmp_gv *= -1;
+                        inst_k.mul_scalar_add_assign(&tmp_gv, li2qn, &poly_props.zero);
                     }
                 }
             }

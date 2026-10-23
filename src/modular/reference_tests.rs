@@ -222,7 +222,8 @@ fn check_gv(case: &Case, options: &Options) {
         case.intnums.clone(),
         case.strata.clone(),
         None,
-    );
+    )
+    .unwrap();
     let expected: HashMap<(Vec<i32>, usize), String> = reference
         .into_iter()
         .map(|((c, k), gv)| ((c.as_slice().to_vec(), k), gv.to_string()))
@@ -392,6 +393,13 @@ fn test_invalid_options() {
             threads: Some(0),
             ..Options::default()
         },
+        Options {
+            tuning: Tuning {
+                max_primes: 1,
+                ..Tuning::default()
+            },
+            ..Options::default()
+        },
     ] {
         assert_eq!(
             compute_gv(
@@ -413,7 +421,7 @@ fn test_invalid_options() {
     let options = Options {
         tuning: Tuning {
             lanes: Some(2),
-            max_passes: 1,
+            max_primes: 2,
             ..Tuning::default()
         },
         ..Options::default()
@@ -427,7 +435,7 @@ fn test_invalid_options() {
             &geometry,
             &options
         ),
-        Err(super::Error::NotStable)
+        Err(super::Error::NotStable { primes: 2 })
     );
 }
 

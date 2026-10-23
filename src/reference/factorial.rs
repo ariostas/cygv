@@ -88,12 +88,14 @@ where
 
     for i in 1..=*max_power {
         match power.cmp(&0) {
-            Ordering::Greater => {
-                *res *= (i as u64).pow(power as u32);
-            }
-            Ordering::Less => {
-                *res /= (i as u64).pow(-power as u32);
-            }
+            Ordering::Greater => match (i as u64).checked_pow(power as u32) {
+                Some(p) => *res *= p,
+                None => (0..power).for_each(|_| *res *= i as u64),
+            },
+            Ordering::Less => match (i as u64).checked_pow(-power as u32) {
+                Some(p) => *res /= p,
+                None => (0..-power).for_each(|_| *res /= i as u64),
+            },
             _ => {}
         }
         if let Some(c) = power_diffs.get(&i) {
