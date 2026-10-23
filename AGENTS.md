@@ -385,7 +385,16 @@ indices differently (the first index is a reference surface in the n-fold case).
   to it in batches (a chunk's own map, or per-shard buffers of `FLUSH` terms), so each lock is
   taken rarely. The extraction's tree builds the curves' exponentials in parallel by curve,
   sums up the tree by parent, subtracts by table and multiplies by target table (its products
-  into one table are one task, and those near the root scale badly). The curve-by-curve
+  into one table are one task, but for the tables of the root and its children, which are in
+  one part per thread for an exact ring on several threads, `Tab`, and take the products in
+  pieces of their sources through buffers), and reads each layer's curves from the shards in
+  parallel. Lists of tasks sorted largest first go through rayon with `with_max_len(1)`: left
+  to itself it runs such a list in about twice as many runs as threads, each in order, and the
+  first run takes the largest tasks one after the other. The instanton's products by
+  $c_0^{-1}$, which has a handful of terms, split their work by the terms of the longer
+  factor. The pipeline sorts its results into the output's order in its pool, and the CLI
+  formats them in parallel chunks. Prefetches go through `table::prefetch`, on x86-64 and
+  AArch64. The curve-by-curve
   extraction applies the curves of a layer (degrees $[d, d + \delta)$, $\delta$
   the lowest degree of $\alpha$) in parallel, each worker indexed by
   `rayon::current_thread_index` with its own level tables; layers of few large curves (the first
@@ -409,7 +418,8 @@ indices differently (the first index is a reference surface in the n-fold case).
   parallel code) checks that over repeated runs, and `reference_tests::test_threads` forces
   trees of several depths and both modes of the curve-by-curve extraction on a few threads in
   every test run. The tuning constants were measured on a
-  4-core machine with hyperthreading and are provisional.
+  4-core machine with hyperthreading, and checked on a 16-thread Zen 5 and an 8+2-core M1 Max
+  (`PLAN.md` 5.3, the measurement sessions).
 
 ### Command line interface
 

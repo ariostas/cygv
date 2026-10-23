@@ -86,7 +86,7 @@ const FOLD_PREFETCH: usize = 8;
 
 /// What the curves pass on instead of their coefficients (see [`extract`]): given a curve
 /// and its degree, it writes the values over them.
-pub type Source<'a, E> = &'a dyn Fn(&[i32], u32, &mut [E]);
+pub type Source<'a, E> = &'a (dyn Fn(&[i32], u32, &mut [E]) + Sync);
 
 /// When the extraction applies a layer level-synchronously rather than curve by curve (see
 /// [`extract`]). The defaults were tuned on a machine with four cores and hyperthreading.

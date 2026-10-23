@@ -121,6 +121,10 @@ fn len_below<K: Key, E: Copy + Default + PartialEq>(p: &SparsePoly<K, E>, deg: u
 
 /// Adds the terms of $a \cdot b$ of degree in `degs` to `acc`, where `a` has one value per
 /// term and `b` as many as `acc`.
+///
+/// The work is split by the terms of the longer factor: $a$ is mostly $c_0^{-1}$, whose
+/// terms are those of $K_\emptyset$, often only a few (2 to 25 on the bench models), which
+/// would leave the threads idle.
 fn mul_scalar_into<R: Ring, K: Key>(
     ring: &R,
     a: &SparsePoly<K, R::Elem>,
@@ -130,6 +134,31 @@ fn mul_scalar_into<R: Ring, K: Key>(
 ) {
     debug_assert_eq!(a.width(), 1);
     let (lo, hi) = (*degs.start(), *degs.end());
+    if a.len_upto(hi) < b.len_upto(hi) {
+        let inner = |y: usize| {
+            let dy = b.degs()[y];
+            len_below(a, lo.saturating_sub(dy))..a.len_upto(hi - dy)
+        };
+        par_accumulate(
+            acc,
+            b.width(),
+            b.len_upto(hi),
+            |y| inner(y).len(),
+            |y, local| {
+                let (ky, dy, vy) = (b.keys()[y], b.degs()[y], b.values(y));
+                for x in inner(y) {
+                    let ax = a.values(x)[0];
+                    let out = local.get_or_insert(a.keys()[x] + ky, a.degs()[x] + dy);
+                    for (o, &v) in out.iter_mut().zip(vy) {
+                        ring.fma(o, ax, v);
+                    }
+                }
+            },
+            |out, v| add_into(ring, out, v),
+            R::EXACT,
+        );
+        return;
+    }
     let inner = |x: usize| {
         let dx = a.degs()[x];
         len_below(b, lo.saturating_sub(dx))..b.len_upto(hi - dx)

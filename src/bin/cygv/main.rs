@@ -166,7 +166,7 @@ fn read_input(path: Option<&PathBuf>) -> Result<String, Box<dyn Error>> {
 }
 
 /// Open the output file, or the standard output.
-fn open_output(path: Option<&PathBuf>) -> Result<Box<dyn Write>, Box<dyn Error>> {
+fn open_output(path: Option<&PathBuf>) -> Result<Box<dyn Write + Send>, Box<dyn Error>> {
     if is_stdio(path) {
         return Ok(Box::new(BufWriter::new(io::stdout())));
     }
@@ -229,7 +229,11 @@ fn run(args: &Args) -> Result<(), Box<dyn Error>> {
         let results = input
             .compute()
             .map_err(|e| format!("{}{e}", which(i, input)))?;
-        input.write_results(&mut writer, &results)?;
+        // The results are formatted in parallel, on as many threads as they were computed.
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(input.options.n_threads.unwrap_or(0))
+            .build()?
+            .install(|| input.write_results(&mut writer, &results))?;
         // The results of each document are flushed as they are computed, so that they
         // can be inspected while the remaining ones are still being computed.
         writer.flush()?;

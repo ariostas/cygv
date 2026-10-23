@@ -404,7 +404,10 @@ most of what symmetry would give. Low priority **[estimate]**.
   ≈ +8 s per lane count) makes it one pass, ≈ 1.6× on such runs **[estimate from PLAN 6.5]**.
 - SIMD modular arithmetic: 62-bit Montgomery is scalar on x86; 50-bit primes with the double-precision
   FMA mulmod (or AVX-512 IFMA 52-bit) vectorize the 3–4 lanes of a slot, ≈ 1.5–2.5× on the arithmetic
-  half of the scatter, at the price of 20% more primes **[estimate]**.
+  half of the scatter, at the price of 20% more primes **[estimate]**. Measured with IFMA on
+  Zen 5 since (`PLAN.md` 5.3): 10–35% per pass at equal lanes, but the shorter primes need
+  more lanes, and end to end it loses on many threads; not adopted. On an M1 the scalar
+  Montgomery multiply-add is as fast as NEON's two-wide doubles, so nothing to gain there.
 - The lane probe at 3/4 of the degree costs ≈ (3/4)^{4.5} ≈ 27% of a run **[estimate from the
   measured degree scaling 18.1 → 27.5 s for 20 → 22]**; running the first pass at 4 lanes instead
   costs about the same, so nothing to gain here.

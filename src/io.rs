@@ -93,12 +93,13 @@ pub mod error;
 
 use crate::cone::CandidateCone;
 use crate::{
-    compute, Ambient, Computed, Error, Geometry, InvariantKind, Invariants, Method, MoriCone,
-    Options, Problem, Selection, Stratum,
+    compute, Ambient, Computed, Error, Geometry, Invariant, InvariantKind, Invariants, Method,
+    MoriCone, Options, Problem, Selection, Stratum,
 };
 use error::IoError;
 use malachite::Rational;
 use nalgebra::DMatrix;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::Write;
 use std::str::FromStr;
@@ -404,7 +405,7 @@ impl Input {
         }
     }
 
-    fn write<T: std::fmt::Display>(
+    fn write<T: std::fmt::Display + Sync>(
         &self,
         writer: &mut impl Write,
         invariants: &Invariants<T>,
@@ -432,16 +433,22 @@ impl Input {
             return writeln!(writer, "results: []");
         }
         writeln!(writer, "results:")?;
-        for e in &invariants.entries {
-            write!(writer, "  - {{curve_class: ")?;
-            write_int_seq(writer, e.curve.iter())?;
-            write!(writer, ", degree: {}", e.degree)?;
-            if let Some(surface) = e.surface {
-                write!(writer, ", surface: {surface}")?;
-            }
-            match kind {
-                InvariantKind::GV => writeln!(writer, ", {key}: {}}}", e.value)?,
-                InvariantKind::GW => writeln!(writer, ", {key}: '{}'}}", e.value)?,
+        // Formatted in parallel, in the current rayon pool, a chunk of entries per task and a
+        // batch of chunks at a time, and written in order. Through `write!` field by field,
+        // the formatting took longer than the rest of a large run's tail.
+        for batch in invariants.entries.chunks(WRITE_CHUNK * WRITE_BATCH) {
+            let texts: Vec<Vec<u8>> = batch
+                .par_chunks(WRITE_CHUNK)
+                .map(|chunk| {
+                    let mut text = Vec::new();
+                    for e in chunk {
+                        write_entry(&mut text, e, kind);
+                    }
+                    text
+                })
+                .collect();
+            for text in texts {
+                writer.write_all(&text)?;
             }
         }
         Ok(())
@@ -777,6 +784,54 @@ fn as_indices(indices: &[i32]) -> Result<(usize, usize, usize), IoError> {
     ))
 }
 
+/// The entries of the output formatted by one task.
+const WRITE_CHUNK: usize = 1 << 12;
+
+/// The chunks of entries formatted before they are written.
+const WRITE_BATCH: usize = 64;
+
+/// Appends the line of the output of one invariant to `text`.
+fn write_entry<T: std::fmt::Display>(text: &mut Vec<u8>, e: &Invariant<T>, kind: InvariantKind) {
+    text.extend_from_slice(b"  - {curve_class: [");
+    for (i, &c) in e.curve.iter().enumerate() {
+        if i > 0 {
+            text.extend_from_slice(b", ");
+        }
+        push_int(text, c as i64);
+    }
+    text.extend_from_slice(b"], degree: ");
+    push_int(text, e.degree as i64);
+    if let Some(surface) = e.surface {
+        text.extend_from_slice(b", surface: ");
+        push_int(text, surface as i64);
+    }
+    let key = kind.as_str();
+    // Writing to a vector does not fail.
+    let _ = match kind {
+        InvariantKind::GV => writeln!(text, ", {key}: {}}}", e.value),
+        InvariantKind::GW => writeln!(text, ", {key}: '{}'}}", e.value),
+    };
+}
+
+/// Appends the decimal digits of `x` to `buf`.
+fn push_int(buf: &mut Vec<u8>, x: i64) {
+    if x < 0 {
+        buf.push(b'-');
+    }
+    let mut n = x.unsigned_abs();
+    let mut digits = [0u8; 20];
+    let mut i = digits.len();
+    loop {
+        i -= 1;
+        digits[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    buf.extend_from_slice(&digits[i..]);
+}
+
 /// Write a sequence of integers as a YAML flow sequence.
 fn write_int_seq<'a>(
     writer: &mut impl Write,
@@ -825,7 +880,7 @@ fn quote_string(data: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Invariant, Report};
+    use crate::Report;
     use malachite::Integer;
     use nalgebra::dmatrix;
 

@@ -17,6 +17,7 @@
 //! program's (`PLAN.md`, PR #102).
 
 use super::key::{Key, Wide};
+use super::table::prefetch;
 use core::cmp::Reverse;
 use core::fmt::Debug;
 use core::ops::Range;
@@ -678,21 +679,13 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
     }
 
     /// Asks the processor to fetch the entry where hash `h` would be probed first into the
-    /// cache, ahead of a lookup a few iterations later. It does nothing on other
-    /// architectures than x86-64, or before the table has memory.
+    /// cache, ahead of a lookup a few iterations later. It does nothing before the table has
+    /// memory.
     #[inline]
     pub fn prefetch(&self, h: W) {
-        #[cfg(target_arch = "x86_64")]
         if !self.entries.is_empty() {
-            let ptr = self.entries[h.top(self.log2)..].as_ptr().cast::<i8>();
-            // SAFETY: a prefetch has no effect on memory, and SSE is part of x86-64.
-            #[allow(unused_unsafe)]
-            unsafe {
-                core::arch::x86_64::_mm_prefetch(ptr, core::arch::x86_64::_MM_HINT_T0);
-            }
+            prefetch(self.entries[h.top(self.log2)..].as_ptr());
         }
-        #[cfg(not(target_arch = "x86_64"))]
-        let _ = h;
     }
 
     /// The entries in use, as hashes and values, in order of insertion.
@@ -869,19 +862,9 @@ impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
     /// [`LevelTable::prefetch`] does.
     #[inline]
     pub fn prefetch(&self, h: W) {
-        #[cfg(target_arch = "x86_64")]
         if !self.entries.is_empty() {
-            let ptr = self.entries[Self::bucket(h, self.entries.len())..]
-                .as_ptr()
-                .cast::<i8>();
-            // SAFETY: a prefetch has no effect on memory, and SSE is part of x86-64.
-            #[allow(unused_unsafe)]
-            unsafe {
-                core::arch::x86_64::_mm_prefetch(ptr, core::arch::x86_64::_MM_HINT_T0);
-            }
+            prefetch(self.entries[Self::bucket(h, self.entries.len())..].as_ptr());
         }
-        #[cfg(not(target_arch = "x86_64"))]
-        let _ = h;
     }
 
     /// The entries in use, as hashes and values.
