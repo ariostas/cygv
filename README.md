@@ -2,35 +2,36 @@
 
 [![Rust CI](https://github.com/ariostas/cygv/actions/workflows/rust.yml/badge.svg)](https://github.com/ariostas/cygv/actions/workflows/rust.yml) [![Python CI](https://github.com/ariostas/cygv/actions/workflows/python.yml/badge.svg)](https://github.com/ariostas/cygv/actions/workflows/python.yml) [![Crates.io Version](https://img.shields.io/crates/v/cygv)](https://crates.io/crates/cygv) [![PyPI - Version](https://img.shields.io/pypi/v/cygv)](https://pypi.org/project/cygv/) [![PyPI - Downloads](https://img.shields.io/pypi/dm/cygv)](https://pypi.org/project/cygv/)
 
-This project implements an efficient algorithm to perform the HKTY procedure [[1], [2]] to compute Gopakumar-Vafa (GV) and Gromov-Witten (GW) invariants of Calabi-Yau (CY) manifolds obtained as hypersurfaces or complete intersections in toric varieties. This project is based on the work presented in the paper "[Computational Mirror Symmetry]", but written in the Rust programming language and with some additional improvements.
+cygv computes Gopakumar-Vafa (GV) and Gromov-Witten (GW) invariants of Calabi-Yau (CY)
+manifolds obtained as hypersurfaces or complete intersections in toric varieties, by the HKTY
+procedure [[1], [2]]. It is a Rust implementation, with some improvements, of the algorithm of
+"[Computational Mirror Symmetry]", usable from Python, from Rust, and from the command line.
 
-Every computation needs three things:
+Every computation needs three things, with the same names in all three:
 
-- **the Calabi-Yau**: its GLSM charges `q` and its intersection numbers `intnums`, the nef
-  partition `nefpart` of a complete intersection, and for a vex phase of the ambient toric
-  variety either its `fan` or its `strata`;
-- **its Mori cone**: vectors that span it (`generators`), or the inequalities that cut it out
+- **the CY**: its GLSM charges `q` and intersection numbers `intnums`; for a complete
+  intersection its nef partition `nefpart`, and for a vex phase of the ambient toric variety its
+  `fan` or its `strata`;
+- **its Mori cone**: vectors that span it (`generators`), the inequalities that cut it out
   (`mori_hyperplanes`, with `mori_equations` for a face), or nothing when the `fan` gives it;
-- **which curve classes**: those up to a degree (`max_deg`), those below some classes
+- **the curve classes**: those up to a degree (`max_deg`), those below some classes
   (`target_points`), the lowest degrees holding a number of them (`min_points`), or exactly the
-  ones listed (`curve_classes`, computed from their lightcones as for `target_points`).
+  listed ones (`curve_classes`).
 
-Everything else has a default: the degree is taken with the `grading_vector`, by default the
-primitive sum of the inequalities of the Mori cone; the computation picks its method; and every
-lattice point of the Mori cone is used, even when the generators do not generate them all. The
-names are the same in Python, in the YAML input of the command line interface, and in Rust.
+The degree is taken with the `grading_vector`, by default the primitive sum of the inequalities
+of the Mori cone. Every lattice point of the Mori cone is used, even when the generators do not
+generate them all.
 
-## Python package
+## Python
 
-The `cygv` package on PyPI ships prebuilt wheels, so no Rust toolchain is needed to install it.
+The `cygv` package on PyPI ships prebuilt wheels, so no Rust toolchain is needed.
 
 ```bash
 pip install cygv
 ```
 
-A `Problem` holds the Calabi-Yau and its Mori cone, and its `gv` and `gw` methods compute the
-invariants of the selected curve classes. Every vector argument is a list of vectors, or any
-array-like that numpy accepts.
+A `Problem` holds the CY and its Mori cone, and its `gv` and `gw` methods compute the invariants.
+Vectors can be lists or any array-like that numpy accepts.
 
 ```python
 from cygv import Problem
@@ -58,33 +59,25 @@ list(problem.gw(max_deg=3))
 # [((0, 1), Fraction(4, 1)), ((1, 0), Fraction(640, 1)), ((0, 2), Fraction(1, 2)), ...]
 ```
 
-The results are a sequence of `(curve_class, invariant)` pairs sorted by degree and then by curve
-class, with GV invariants as `int`s and GW invariants as `fractions.Fraction`s; indexing by a
-curve class (or `get`) looks up its invariant, and `dict(gv)` maps them all. For CYs of
-dimension greater than three, an invariant is labeled by a curve class and by a reference surface
-(the first index of the intersection numbers), as in `(((1, 0, -4, 0, 0, 0), 2), 80)`. The same
-data are numpy arrays, which is much faster for many invariants: `curves`, one row per curve
-class, `degrees`, `values` (of `int64` when they all fit, and of Python objects otherwise) and,
-for those CYs, `surfaces`. They also carry the `dimension`, the `grading_vector` and a `report`
-of how they were computed.
+The result is a sequence of `(curve_class, invariant)` pairs sorted by degree, with GV invariants
+as `int`s and GW invariants as `Fraction`s, that can be indexed by curve class or turned into a
+`dict`. The same data are numpy arrays, much faster for many invariants: `curves`, `degrees`,
+`values` (`int64` when they all fit, Python objects otherwise) and, for CYs of dimension greater
+than three, `surfaces`, since there an invariant is also labeled by a reference surface (the
+first index of the intersection numbers), as in `(((1, 0, -4, 0, 0, 0), 2), 80)`.
+`compute_gv(q, intnums, generators=..., max_deg=3)` and `compute_gw` do the same in one call.
 
-`compute_gv` and `compute_gw` do the same in one call, taking the arguments of `Problem` and of
-`gv` or `gw` together: `compute_gv(q, intnums, generators=..., max_deg=3)`.
+`target_points` selects the classes $C$ with $P - C$ in the Mori cone for one of the given $P$,
+up to the largest degree of the $P$ or up to `max_deg`. `nefpart` lists, for each part, the
+divisors (positions in the charge vectors) it contains.
 
-`target_points` selects the curve classes $C$ with $P - C$ in the Mori cone for one of the given
-classes $P$, up to the largest degree of the $P$, or up to `max_deg` if it is given too. A
-complete intersection takes its nef partition as `nefpart`, lists of divisor indices (positions
-in the charge vectors) that split the divisors, each into exactly one part.
-
-A vex phase of the ambient toric variety (MacFadden–Sheridan, arXiv:2512.14817), whose curves of
-negative anticanonical degree need the class of the stratum they force into the CY, needs those
-strata, as `strata`: `(divisors, class)` pairs of the three divisors and the class of the
-stratum, whose entries may be `Fraction`s. They can instead be derived from the fan of the
-ambient toric variety, as `fan`: its maximal cones, lists of four divisors, which must form a
-fine regular fan on the boundary points of a reflexive polytope that are not interior to facets
-(FRST or vex). The fan also gives the Mori cone (spanned by the classes of its walls) and the
-default grading vector, and `intnums` is checked against its intersection ring. Both are only
-supported for threefold hypersurfaces.
+**Vex phases.** In a vex phase (MacFadden–Sheridan, arXiv:2512.14817), curves of negative
+anticanonical degree need the strata they force into the CY. Give either the `strata`, as
+`(divisors, class)` pairs of three divisors and the stratum's class (entries may be `Fraction`s),
+or the `fan` of the ambient toric variety: its maximal cones, which must form a fine regular fan
+on the boundary points of a reflexive polytope that are not interior to facets. The fan also
+gives the Mori cone and the default grading vector, and `intnums` is checked against it. Both are
+only supported for threefold hypersurfaces.
 
 ```python
 fan = [
@@ -102,42 +95,23 @@ Problem(q, {(0, 1, 1): 4, (1, 1, 1): 2}, fan=fan).gv(max_deg=3)
 # Invariants(gv, [((0, 1), 640), ((1, -1), 1), ((0, 2), 10032), ((1, 0), 20), ((0, 3), 288384), ... (6 in all)])
 ```
 
-Two implementations of the computation are available, selected with `method`. The `modular` one
-computes modulo word-sized primes and recovers the exact integers by the Chinese remainder
-theorem, which is much faster, but does not support `min_points`, and only takes curve classes
-whose coordinates fit its keys of up to 512 bits. On a face of the Mori cone it takes their
-coordinates in a reduced basis of the lattice they span, which keeps them small: faces of rank
-up to a few dozen fit even when $h^{1,1}$ is in the hundreds. The `reference` one is a faithful
-implementation of the HKTY procedure with exact rational arithmetic. The default, `auto`, uses
-the modular one for every selection but `min_points`, and the reference one for that; curve
-classes too large for the modular one are an error rather than a slow run of the reference.
-`n_threads` sets the number of threads, which defaults to one per logical CPU.
+**Options.**
 
-The modular implementation accepts its result once one more prime agrees with it, which makes a
-wrong result vanishingly unlikely but does not rule it out. With `certify=True` it proves the
-result instead: it bounds every invariant from above, by running the computation once more over
-upward-rounded reals, and takes more primes until every bound is below half their product, which
-costs about as much as the computation itself. Vex phases cannot be certified yet.
+| Keyword | Effect |
+| --- | --- |
+| `method` | `"modular"` computes modulo primes and lifts by the CRT, and is much faster; `"reference"` is a faithful implementation in exact rationals. The default, `"auto"`, picks `modular` for everything but `min_points`, which it does not support. |
+| `certify` | Proves the modular result, by bounding every invariant and taking primes until the bounds fit, for about twice the time. Without it the result is accepted once one more prime agrees, which makes an error vanishingly unlikely. Not for vex phases yet. |
+| `low_memory` | About a third of the memory, for about two and a half times the time. |
+| `n_threads` | The number of threads, one per logical CPU by default. |
+| `verbose` | Writes the progress to `sys.stderr`; `2` also writes each degree. |
+| `hilbert_bases` | The Hilbert bases of the cones the modular method takes its curve classes from, computed elsewhere (by [Normaliz](https://www.normaliz.uni-osnabrueck.de/), say) instead of by cygv: `(divisors, basis)` pairs for every set of one or two divisors (and the three of each stratum). They are trusted, so a missing element silently drops classes. |
 
-For runs that do not fit in memory otherwise, `low_memory=True` makes the modular implementation
-prefer memory to speed: it takes about a third of the memory, for about two and a half times
-the time.
+The modular method takes curve classes of up to 512 bits; on a face of the Mori cone it uses a
+reduced basis of the lattice they span, so faces of rank up to a few dozen fit even when
+$h^{1,1}$ is in the hundreds. Larger classes are an error, not a slow run of the reference.
 
-`verbose=True` writes the progress of a long run to `sys.stderr`: the stages, the passes of the
-modular implementation and the certifier's rounds, with `verbose=2` also the degrees of each
-pass.
-
-The modular implementation takes the curve classes from the Hilbert bases of the cones $K_T$ of
-the classes in the Mori cone that only meet the divisors in $T$ negatively, which it computes
-itself. A program such as [Normaliz](https://www.normaliz.uni-osnabrueck.de/) can compute them
-instead, passed as `hilbert_bases`: `(divisors, hilbert_basis)` pairs for every set $T$ of one or
-two divisors, and in a vex phase also for the three divisors of every stratum. Elements of degree
-above `max_deg` can be left out. They are trusted, so a missing element silently drops curve
-classes.
-
-A Calabi-Yau of [CYTools](https://cy.tools) (which calls cygv itself in `cy.compute_gvs`) gives
-its data in the form cygv takes, as long as the charges leave out the origin of the polytope and
-the intersection numbers are in the same basis as the charges:
+**CYTools.** A CY of [CYTools](https://cy.tools) (which calls cygv in `cy.compute_gvs`) gives its
+data in the form cygv takes, with the origin of the polytope left out of the charges:
 
 ```python
 gv = compute_gv(
@@ -148,19 +122,14 @@ gv = compute_gv(
 )
 ```
 
-Charges that include the origin are an error, since they would describe a CY of the wrong
-dimension.
+**Errors and interrupts.** Invalid input raises a `ValueError`, and a failed computation (for
+instance invariants that are not integers, which usually means inconsistent input) a
+`cygv.ComputationError`. The computation runs on threads of its own with the GIL released, and
+ctrl+c (or interrupting a Jupyter kernel) stops it within a fraction of a second, raising
+`KeyboardInterrupt`; a second ctrl+c stops waiting. Since it runs in the Python process, running
+out of memory takes the process or the kernel with it, which `low_memory=True` helps avoid.
 
-Invalid input raises a `ValueError`, and a computation that fails (for instance because the
-invariants are not integers, which usually means inconsistent input) a `cygv.ComputationError`.
-The computation runs on threads of its own with the GIL released, so that other Python threads
-go on meanwhile, and ctrl+c (or interrupting a Jupyter kernel) stops it, usually within a
-fraction of a second, raising `KeyboardInterrupt`; a second ctrl+c raises it without waiting
-for the computation to stop. Since it runs in the Python process, a computation that runs out
-of memory takes the process (or the Jupyter kernel) with it: `low_memory=True` takes about a
-third of the memory.
-
-## Rust crate
+## Rust
 
 The same model, as types: a `Problem` of a `Geometry`, a `MoriCone` and a `Selection`, computed
 by `compute_gv` or `compute_gw` with `Options`.
@@ -188,48 +157,28 @@ assert_eq!((gv.entries[1].curve.as_slice(), gv.entries[1].value.clone()), (&[1, 
 ```
 
 The crate re-exports `nalgebra` and `malachite`, whose matrices and big integers it takes and
-returns, so that their types can be named without depending on matching versions of them.
+returns. Progress goes through the [`log`](https://docs.rs/log) facade; `cygv::log_to_stderr`
+installs a minimal logger.
 
-## Command line interface
+## Command line
 
-This project also ships a `cygv` executable, so that it can be used without Python. It reads
-YAML-formatted data from a file, or from the standard input, and writes the resulting invariants
-to a file, or to the standard output.
+The `cygv` executable reads a stream of YAML documents, one computation each, with the same names
+as the Python arguments, and writes one document of results for each.
 
 ```bash
 cargo install cygv
 cygv --file input.yaml --output invariants.yaml
 ```
 
-It is part of the default `cli` feature. Library users that do not need it can depend on this
-crate with `default-features = false` to avoid pulling in the argument and YAML parsers.
-
-The input is a stream of YAML documents, each of which specifies a single computation, with the
-same names as the Python arguments.
-
 ```yaml
 ---
 name: an example threefold
 q: [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]]
-intnums:
-  - [0, 0, 0, 8]
-  - [0, 0, 1, 4]
+intnums: [[0, 0, 0, 8], [0, 0, 1, 4]]  # or {"0,0,0": 8, "0,0,1": 4}
 generators: [[1, 0], [0, 1]]
 invariants: gv
 max_deg: 3
 ```
-
-The intersection numbers can equivalently be given as a mapping from indices to values, which is
-easier to read when there are many of them.
-
-```yaml
-intnums:
-  "0,0,0": 8
-  "0,0,1": 4
-```
-
-The results are written back as one YAML document per input document, sorted by the degree of
-the curve classes under the grading vector.
 
 ```yaml
 ---
@@ -247,22 +196,18 @@ results:
   - {curve_class: [3, 0], degree: 3, gv: 288384}
 ```
 
-Run `cygv --help` for the full list of input fields and options. `--method`, `--threads`,
-`--max-deg`, `--invariants`, `--certify` and `--low-memory` set those for every document,
-`-v` (or `-vv`) writes the progress to stderr, and the `examples` directory has complete inputs.
-From Rust, `cygv::log_to_stderr` does the same, and the messages go through the
-[`log`](https://docs.rs/log) facade for any other logger.
+`--method`, `--threads`, `--max-deg`, `--invariants`, `--certify` and `--low-memory` override
+those for every document, and `-v` (or `-vv`) writes the progress to stderr. See `cygv --help`
+and the `examples` directory. The executable is the default `cli` feature; library users can
+leave it out with `default-features = false`.
 
 ## License
 
 Licensed under the GNU General Public License v3 or later (GPLv3+)
 ([LICENSE](https://github.com/ariostas/cygv/blob/main/LICENSE) or <https://www.gnu.org/licenses/gpl-3.0.en.html#license-text>).
-
-## Contribution
-
-Any contribution submitted for inclusion in the work by you, shall be
-licensed as under the GPLv3+, without any additional terms or conditions.
-See [CONTRIBUTING.md](https://github.com/ariostas/cygv/blob/main/CONTRIBUTING.md) for guidelines.
+Any contribution submitted for inclusion in the work shall be licensed under the GPLv3+, without
+any additional terms or conditions; see
+[CONTRIBUTING.md](https://github.com/ariostas/cygv/blob/main/CONTRIBUTING.md).
 
 [1]: https://arxiv.org/abs/hep-th/9308122
 [2]: https://arxiv.org/abs/hep-th/9406055
