@@ -227,7 +227,7 @@ need more are `Error::CertifyPrimes`), the thread count, the extraction's tuning
 of one degree, for about a third of the memory in two and a half times the time; the
 command line and the Python module also call `return_freed_memory`, which sets glibc's
 `M_MMAP_THRESHOLD` so that large freed blocks go back to the system, a third less resident
-memory); big integers (`malachite::Integer`) are only built by `crt`, for the final values.
+memory, for the rest of the process, Python's included); big integers (`malachite::Integer`) are only built by `crt`, for the final values.
 With `certify` (the certifier, `PLAN.md` phase 8, after the C's `cgv_maj` and `certify.py`),
 `lifted` runs the majorant pass on the lift and `primes_needed` compares the largest bound
 with half the product of the primes, adding passes until it is below (when the new primes
@@ -296,9 +296,17 @@ indices differently (the first index is a reference surface in the n-fold case).
   of the modular pipeline and the certifier's rounds, `debug!` for each degree of a pass (or of
   the reference's series inversion). Nothing is printed unless a logger is installed:
   `log_to_stderr` in `src/lib.rs`, a minimal one stamping the seconds since it was installed,
-  which the CLI's `-v`/`-vv` and the Python keyword `verbose` (read by `src/python.rs`, not
-  part of `Options`) install. `hkty.py` forwards the subprocess's stderr file to `sys.stderr`
-  while it waits when `verbose` is set.
+  which the CLI's `-v`/`-vv` installs, and the Python bindings' `Progress`, which keeps the
+  lines for the wait of `_compute` to write to Python's `sys.stderr` (the one Jupyter shows)
+  when the keyword `verbose` (read by `src/python.rs`, not part of `Options`) is set.
+
+- **Interrupts** (`src/interrupt.rs`): `Options::interrupt` holds an `Interrupt`, an
+  `Arc<AtomicBool>` that another thread sets. The dispatch makes it the current thread's
+  (`interrupt::with`), the pipelines build their pools with `interrupt::pool`, whose threads
+  take it, and `interrupt::check` polls it at the checkpoints: each layer of the extraction
+  and of the tree, each block of the instanton, and the stages and degrees of the
+  reference's series inversion, returning `Error::Interrupted` (the sub-errors' variants map
+  to it). Checking a thread-local saves threading the handle through every stage.
 
 - **One problem, one dispatch.** The public input is `src/problem.rs` (decided in
   `INTERFACE.md`, phase 9): a `Problem` of a `Geometry` (`q` with one row per divisor,
@@ -382,8 +390,11 @@ indices differently (the first index is a reference surface in the n-fold case).
   splits the candidates into chunks, and the products of `instanton` and the extraction use
   shards: a `table::ShardedMap` (or the extraction's own shards, which also carry a degree heap)
   splits a table by the high bits of the key hash, each shard behind a `Mutex`, and workers add
-  to it in batches (a chunk's own map, or per-shard buffers of `FLUSH` terms), so each lock is
-  taken rarely. The extraction's tree builds the curves' exponentials in parallel by curve,
+  to it in batches (a chunk's own map, or per-shard buffers of `FLUSH` terms, fewer past 16
+  threads so that the buffers of a worker hold at most `FLUSH_TOTAL` in all, rather than a
+  number quadratic in the threads), so each lock is taken rarely. The adds of buffered terms
+  into the tree's tables prefetch `ADD_AHEAD` terms ahead (`ahead`), since each one misses
+  the caches otherwise. The extraction's tree builds the curves' exponentials in parallel by curve,
   sums up the tree by parent, subtracts by table and multiplies by target table (its products
   into one table are one task, but for the tables of the root and its children, which are in
   one part per thread for an exact ring on several threads, `Tab`, and take the products in
@@ -424,10 +435,12 @@ indices differently (the first index is a reference surface in the n-fold case).
 ### Command line interface
 
 `src/bin/cygv/main.rs` is a thin clap front end: it reads YAML from a file or stdin, parses it with
-`io::Input::load_all`, applies the overrides (`--threads`, `--method`, `--max-deg` through
-`Input::set_max_deg`, `--invariants`, `--certify`/`--no-certify`, `--low-memory`, and `-v`/`-vv`,
-which installs `log_to_stderr`) and validates every document
-before computing any, and writes one YAML document of results per input document to a file or
+`io::Input::parse_all` (which takes `--max-deg` as the `max_deg` of a document that selects no
+curve classes, and leaves the checks to `Input::validate`), applies the overrides (`--threads`,
+`--method`, `--max-deg` through `Input::set_max_deg`, `--invariants`,
+`--certify`/`--no-certify`, `--low-memory`, and `-v`/`-vv`, which installs `log_to_stderr`) and
+validates every document before computing any (a closed output pipe, as from `head`, ends it
+quietly), and writes one YAML document of results per input document to a file or
 stdout, flushing after each one. All of the parsing and formatting lives in `src/io.rs`, whose
 `Input` holds a `Problem`, the `InvariantKind` and the `Options`, with the field names of the
 Python API (each inner list is a *column*), in a flat document. `Input::from_yaml` rejects
@@ -460,28 +473,34 @@ dependencies, `[[bin]]` declares `required-features = ["cli"]`, and both `io` (i
 
 `src/python.rs` exposes a single `_compute(kind, args)` PyO3 function (module built with `gil_used =
 false`) taking the keywords as one dict of plain lists and ints, which it parses into a `Problem`
-and `Options` (the one-of groups as in the YAML layer) and passes to `compute`; it returns the
-entries with their values as **strings**, the dimension, the grading vector and the report, and
-the Python side parses the values into `int` or `fractions.Fraction`. A new field is one key there
-and one keyword in `hkty.py`.
+and `Options` (the one-of groups as in the YAML layer) and passes to `compute`. A new field is
+one key there and one keyword in `hkty.py`. The computation runs in process, on a thread of
+its own (`STACK`, as large as a main thread's) with the GIL released, while the calling thread
+waits for it in polls of `POLL` (100 ms): each poll forwards the progress and runs
+`check_signals`, and on ctrl+c (or a Jupyter interrupt) it sets the computation's `Interrupt`,
+waits for it to stop and raises the `KeyboardInterrupt`. It replaced a `multiprocessing`
+subprocess, whose pickling of the results took over half as long again as a large computation
+(h11_10 at degree 20: 32 s against 20 s; now 18.2 s against 17.9 s), held the results twice,
+and failed opaquely in scripts without a main guard under `spawn` and `forkserver` (the
+default on Linux from Python 3.14). The results come back in columns (`Columns`), built on the
+computation's thread: the curves as one `int32` numpy array, the surfaces and degrees as
+`int64` arrays, all of them owning the Rust vectors without a copy (the `numpy` crate), and the
+values (and denominators of GW invariants) as an `int64` array when they all fit, as a list of
+Python ints otherwise (malachite's `enable_pyo3`).
 
 `python/cygv/hkty.py` wraps it: `Problem` is a dataclass of the geometry and the Mori cone (`q`,
 `intnums` as a dict or `[i, j, k, value]` entries, `nefpart`, `fan`, `strata`, `generators`,
 `mori_hyperplanes`, `mori_equations`, `grading_vector`) whose `gv` and `gw` methods take the
 selection and the options as keywords; `compute_gv(q, intnums, **kwargs)` and `compute_gw` split
-their keywords between the two. The result, `Invariants`, is a `list` of `(key, value)` pairs (the
-key a curve tuple, or `(curve, surface)` for an n-fold) with `kind`, `dimension`,
-`grading_vector` and a `Report` dataclass attached. The call runs in a `multiprocessing.Process`
-so Ctrl-C interrupts the computation without killing the interpreter (the Rust side installs a
-ctrlc handler that calls `exit(1)`). Exceptions raised in the subprocess keep their type: invalid
-or unsupported input is a `ValueError`, a failed computation (`NotStable`, `CertifyPrimes`,
-invariants that are not integers in the reference, cones too large) a
-`cygv.ComputationError` (a `RuntimeError` created in `src/python.rs`), and panics a
-`RuntimeError`. The subprocess's stderr is redirected to a temp file and surfaced in the raised
-`RuntimeError` when the process dies before sending a result; an exception in the parent
-(Ctrl-C there, or any other) terminates the child. `hkty.py` checks that the vectors and
-counts are integers (integral floats too) that fit their Rust types, rather than truncating
-them.
+their keywords between the two. The result, `Invariants`, is a `Sequence` of `(key, value)`
+pairs (the key a curve tuple, or `(curve, surface)` for an n-fold), built lazily from the
+read-only arrays `curves`, `surfaces`, `degrees` and `values`, with `kind`, `dimension`,
+`grading_vector` and a `Report` dataclass attached. It must not have a `keys` method, which
+would make `dict(invariants)` take it for a mapping. Invalid or unsupported input is a
+`ValueError`, a failed computation (`NotStable`, `CertifyPrimes`, invariants that are not
+integers in the reference, cones too large) a `cygv.ComputationError` (a `RuntimeError` created
+in `src/python.rs`), and a panic a `RuntimeError`. `hkty.py` checks that the vectors and counts
+are integers (integral floats too) that fit their Rust types, rather than truncating them.
 
 Note the transpose convention: the Rust API takes column-major matrices, while the Python API
 takes row-oriented lists (`to_matrix` in `src/python.rs` treats each inner list as a column).

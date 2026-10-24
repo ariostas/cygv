@@ -687,6 +687,8 @@ pub fn cone_data(
                     .flat_map(|(i, &r)| neg[i + 1..].iter().map(move |&s| vec![r, s])),
             )
             .chain(strata.iter().map(|s| s.to_vec()));
+        // The position of each negative set's group, of which there can be thousands.
+        let mut group_of: HashMap<Vec<usize>, usize> = HashMap::new();
         for t in labels {
             let e: Vec<usize> = t.iter().copied().filter(|&r| is_neg[r]).collect();
             if e.is_empty() {
@@ -701,11 +703,14 @@ pub fn cone_data(
             if m.is_empty() {
                 continue;
             }
-            match groups.iter_mut().find(|g| g.0 == m) {
-                None => groups.push((m, t, b.clone())),
-                Some(g) => {
-                    if g.1.len() == 2 && t.len() != 2 {
-                        g.1 = t;
+            match group_of.get(&m) {
+                None => {
+                    group_of.insert(m.clone(), groups.len());
+                    groups.push((m, t, b.clone()));
+                }
+                Some(&i) => {
+                    if groups[i].1.len() == 2 && t.len() != 2 {
+                        groups[i].1 = t;
                     }
                 }
             }

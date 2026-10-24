@@ -8,7 +8,9 @@
 use crate::cone::{check_cone_data, columns, CandidateCone, ConeData};
 use crate::dispatch::Error;
 use crate::phase::{Fan, FanError};
-use crate::{check_intnums, check_nefpart, check_strata, modular, CYKind, Method, Stratum};
+use crate::{
+    check_intnums, check_nefpart, check_strata, modular, CYKind, Interrupt, Method, Stratum,
+};
 use nalgebra::DMatrix;
 use std::collections::HashMap;
 
@@ -118,7 +120,7 @@ pub struct Problem {
 pub struct Options {
     /// Which pipeline to use.
     pub method: Method,
-    /// The number of worker threads, at least one, or `None` for one per core.
+    /// The number of worker threads, at least one, or `None` for one per logical CPU.
     pub n_threads: Option<usize>,
     /// Whether to prove the results exact (see [`modular::Options::certify`]); the reference
     /// pipeline is exact anyway. Not supported in vex phases yet.
@@ -135,6 +137,9 @@ pub struct Options {
     pub hilbert_bases: Option<Vec<CandidateCone>>,
     /// The tuning of the modular pipeline.
     pub tuning: modular::Tuning,
+    /// A handle that interrupts the computation from another thread: it then stops at its
+    /// next checkpoint, within about the time of one degree, with [`Error::Interrupted`].
+    pub interrupt: Option<Interrupt>,
 }
 
 /// What the checks of a problem find out on the way.
@@ -252,6 +257,16 @@ impl Problem {
             return Err(input_err("q", "the charges must not be empty"));
         }
         check_nefpart(nefpart, n_divisors).map_err(|r| input_err("nefpart", r))?;
+        // The anticanonical class, the sum of the toric divisors, never vanishes on a complete
+        // toric variety. Charges that sum to zero include the origin of the polytope, which
+        // would also add one to the dimension and give wrong invariants without any error.
+        if (0..h11).all(|a| q.column(a).iter().map(|&x| i64::from(x)).sum::<i64>() == 0) {
+            return Err(input_err(
+                "q",
+                "the charges of the divisors sum to zero, which means that they include the \
+                 origin of the polytope; leave it out (in CYTools, with include_origin=False)",
+            ));
+        }
         let dim = self.geometry.dimension();
         if dim < 3 {
             // One charge vector per divisor instead of one per Kähler parameter.

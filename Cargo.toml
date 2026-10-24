@@ -32,18 +32,19 @@ default = ["cli"]
 cli = ["dep:clap", "dep:yaml-rust2"]
 # The Python bindings, i.e. the `python` module. Only the extension module built
 # by maturin needs them (see `[tool.maturin]` in pyproject.toml), so plain Rust
-# builds do not have to compile pyo3.
-python = ["dep:pyo3", "dep:ctrlc"]
+# builds do not have to compile pyo3. numpy hands the results to Python as arrays without
+# copying them, and malachite converts the big integers.
+python = ["dep:pyo3", "dep:numpy", "malachite/enable_pyo3"]
 
 [dependencies]
 clap = { version = "4.5.16", features = ["derive"], optional = true }
-ctrlc = { version = "3.4.4", optional = true }
 log = "0.4"
 # The big integers and rationals: the reference pipeline's coefficients, and the CRT lift
 # and GW invariants of the modular one. Pure Rust, so no C library has to be built.
 # Only integers and rationals are needed, so the floats are left out.
 malachite = { version = "0.13", default-features = false, features = ["rationals", "std"] }
 nalgebra = "0.35.0"
+numpy = { version = "0.29", optional = true }
 rayon = "1.12.0"
 rustc-hash = "2"
 yaml-rust2 = { version = "0.13", optional = true }

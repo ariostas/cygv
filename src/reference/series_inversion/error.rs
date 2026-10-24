@@ -8,6 +8,8 @@ use core::fmt;
 pub enum SeriesInversionError {
     NonIntegerGVError,
     PolynomialError(PolynomialError),
+    /// The computation was interrupted ([`crate::Interrupt`]).
+    Interrupted,
 }
 
 /// Implement Display trait for SeriesInversionError.
@@ -22,6 +24,7 @@ impl fmt::Display for SeriesInversionError {
                 )
             }
             SeriesInversionError::PolynomialError(e) => e.fmt(f),
+            SeriesInversionError::Interrupted => write!(f, "the computation was interrupted"),
         }
     }
 }

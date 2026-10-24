@@ -79,6 +79,9 @@ pub enum Error {
     /// number it holds: either the invariants are not integers, or they are larger than the
     /// primes can hold.
     NotStable { primes: usize },
+    /// A GV invariant of the degree given is the fraction given rather than an integer, as
+    /// the lift showed before it could be stable (see [`crt::Residues::fraction`]).
+    NotInteger { degree: u32, value: Rational },
     /// The certifier's bounds need more primes than [`Tuning::max_primes`].
     CertifyPrimes { needed: usize, allowed: usize },
     /// Certification was asked for in a vex phase, which the bounds do not cover yet (nor
@@ -87,6 +90,8 @@ pub enum Error {
     /// A basis of the lattice the curve classes span, or the coordinates in it, overflow
     /// their integers.
     LatticeTooLarge,
+    /// The computation was interrupted ([`crate::Interrupt`]).
+    Interrupted,
 }
 
 impl fmt::Display for Error {
@@ -123,11 +128,17 @@ impl fmt::Display for Error {
                  more bits than that would also do it",
                 62 * primes
             ),
+            Self::NotInteger { degree, value } => write!(
+                f,
+                "a GV invariant of degree {degree} is {value}, not an integer; \
+                 {NON_INTEGER_CAUSES}"
+            ),
             Self::CertifyPrimes { needed, allowed } => write!(
                 f,
                 "the bounds of the certifier need {needed} primes, more than the {allowed} \
                  allowed"
             ),
+            Self::Interrupted => write!(f, "the computation was interrupted"),
         }
     }
 }
@@ -523,7 +534,7 @@ impl Geometry {
 /// The options of [`compute_gv`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Options {
-    /// The number of worker threads, at least one, or `None` for one per core. The run
+    /// The number of worker threads, at least one, or `None` for one per logical CPU. The run
     /// builds a thread pool of its own rather than use rayon's global one.
     pub threads: Option<usize>,
     /// Whether to prove the lift right (`PLAN.md` phase 8): the invariants are bounded by
@@ -1343,8 +1354,7 @@ impl Setup {
         // The stages parallelize with rayon and run in whichever pool they are installed in,
         // so a private one honours `threads` and keeps out of a library consumer's own use of
         // rayon.
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
+        let pool = crate::interrupt::pool(threads)
             .build()
             .expect("failed to build the worker thread pool");
         let max_deg = if targets.is_empty() {
@@ -1581,6 +1591,9 @@ struct Run<'a, L: KeyLayout> {
     tuning: &'a extraction::Tuning,
 }
 
+/// The most values of a lift that is not stable that [`passes`] tries as fractions.
+const FRACTION_LIMIT: usize = 64;
+
 /// Adds passes over `NL` primes each to `residues`, taking the primes that follow theirs in
 /// [`field::primes`], until there are at least `min_primes` and the lift is stable, starting
 /// none once `options.tuning.max_primes` primes are taken.
@@ -1616,10 +1629,14 @@ fn passes<const NL: usize, L: KeyLayout>(
             }
             Err(e) => return Err(e),
         }
-        if residues.primes().len() >= min_primes && residues.is_stable(options.tuning.check_primes)
-        {
+        let check = options.tuning.check_primes;
+        if residues.primes().len() >= min_primes && residues.is_stable(check) {
             log::info!("the lift is stable with {} primes", residues.primes().len());
             return Ok(residues);
+        }
+        // Inconsistent input gives fractions, which need not take every prime to show.
+        if let Some((degree, value)) = residues.fraction(check, FRACTION_LIMIT) {
+            return Err(Error::NotInteger { degree, value });
         }
     }
     Err(Error::NotStable {

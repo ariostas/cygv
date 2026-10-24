@@ -18,8 +18,31 @@
 use super::field::{LaneField, Lanes};
 use super::key::Key;
 use super::table::SparsePoly;
-use malachite::Integer;
+use malachite::base::num::arithmetic::traits::{FloorSqrt, Gcd, UnsignedAbs};
+use malachite::{Integer, Rational};
 use rayon::prelude::*;
+
+/// The fewest primes [`Residues::fraction`] reconstructs from: 248 bits, enough for a
+/// numerator and a denominator of 124 bits each.
+const FRACTION_PRIMES: usize = 4;
+
+/// The fraction $a / b$ with $|a|, b \le$ `bound` and $a \equiv b x \pmod m$, for $0 \le x <
+/// m$, if there is one in lowest terms (Wang's rational reconstruction: the extended
+/// Euclidean algorithm on $m$ and $x$, stopped at the first remainder below the bound).
+fn reconstruct(x: &Integer, m: &Integer, bound: &Integer) -> Option<(Integer, Integer)> {
+    let (mut r0, mut r1) = (m.clone(), x.clone());
+    let (mut t0, mut t1) = (Integer::from(0), Integer::from(1));
+    while &r1 > bound {
+        let q = &r0 / &r1;
+        let r2 = &r0 - &q * &r1;
+        (r0, r1) = (r1, r2);
+        let t2 = &t0 - &q * &t1;
+        (t0, t1) = (t1, t2);
+    }
+    let (a, b) = if t1 < 0 { (-r1, -t1) } else { (r1, t1) };
+    let coprime = (&a).unsigned_abs().gcd((&b).unsigned_abs()) == 1u32;
+    (b != 0 && &b <= bound && coprime).then_some((a, b))
+}
 
 /// $a b \bmod p$
 #[inline]
@@ -259,6 +282,54 @@ impl<K: Key> Residues<K> {
             .all(|agrees| agrees)
     }
 
+    /// A value that is a fraction rather than an integer, with its degree: one of the first
+    /// `limit` values whose lift from all primes but the last `check` disagrees with those,
+    /// in order of degree, that is a fraction $a / b$ with $b > 1$ modulo all but the last
+    /// `check` primes, by rational reconstruction, and agrees with the residues modulo
+    /// those. An integer that is only too large for the primes so far passes that test by
+    /// accident with a chance of about one in a prime, as for [`Residues::is_stable`]. So
+    /// invariants that are not integers, which is what inconsistent input gives, show after
+    /// a few primes rather than after all of those allowed.
+    pub fn fraction(&self, check: usize, limit: usize) -> Option<(u32, Rational)> {
+        let n = self.primes.len();
+        if n < check + FRACTION_PRIMES {
+            return None;
+        }
+        let lift = Lift::new(&self.primes);
+        let m = self.primes[..n - check]
+            .iter()
+            .fold(Integer::from(1), |m, &p| m * Integer::from(p));
+        let bound = Integer::from((&m >> 1u32).unsigned_abs().floor_sqrt());
+        let mut digits = vec![0; n - check];
+        let unstable = (0..self.keys.len() * self.width).filter(|&i| {
+            lift.digits(|j| self.columns[j][i], &mut digits);
+            (n - check..n).any(|j| lift.residue(&digits, self.primes[j]) != self.columns[j][i])
+        });
+        let mut digits = vec![0; n - check];
+        for i in unstable.take(limit) {
+            lift.digits(|j| self.columns[j][i], &mut digits);
+            let mut x = lift.integer(&digits);
+            if x < 0 {
+                x += &m;
+            }
+            let Some((a, b)) = reconstruct(&x, &m, &bound) else {
+                continue;
+            };
+            let agrees = (n - check..n).all(|j| {
+                let p = Integer::from(self.primes[j]);
+                let r = Integer::from(self.columns[j][i]);
+                ((&a - &b * r) % p) == 0
+            });
+            if b > 1 && agrees {
+                return Some((
+                    self.degs[i / self.width],
+                    Rational::from(a) / Rational::from(b),
+                ));
+            }
+        }
+        None
+    }
+
     /// The lifts from all primes, as (curve, degree, `width` integers) in increasing order
     /// of degree and then key, leaving out the curves where all of them are zero.
     pub fn lift(&self) -> Vec<(K, u32, Vec<Integer>)> {
@@ -391,5 +462,43 @@ mod tests {
             (PackedKey(4), 4, int(&[0, p01])),
         ];
         assert_eq!(res.lift(), expected);
+    }
+
+    #[test]
+    fn test_fraction() {
+        let ps: Vec<u64> = primes().take(6).collect();
+        let lanes: Vec<LaneField<2>> = ps.chunks(2).map(|c| LaneField::new([c[0], c[1]])).collect();
+        // -7/3 modulo each prime, at curve 2, beside integers, one of which needs three
+        // primes.
+        let pass = |lf: &LaneField<2>| {
+            let mut map = SlotMap::new(1, 4);
+            let fraction = Lanes(core::array::from_fn(|l| {
+                let f = &lf.fields()[l];
+                f.mul(f.encode(f.p() - 7), f.inv(f.encode(3)).unwrap())
+            }));
+            let int = |y: i128| {
+                Lanes(core::array::from_fn(|l| {
+                    let f = &lf.fields()[l];
+                    f.encode(y.rem_euclid(f.p() as i128) as u64)
+                }))
+            };
+            map.get_or_insert(PackedKey(1), 1)[0] = int(5);
+            map.get_or_insert(PackedKey(2), 2)[0] = fraction;
+            map.get_or_insert(PackedKey(3), 3)[0] = int(i128::MAX / 3);
+            map.take()
+        };
+        let mut res = Residues::new(1);
+        res.add_pass(&lanes[0], &pass(&lanes[0]));
+        res.add_pass(&lanes[1], &pass(&lanes[1]));
+        // Four primes are too few, with one of them to check.
+        assert!(!res.is_stable(1));
+        assert_eq!(res.fraction(1, 64), None);
+        res.add_pass(&lanes[2], &pass(&lanes[2]));
+        assert_eq!(
+            res.fraction(1, 64),
+            Some((2, Rational::from_signeds(-7, 3)))
+        );
+        // Only the first unstable values are tried.
+        assert_eq!(res.fraction(1, 0), None);
     }
 }

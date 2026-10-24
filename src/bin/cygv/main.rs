@@ -73,7 +73,8 @@ Options:
                  otherwise: the modular pipeline then takes about a third of the
                  memory, for about two and a half times the time. It defaults to
                  false.
-  n_threads      The number of threads to use. It defaults to one per core.
+  n_threads      The number of threads to use. It defaults to one per logical
+                 CPU.
   hilbert_bases  For every set T of one or two divisors, the Hilbert basis of
                  the cone K_T of the curve classes in the Mori cone that only
                  meet the divisors in T negatively, as computed by programs such
@@ -101,8 +102,9 @@ struct Args {
     /// Pipeline to use. It overrides the value given in the input
     #[arg(short, long, value_parser = parse_method)]
     method: Option<Method>,
-    /// Maximum degree, for every input. It overrides the value given in the input, and
-    /// can only be used with max_deg or target_points
+    /// Maximum degree, for every input. It overrides the value given in the input, is the
+    /// max_deg of an input that selects no curve classes, and cannot be used with min_points
+    /// or curve_classes
     #[arg(short = 'd', long, value_name = "N")]
     max_deg: Option<u32>,
     /// Which invariants to compute, gv or gw, for every input
@@ -181,7 +183,8 @@ fn run(args: &Args) -> Result<(), Box<dyn Error>> {
         cygv::log_to_stderr(args.verbose);
     }
     let data = read_input(args.file.as_ref())?;
-    let mut inputs = Input::load_all(&data)?;
+    // The documents are checked once the options have been applied to them.
+    let mut inputs = Input::parse_all(&data, args.max_deg)?;
     // With several documents, the errors say which one they are about.
     let several = inputs.len() > 1;
     let which = |i: usize, input: &Input| match (several, &input.name) {
@@ -200,8 +203,8 @@ fn run(args: &Args) -> Result<(), Box<dyn Error>> {
         if let Some(max_deg) = args.max_deg {
             input.set_max_deg(max_deg).map_err(|_| {
                 format!(
-                    "{which}--max-deg only applies to inputs that give max_deg or \
-                     target_points"
+                    "{which}--max-deg does not apply to inputs that give min_points or \
+                     curve_classes"
                 )
             })?;
         }
@@ -245,6 +248,13 @@ fn main() -> ExitCode {
     let args = Args::parse();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
+        // The reader of the output went away, as `head` does once it has its lines.
+        Err(e)
+            if e.downcast_ref::<io::Error>()
+                .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe) =>
+        {
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("Error: {e}");
             ExitCode::FAILURE

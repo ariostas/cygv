@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 import operator
-import os
-import sys
-import tempfile
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields
 from fractions import Fraction
-from multiprocessing import Pipe, Process
-from multiprocessing.connection import Connection
-from pathlib import Path
-from typing import Any
+from typing import Any, overload
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 
 from cygv.cygv import _compute
 
@@ -38,33 +32,121 @@ class Report:
     seconds: float
 
 
-class Invariants(list):  # type: ignore[type-arg]
-    """The nonzero invariants, as ``(key, value)`` pairs sorted by degree and then by curve
-    class, where the key is the curve class (a tuple), or for an n-fold the pair of the curve
-    class and the reference surface. ``dict(invariants)`` maps the keys to the values.
+# The pairs are typed loosely, as by the list this replaced: a key is a curve tuple or a pair
+# of one and a surface, a value an int or a Fraction.
+class Invariants(Sequence[tuple[Any, Any]]):
+    """The nonzero invariants, as a sequence of ``(key, value)`` pairs sorted by degree and
+    then by curve class, where the key is the curve class (a tuple), or for an n-fold the pair
+    of the curve class and the reference surface. ``dict(invariants)`` maps the keys to the
+    values.
 
-    Besides the pairs it holds what is needed to read them: ``kind`` ("gv" or "gw"),
-    ``dimension``, ``grading_vector`` and the ``report``.
+    The same data are available as numpy arrays, which is much faster for many invariants:
+    ``curves``, one row per curve class; ``surfaces``, the reference surfaces of an n-fold
+    (``None`` for a threefold); ``degrees``; and ``values``, of ``int64`` when they all fit,
+    and of Python ints otherwise (``Fraction``s for GW invariants). Besides those it holds
+    what is needed to read them: ``kind`` ("gv" or "gw"), ``dimension``, ``grading_vector``
+    and the ``report``.
     """
 
     kind: str
     dimension: int
     grading_vector: tuple[int, ...]
     report: Report
+    #: The curve classes, one per row.
+    curves: NDArray[np.int32]
+    #: The reference surfaces of an n-fold, ``None`` for a threefold.
+    surfaces: NDArray[np.int64] | None
+    #: The degrees of the curve classes under the grading vector.
+    degrees: NDArray[np.int64]
 
     def __init__(
         self,
-        pairs: Iterable[tuple[Key, int | Fraction]],
         kind: str,
+        curves: NDArray[np.int32],
+        surfaces: NDArray[np.int64] | None,
+        degrees: NDArray[np.int64],
+        values: NDArray[np.int64] | list[int],
+        denominators: NDArray[np.int64] | list[int] | None,
         dimension: int,
         grading_vector: tuple[int, ...],
         report: Report,
     ) -> None:
-        super().__init__(pairs)
         self.kind = kind
+        self.curves = curves
+        self.surfaces = surfaces
+        self.degrees = degrees
+        # The values, or the numerators of GW invariants, and their denominators.
+        self._values = values
+        self._denominators = denominators
         self.dimension = dimension
         self.grading_vector = grading_vector
         self.report = report
+        for array in (curves, surfaces, degrees, values, denominators):
+            if isinstance(array, np.ndarray):
+                array.flags.writeable = False
+
+    @property
+    def values(self) -> NDArray[Any]:
+        """The invariants, in an array of ``int64`` when they are integers that all fit, and
+        of Python objects otherwise."""
+        if self._denominators is None:
+            if isinstance(self._values, np.ndarray):
+                return self._values
+            return np.array(self._values, dtype=object)
+        return np.array(self._value_list(), dtype=object)
+
+    def _value_list(self) -> list[int] | list[Fraction]:
+        """The invariants as Python ints or fractions."""
+        values = _to_list(self._values)
+        if self._denominators is None:
+            return values
+        denominators = _to_list(self._denominators)
+        return [Fraction(n, d) for n, d in zip(values, denominators, strict=True)]
+
+    # Not `keys`, which would have `dict()` take the invariants for a mapping.
+    def _keys(self) -> list[Key]:
+        """The keys of the invariants: the curve classes as tuples, or for an n-fold the pairs
+        of the curve class and the reference surface."""
+        curves = map(tuple, self.curves.tolist())
+        if self.surfaces is None:
+            return list(curves)
+        return list(zip(curves, self.surfaces.tolist(), strict=True))
+
+    def __len__(self) -> int:
+        return len(self.degrees)
+
+    def __iter__(self) -> Iterator[tuple[Any, Any]]:
+        return iter(zip(self._keys(), self._value_list(), strict=True))
+
+    @overload
+    def __getitem__(self, i: int) -> tuple[Any, Any]: ...
+
+    @overload
+    def __getitem__(self, i: slice) -> list[tuple[Any, Any]]: ...
+
+    def __getitem__(self, i: int | slice) -> tuple[Any, Any] | list[tuple[Any, Any]]:
+        if isinstance(i, slice):
+            return [self[j] for j in range(*i.indices(len(self)))]
+        i = range(len(self))[i]
+        curve = tuple(self.curves[i].tolist())
+        key: Key = curve if self.surfaces is None else (curve, int(self.surfaces[i]))
+        value: int | Fraction = int(self._values[i])
+        if self._denominators is not None:
+            value = Fraction(value, int(self._denominators[i]))
+        return key, value
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Sequence):
+            return NotImplemented
+        return len(self) == len(other) and list(self) == list(other)
+
+    # Unhashable, as the list this replaced, since it compares by its pairs.
+    __hash__ = None  # type: ignore[assignment]
+
+    def __repr__(self) -> str:
+        head = ", ".join(repr(p) for p in self[:5])
+        more = f", ... ({len(self)} in all)" if len(self) > 5 else ""
+        return f"Invariants({self.kind}, [{head}{more}])"
 
     def degree(self, curve: Sequence[int]) -> int:
         """The degree of a curve class under the grading vector."""
@@ -73,80 +155,26 @@ class Invariants(list):  # type: ignore[type-arg]
     def __reduce__(self) -> Any:
         return (
             Invariants,
-            (list(self), self.kind, self.dimension, self.grading_vector, self.report),
+            (
+                self.kind,
+                self.curves,
+                self.surfaces,
+                self.degrees,
+                self._values,
+                self._denominators,
+                self.dimension,
+                self.grading_vector,
+                self.report,
+            ),
         )
 
 
-def _run_subprocess(
-    conn: Connection, stderr_path: Path, kind: str, args: dict[str, Any]
-) -> None:
-    with stderr_path.open("wb") as f:
-        os.dup2(f.fileno(), 2)
-    try:
-        conn.send(_compute(kind, args))
-    # Errors that the Rust side reports, such as invalid input, keep their type.
-    except Exception as e:  # noqa: BLE001
-        conn.send(e)
-    # The catch has to be this broad: a panic on the Rust side surfaces as a
-    # PanicException, which derives from BaseException rather than Exception, and
-    # it still needs to be reported back to the parent process.
-    except BaseException as e:  # noqa: BLE001
-        conn.send(RuntimeError(str(e)))
-    conn.close()
-
-
-def _forward(f: Any) -> None:
-    """Writes what the subprocess wrote to its stderr since the last call to ours."""
-    data = f.read()
-    if data:
-        sys.stderr.write(data.decode(errors="replace"))
-        sys.stderr.flush()
-
-
-# The computation runs in a subprocess, so that ctrl+c interrupts it without exiting the main
-# Python process. Its stderr goes to a file, which is forwarded to ours as it grows if
-# `verbose`, and otherwise only shown if it dies.
-def _compute_in_subprocess(
-    kind: str, args: dict[str, Any], *, verbose: bool = False
-) -> Any:
-    parent_conn, child_conn = Pipe(duplex=False)
-    with tempfile.NamedTemporaryFile(delete=False) as f:
-        stderr_path = Path(f.name)
-    process = Process(
-        target=_run_subprocess, args=(child_conn, stderr_path, kind, args)
-    )
-    try:
-        process.start()
-        child_conn.close()
-        # The result, or the end of the pipe if the child died without sending it.
-        try:
-            if verbose:
-                with stderr_path.open("rb") as f:
-                    while not parent_conn.poll(0.2):
-                        _forward(f)
-                    _forward(f)
-            result = parent_conn.recv()
-        except EOFError:
-            process.join()
-            with stderr_path.open("rb") as f:
-                stderr_msg = f.read().decode(errors="replace").strip()
-            msg = f"Computation failed (exit code {process.exitcode})"
-            if stderr_msg:
-                msg += f":\n{stderr_msg}"
-            raise RuntimeError(msg) from None
-        process.join()
-    # Interrupted, ctrl+c or otherwise: the computation stops with the caller.
-    except BaseException:
-        if process.pid is not None:
-            process.terminate()
-            process.join()
-        raise
-    finally:
-        parent_conn.close()
-        stderr_path.unlink(missing_ok=True)
-    if isinstance(result, BaseException):
-        raise result
-    return result
+def _to_list(values: NDArray[np.int64] | list[int]) -> list[int]:
+    """Python ints from an array or a list of them."""
+    if isinstance(values, np.ndarray):
+        res: list[int] = values.tolist()
+        return res
+    return values
 
 
 def _int(x: Any, name: str) -> int:
@@ -367,9 +395,9 @@ class Problem:
         otherwise. ``certify`` proves the results exact. ``low_memory`` prefers memory to
         speed, for the runs that do not fit otherwise: the modular pipeline then takes about a
         third of the memory, for about two and a half times the time. ``n_threads`` defaults
-        to one per core. ``hilbert_bases`` are the Hilbert bases of the cones ``K_T`` from a program such
-        as Normaliz, as ``(divisors, basis)`` pairs, which the modular pipeline then uses
-        instead of computing them. ``verbose`` writes the progress of the computation to
+        to one per logical CPU. ``hilbert_bases`` are the Hilbert bases of the cones ``K_T``
+        from a program such as Normaliz, as ``(divisors, basis)`` pairs, which the modular
+        pipeline then uses instead of computing them. ``verbose`` writes the progress of the computation to
         ``sys.stderr``: with ``True`` (or 1) its stages and passes, with 2 also the degrees of
         each pass.
 
@@ -461,16 +489,28 @@ class Problem:
             "hilbert_bases": _hilbert_bases(hilbert_bases),
             "verbose": _count(verbose, "verbose"),
         }
-        entries, dimension, grading_vector, report = _compute_in_subprocess(
-            kind, args, verbose=bool(verbose)
-        )
-        value = int if kind == "gv" else Fraction
-        if dimension == 3:
-            pairs = [(tuple(c), value(v)) for ((c, _), v) in entries]
-        else:
-            pairs = [((tuple(c), s), value(v)) for ((c, s), v) in entries]
+        (
+            curves,
+            surfaces,
+            degrees,
+            values,
+            denominators,
+            dimension,
+            grading_vector,
+            report,
+        ) = _compute(kind, args)
+        if kind == "gw" and denominators is None:
+            denominators = []
         return Invariants(
-            pairs, kind, dimension, tuple(grading_vector), Report(*report)
+            kind,
+            curves,
+            surfaces,
+            degrees,
+            values,
+            denominators,
+            dimension,
+            tuple(grading_vector),
+            Report(*report),
         )
 
 

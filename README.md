@@ -46,21 +46,26 @@ problem = Problem(
 )
 
 gv = problem.gv(max_deg=3)
-# [((0, 1), 4), ((1, 0), 640), ((1, 1), 640), ((2, 0), 10032), ((2, 1), 72224), ...]
+# Invariants(gv, [((0, 1), 4), ((1, 0), 640), ((1, 1), 640), ((2, 0), 10032), ((2, 1), 72224), ... (6 in all)])
 dict(gv)[(1, 0)]
 # 640
+gv.curves[:2], gv.values[:2]
+# (array([[0, 1], [1, 0]], dtype=int32), array([  4, 640]))
 gv.grading_vector, gv.report
 # ((1, 1), Report(method='modular', certified=False, grading_vector_derived=True, seconds=0.003))
 
-problem.gw(max_deg=3)
+list(problem.gw(max_deg=3))
 # [((0, 1), Fraction(4, 1)), ((1, 0), Fraction(640, 1)), ((0, 2), Fraction(1, 2)), ...]
 ```
 
-The results are `(curve_class, invariant)` pairs sorted by degree and then by curve class, with
-GV invariants as `int`s and GW invariants as `fractions.Fraction`s. For CYs of dimension greater
-than three, an invariant is labeled by a curve class and by a reference surface (the first index
-of the intersection numbers), as in `(((1, 0, -4, 0, 0, 0), 2), 80)`. They also carry the
-`dimension`, the `grading_vector` and a `report` of how they were computed.
+The results are a sequence of `(curve_class, invariant)` pairs sorted by degree and then by curve
+class, with GV invariants as `int`s and GW invariants as `fractions.Fraction`s. For CYs of
+dimension greater than three, an invariant is labeled by a curve class and by a reference surface
+(the first index of the intersection numbers), as in `(((1, 0, -4, 0, 0, 0), 2), 80)`. The same
+data are numpy arrays, which is much faster for many invariants: `curves`, one row per curve
+class, `degrees`, `values` (of `int64` when they all fit, and of Python objects otherwise) and,
+for those CYs, `surfaces`. They also carry the `dimension`, the `grading_vector` and a `report`
+of how they were computed.
 
 `compute_gv` and `compute_gw` do the same in one call, taking the arguments of `Problem` and of
 `gv` or `gw` together: `compute_gv(q, intnums, generators=..., max_deg=3)`.
@@ -105,7 +110,7 @@ up to a few dozen fit even when $h^{1,1}$ is in the hundreds. The `reference` on
 implementation of the HKTY procedure with exact rational arithmetic. The default, `auto`, uses
 the modular one for `max_deg` and `target_points` and the reference one otherwise; curve
 classes too large for the modular one are an error rather than a slow run of the reference.
-`n_threads` sets the number of threads, which defaults to one per core.
+`n_threads` sets the number of threads, which defaults to one per logical CPU.
 
 The modular implementation accepts its result once one more prime agrees with it, which makes a
 wrong result vanishingly unlikely but does not rule it out. With `certify=True` it proves the
@@ -129,12 +134,27 @@ two divisors, and in a vex phase also for the three divisors of every stratum. E
 above `max_deg` can be left out. They are trusted, so a missing element silently drops curve
 classes.
 
+A Calabi-Yau of [CYTools](https://cy.tools) (which calls cygv itself in `cy.compute_gvs`) gives
+its data in the form cygv takes, as long as the charges leave out the origin of the polytope and
+the intersection numbers are in the same basis as the charges:
+
+```python
+gv = compute_gv(
+    cy.curve_basis(include_origin=False, as_matrix=True),
+    cy.intersection_numbers(in_basis=True, format="dok"),
+    generators=cy.mori_cone_cap(in_basis=True).rays(),
+    max_deg=10,
+)
+```
+
+Charges that include the origin are an error, since they would describe a CY of the wrong
+dimension.
+
 Invalid input raises a `ValueError`, and a computation that fails (for instance because the
 invariants are not integers, which usually means inconsistent input) a `cygv.ComputationError`.
-The computation runs in a subprocess, so it can be interrupted with ctrl+c without losing the
-Python session. Where subprocesses are started by `spawn` (the default on macOS and Windows), a
-script that computes invariants needs the usual `if __name__ == "__main__":` guard around its
-top-level code, since each subprocess imports the script again.
+The computation runs on threads of its own with the GIL released, so that other Python threads
+go on meanwhile, and ctrl+c (or interrupting a Jupyter kernel) stops it within about the time
+of one degree, raising `KeyboardInterrupt`.
 
 ## Rust crate
 
@@ -162,6 +182,9 @@ let gv = compute_gv(&problem, &Options::default()).unwrap();
 assert_eq!(gv.grading_vector, [1, 1]);
 assert_eq!((gv.entries[1].curve.as_slice(), gv.entries[1].value.clone()), (&[1, 0][..], 640.into()));
 ```
+
+The crate re-exports `nalgebra` and `malachite`, whose matrices and big integers it takes and
+returns, so that their types can be named without depending on matching versions of them.
 
 ## Command line interface
 

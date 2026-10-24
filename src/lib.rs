@@ -2,6 +2,7 @@
 
 pub mod cone;
 mod dispatch;
+mod interrupt;
 #[cfg(feature = "cli")]
 pub mod io;
 pub mod modular;
@@ -48,7 +49,7 @@ pub enum CYKind {
 }
 
 impl CYKind {
-    /// Selects the variant from the `is_threefold` flag of the input formats.
+    /// Selects the variant by whether the CY is a threefold.
     pub fn from_is_threefold(is_threefold: bool) -> Self {
         if is_threefold {
             Self::Threefold
@@ -273,6 +274,7 @@ pub use dispatch::{
     compute, compute_gv, compute_gw, Computed, Error, Invariant, Invariants, Report,
 };
 #[doc(inline)]
+pub use interrupt::Interrupt;
 pub use problem::{Ambient, Geometry, MoriCone, Options, Problem, Selection};
 
 #[doc(inline)]
@@ -346,9 +348,10 @@ pub fn log_to_stderr(verbosity: u8) {
     });
 }
 
-// Re-export the big-number crate of the results, so that callers can name its types and
-// traits without depending on a matching version themselves.
+// Re-export the big-number crate of the results and the matrix crate of the input, so that
+// callers can name their types and traits without depending on a matching version themselves.
 pub use malachite;
+pub use nalgebra;
 
 #[cfg(test)]
 mod tests {

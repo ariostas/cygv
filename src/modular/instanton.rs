@@ -357,6 +357,7 @@ pub fn instanton<R: Ring, K: Key>(
     let blocks = degree_blocks(&period.s2, max_deg, INSTANTON_BLOCKS);
     let mut parts = Vec::with_capacity(blocks.len());
     for (lo, hi) in blocks {
+        crate::interrupt::check(Error::Interrupted)?;
         let terms = |p: &SparsePoly<K, R::Elem>| p.len_upto(hi) - len_below(p, lo);
         let acc = ShardedMap::new(m, n_shards(), terms(&period.s2) + terms(&alpha));
         mul_scalar_into(ring, &c0_inv, &period.s2, lo..=hi, &acc);

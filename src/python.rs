@@ -1,22 +1,32 @@
 //! The Python bindings: one function, `_compute`, that takes the keywords of
 //! `cygv.Problem` and of its `gv` and `gw` methods as a dictionary, which the Python wrapper
 //! (`python/cygv/hkty.py`) has already turned into lists, integers and strings.
+//!
+//! The computation runs on a thread of its own with the GIL released, so that other Python
+//! threads go on meanwhile, while the calling thread waits for it, polling for signals: on
+//! ctrl+c it interrupts the computation ([`Interrupt`]) and raises the `KeyboardInterrupt`
+//! once it has stopped. The progress goes to Python's `sys.stderr`, which Jupyter shows,
+//! through the same polls. The results come back as numpy arrays that own the memory of
+//! the Rust vectors they were built in, without a copy.
 
 use crate::cone::ConeError;
 use crate::modular::Error as ModularError;
 use crate::reference::{self, series_inversion::error::SeriesInversionError};
 use crate::{
-    compute, Ambient, CandidateCone, Computed, Error, Geometry, InvariantKind, Invariants, Method,
-    MoriCone, Options, Problem, Selection, Stratum,
+    compute, Ambient, CandidateCone, Computed, Error, Geometry, Interrupt, InvariantKind,
+    Invariants, Method, MoriCone, Options, Problem, Selection, Stratum,
 };
-use malachite::Rational;
+use malachite::{Integer, Rational};
 use nalgebra::DMatrix;
+use numpy::{IntoPyArray, PyArrayMethods};
 use pyo3::conversion::FromPyObjectOwned;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList, PyTuple};
 use std::collections::HashMap;
-use std::sync::Once;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 pyo3::create_exception!(
     cygv,
@@ -26,8 +36,11 @@ pyo3::create_exception!(
      as integers or the cones were too large."
 );
 
-/// Installing a ctrl-c handler can only be done once per process, so guard it.
-static CTRLC_HANDLER: Once = Once::new();
+/// How often the wait for a computation looks for signals and forwards the progress.
+const POLL: Duration = Duration::from_millis(100);
+
+/// The stack of the thread of a computation, as large as that of a main thread.
+const STACK: usize = 8 << 20;
 
 fn value_error(msg: impl Into<String>) -> PyErr {
     PyValueError::new_err(msg.into())
@@ -206,6 +219,7 @@ fn to_py_err(e: Error) -> PyErr {
         Error::MoriCone(ConeError::TooLarge | ConeError::Parallelepiped(_))
             | Error::Modular(
                 ModularError::NotStable { .. }
+                    | ModularError::NotInteger { .. }
                     | ModularError::CertifyPrimes { .. }
                     | ModularError::NotInvertible
             )
@@ -220,59 +234,248 @@ fn to_py_err(e: Error) -> PyErr {
     }
 }
 
-/// The entries of the invariants, with their values as strings, the dimension, the grading
-/// vector and the report.
-type Output = (
-    Vec<((Vec<i32>, Option<usize>), String)>,
-    usize,
-    Vec<i32>,
-    (String, bool, bool, f64),
-);
+/// The progress of the computations, kept for the waits to write to `sys.stderr`.
+struct Progress {
+    start: Mutex<Option<Instant>>,
+    lines: Mutex<String>,
+}
 
-fn output<T: ToString>(inv: Invariants<T>) -> Output {
-    let report = &inv.report;
-    (
-        inv.entries
-            .into_iter()
-            .map(|e| ((e.curve, e.surface), e.value.to_string()))
-            .collect(),
-        inv.dimension,
-        inv.grading_vector,
+impl log::Log for Progress {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.target().starts_with("cygv")
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            let secs = self
+                .start
+                .lock()
+                .unwrap()
+                .map_or(0.0, |s| s.elapsed().as_secs_f64());
+            let line = format!("[{secs:9.2}s] {}\n", record.args());
+            self.lines.lock().unwrap().push_str(&line);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static PROGRESS: Progress = Progress {
+    start: Mutex::new(None),
+    lines: Mutex::new(String::new()),
+};
+
+/// Has the progress of the computations kept at `verbosity` (see `crate::log_to_stderr`),
+/// stamped with the seconds from now. The level is that of the process, so concurrent
+/// computations share it.
+fn start_progress(verbosity: u8) {
+    // Fails only when a logger is already set, which keeps it.
+    let _ = log::set_logger(&PROGRESS);
+    *PROGRESS.start.lock().unwrap() = Some(Instant::now());
+    log::set_max_level(match verbosity {
+        0 => log::LevelFilter::Off,
+        1 => log::LevelFilter::Info,
+        _ => log::LevelFilter::Debug,
+    });
+}
+
+/// Writes the progress kept so far to `sys.stderr`.
+fn forward_progress(py: Python<'_>) {
+    let lines = std::mem::take(&mut *PROGRESS.lines.lock().unwrap());
+    if !lines.is_empty() {
+        // The progress is not worth an exception of its own, as for a closed stream.
+        let _ = py.import("sys").and_then(|sys| {
+            let stderr = sys.getattr("stderr")?;
+            stderr.call_method1("write", (lines,))?;
+            stderr.call_method0("flush")
+        });
+    }
+}
+
+/// The values of the invariants (or the numerators or denominators of GW invariants): in
+/// an array when they all fit in 64 bits, as Python integers otherwise.
+enum Values {
+    Small(Vec<i64>),
+    Big(Vec<Integer>),
+}
+
+impl Values {
+    fn new(values: Vec<Integer>) -> Self {
+        let small: Option<Vec<i64>> = values.iter().map(|v| i64::try_from(v).ok()).collect();
+        small.map_or(Self::Big(values), Self::Small)
+    }
+
+    fn into_py(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        Ok(match self {
+            Self::Small(v) => v.into_pyarray(py).into_any(),
+            Self::Big(v) => PyList::new(py, v)?.into_any(),
+        })
+    }
+}
+
+/// The invariants in columns, built on the thread of the computation.
+struct Columns {
+    /// The entries of the curve classes, one class after the other.
+    curves: Vec<i32>,
+    /// The length of a curve class.
+    width: usize,
+    surfaces: Option<Vec<i64>>,
+    degrees: Vec<i64>,
+    values: Values,
+    /// The denominators of GW invariants.
+    denominators: Option<Values>,
+    dimension: usize,
+    grading_vector: Vec<i32>,
+    report: (String, bool, bool, f64),
+}
+
+impl Columns {
+    /// The columns of `inv`, whose values `split` gives as integers, or as numerators and
+    /// denominators.
+    fn new<T>(inv: Invariants<T>, split: impl Fn(T) -> (Integer, Option<Integer>)) -> Self {
+        let n = inv.entries.len();
+        let width = inv.grading_vector.len();
+        let nfold = inv.dimension > 3;
+        let mut curves = Vec::with_capacity(n * width);
+        let mut surfaces = Vec::with_capacity(if nfold { n } else { 0 });
+        let mut degrees = Vec::with_capacity(n);
+        let mut values = Vec::with_capacity(n);
+        let mut denominators = Vec::new();
+        let mut fractions = false;
+        for e in inv.entries {
+            curves.extend_from_slice(&e.curve);
+            if let Some(s) = e.surface {
+                surfaces.push(s as i64);
+            }
+            degrees.push(i64::from(e.degree));
+            let (v, d) = split(e.value);
+            values.push(v);
+            fractions = d.is_some();
+            denominators.extend(d);
+        }
+        let report = &inv.report;
+        Self {
+            curves,
+            width,
+            surfaces: nfold.then_some(surfaces),
+            degrees,
+            values: Values::new(values),
+            denominators: fractions.then(|| Values::new(denominators)),
+            dimension: inv.dimension,
+            grading_vector: inv.grading_vector,
+            report: (
+                report.method.as_str().to_owned(),
+                report.certified,
+                report.grading_vector_derived,
+                report.elapsed.as_secs_f64(),
+            ),
+        }
+    }
+
+    /// The columns as a tuple of `curves`, an array of one row per curve class, `surfaces`
+    /// (or `None` for a threefold), `degrees`, `values`, `denominators` (or `None` for GV
+    /// invariants), and the dimension, the grading vector and the report.
+    fn into_py(self, py: Python<'_>) -> PyResult<Bound<'_, PyTuple>> {
+        let n = self.degrees.len();
+        let curves = self.curves.into_pyarray(py).reshape([n, self.width])?;
+        let surfaces = self.surfaces.map(|s| s.into_pyarray(py));
+        let denominators = self.denominators.map(|d| d.into_py(py)).transpose()?;
         (
-            report.method.as_str().to_owned(),
-            report.certified,
-            report.grading_vector_derived,
-            report.elapsed.as_secs_f64(),
-        ),
-    )
+            curves,
+            surfaces,
+            self.degrees.into_pyarray(py),
+            self.values.into_py(py)?,
+            denominators,
+            self.dimension,
+            self.grading_vector,
+            self.report,
+        )
+            .into_pyobject(py)
+    }
+}
+
+/// The message of a panic.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_owned()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown cause".to_owned()
+    }
 }
 
 /// Compute GV or GW invariants.
 #[pyfunction]
 #[pyo3(name = "_compute")]
-pub fn compute_py(kind: &str, args: &Bound<'_, PyDict>) -> PyResult<Output> {
-    CTRLC_HANDLER.call_once(|| {
-        ctrlc::set_handler(|| std::process::exit(1)).expect("failed to install ctrl-c handler");
-    });
+pub fn compute_py<'py>(
+    py: Python<'py>,
+    kind: &str,
+    args: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyTuple>> {
     let kind = match kind {
         "gv" => InvariantKind::GV,
         "gw" => InvariantKind::GW,
         _ => return Err(value_error("the kind must be \"gv\" or \"gw\"")),
     };
-    let (problem, options) = parse(args)?;
-    // The computation runs in a process of its own (see hkty.py).
-    if let Some(verbosity) = get::<u8>(args, "verbose")? {
-        crate::log_to_stderr(verbosity);
-    }
+    let (problem, mut options) = parse(args)?;
+    let verbosity = get::<u8>(args, "verbose")?.unwrap_or(0);
     if options.low_memory {
         crate::return_freed_memory();
     }
-    Ok(
-        match compute(&problem, kind, &options).map_err(to_py_err)? {
-            Computed::Gv(gv) => output(gv),
-            Computed::Gw(gw) => output(gw),
-        },
-    )
+    let interrupt = Interrupt::new();
+    options.interrupt = Some(interrupt.clone());
+    start_progress(verbosity);
+    let (tx, mut rx) = mpsc::channel();
+    let worker = std::thread::Builder::new()
+        .name("cygv".to_owned())
+        .stack_size(STACK)
+        .spawn(move || {
+            let columns = compute(&problem, kind, &options).map(|c| match c {
+                Computed::Gv(gv) => Columns::new(gv, |v| (v, None)),
+                Computed::Gw(gw) => Columns::new(gw, |v: Rational| {
+                    let negative = v < 0u32;
+                    let (n, d) = v.into_numerator_and_denominator();
+                    (
+                        Integer::from_sign_and_abs(!negative, n),
+                        Some(Integer::from(d)),
+                    )
+                }),
+            });
+            // The receiver only goes away with a panic of its own.
+            let _ = tx.send(columns);
+        })
+        .map_err(|e| PyRuntimeError::new_err(format!("failed to start the computation: {e}")))?;
+    let result = loop {
+        // The receiver goes to the wait and back, since it cannot be shared.
+        let (received, back) = py.detach(move || (rx.recv_timeout(POLL), rx));
+        rx = back;
+        forward_progress(py);
+        match received {
+            Ok(result) => break result,
+            Err(RecvTimeoutError::Timeout) => {
+                if let Err(e) = py.check_signals() {
+                    // The computation stops at its next checkpoint; it is waited for, so that
+                    // its threads and its memory are gone when the exception is raised.
+                    interrupt.interrupt();
+                    let _ = py.detach(|| worker.join());
+                    forward_progress(py);
+                    return Err(e);
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let msg = match worker.join() {
+                    Err(payload) => panic_message(&*payload),
+                    Ok(()) => "it ended without a result".to_owned(),
+                };
+                return Err(PyRuntimeError::new_err(format!(
+                    "the computation failed: {msg}"
+                )));
+            }
+        }
+    };
+    let _ = worker.join();
+    result.map_err(to_py_err)?.into_py(py)
 }
 
 /// A Python module implemented in Rust.

@@ -98,12 +98,12 @@ fn test_h2_vex() {
         assert_eq!(gv[&c[..]], expected, "{c:?}");
     }
 
-    // Without its strata, the modular pipeline cannot find integer invariants.
+    // Without its strata, the modular pipeline finds invariants that are not integers.
     let mut phase = h2_vex();
     phase.strata.clear();
     assert!(matches!(
         phase.gv(6, Method::Auto),
-        Err(Error::Modular(modular::Error::NotStable { .. }))
+        Err(Error::Modular(modular::Error::NotInteger { .. }))
     ));
 
     // Both methods give the same invariants, and the strata are checked.

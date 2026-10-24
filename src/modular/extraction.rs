@@ -78,8 +78,20 @@ const LEVEL_KEEP: usize = 1 << 12;
 /// How many terms ahead the scatter prefetches the entries it will write.
 const PREFETCH: usize = 4;
 
-/// The number of terms a worker buffers for a shard before it subtracts them.
+/// The number of terms a worker buffers for a shard before it subtracts them, up to 16
+/// threads.
 const FLUSH: usize = 1024;
+
+/// The most terms a worker buffers for all of the shards together, [`FLUSH`] for each of the
+/// shards of 16 threads: with more, a shard takes fewer, so that the buffers take memory in
+/// proportion to the threads rather than to their square (4 shards per thread, each with a
+/// buffer per thread), which would come to gigabytes on a hundred threads.
+const FLUSH_TOTAL: usize = 1 << 16;
+
+/// The number of terms a worker buffers for one of `n` shards (or parts of a table).
+fn flush_at(n: usize) -> usize {
+    (FLUSH_TOTAL / n.max(1)).clamp(64, FLUSH)
+}
 
 /// How many terms ahead the subtraction of a buffer prefetches the buckets of their keys.
 const FOLD_PREFETCH: usize = 8;
@@ -505,16 +517,20 @@ struct OutBuf<K, E> {
     srcs: Vec<u32>,
     /// Space for the hashes of the keys, when they are subtracted.
     hashes: Vec<u64>,
+    /// How many terms it takes before they are subtracted, [`flush_at`].
+    flush: usize,
 }
 
 impl<K, E> OutBuf<K, E> {
-    fn new() -> Self {
+    /// An empty buffer for one of `n_shards` shards.
+    fn new(n_shards: usize) -> Self {
         Self {
             keys: Vec::new(),
             degs: Vec::new(),
             vals: Vec::new(),
             srcs: Vec::new(),
             hashes: Vec::new(),
+            flush: flush_at(n_shards),
         }
     }
 
@@ -569,7 +585,7 @@ fn emit_values<R: Ring, K: Key>(
     o.vals.extend(values);
     if let Some(src) = src {
         o.srcs.push(src);
-    } else if o.keys.len() >= FLUSH {
+    } else if o.keys.len() >= o.flush {
         shards[s].lock().unwrap().fold(ring, o);
     }
 }
@@ -742,7 +758,9 @@ impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
                     l,
                     levels,
                     sources: Vec::new(),
-                    out: (0..self.shards.len()).map(|_| OutBuf::new()).collect(),
+                    out: (0..self.shards.len())
+                        .map(|_| OutBuf::new(self.shards.len()))
+                        .collect(),
                 }
             })
             .collect();
@@ -911,8 +929,7 @@ pub fn extract_into<R: Ring, L: KeyLayout>(
         extract_in(
             ring, layout, &level, &terms, &alpha, rows, inst, inv, max_deg, lightcone, tuning,
             source, out,
-        );
-        Ok(())
+        )
     })
 }
 
@@ -955,7 +972,7 @@ fn extract_in<R: Ring, L: KeyLayout, W: LevelWord>(
     tuning: &Tuning,
     source: Option<Source<'_, R::Elem>>,
     out: Out<'_, L::Key, R::Elem>,
-) {
+) -> Result<(), Error> {
     let h11 = layout.dim();
     let n_terms = alpha.len_upto(max_deg);
     let hashes: Vec<W> = terms
@@ -975,7 +992,7 @@ fn extract_in<R: Ring, L: KeyLayout, W: LevelWord>(
     extract_with(
         ring, layout, level, &keys, &hashes, alpha, rows, inst, inv, max_deg, lightcone, tuning,
         source, out,
-    );
+    )
 }
 
 /// [`extract`] with the level tables of `level`, and `hashes` the hashes of the offsets of
@@ -996,7 +1013,7 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
     tuning: &Tuning,
     source: Option<Source<'_, R::Elem>>,
     out: Out<'_, L::Key, R::Elem>,
-) {
+) -> Result<(), Error> {
     log::debug!("level hashes of {} bits", W::BITS);
     let h11 = layout.dim();
     let width = inst.width();
@@ -1013,7 +1030,7 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
             Mutex::new(Worker {
                 ws: ExpWorkspace::new(level.marker(), max_deg),
                 curve: vec![0; h11],
-                out: (0..n_shards).map(|_| OutBuf::new()).collect(),
+                out: (0..n_shards).map(|_| OutBuf::new(n_shards)).collect(),
             })
         })
         .collect();
@@ -1027,6 +1044,7 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
         .filter_map(|s| s.get_mut().unwrap().heap.min_deg())
         .min()
     {
+        crate::interrupt::check(Error::Interrupted)?;
         let top = d.saturating_add(delta);
         layer.clear();
         layer_vals.clear();
@@ -1125,6 +1143,7 @@ fn extract_with<R: Ring, L: KeyLayout, W: LevelWord>(
         evict(&mut shards, top, false, width, out);
     }
     evict(&mut shards, u32::MAX, true, width, out);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1278,7 +1297,8 @@ mod tests {
                 &Tuning::default(),
                 None,
                 &mut |part| wide.append(part),
-            );
+            )
+            .unwrap();
             let wide: HashMap<PackedKey, Vec<E>> = (0..wide.len())
                 .map(|i| (wide.keys()[i], wide.values(i).to_vec()))
                 .collect();

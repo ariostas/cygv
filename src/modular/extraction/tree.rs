@@ -188,10 +188,15 @@ impl<W: LevelWord, E: Copy + Default> TabGuard<'_, W, E> {
             add_all(ring, sources, &mut self.0[0]);
             return;
         }
-        for (h, v) in sources {
-            let t = self.0[part_of(h, n)].get_or_insert(h);
-            *t = ring.add(*t, v);
-        }
+        ahead(
+            &mut self.0[..],
+            sources,
+            |t, (h, _)| t[part_of(h, n)].prefetch(h),
+            |t, (h, v)| {
+                let t = t[part_of(h, n)].get_or_insert(h);
+                *t = ring.add(*t, v);
+            },
+        );
     }
 }
 
@@ -229,9 +234,6 @@ struct TreeWorker<K, W: LevelWord, E> {
 /// it goes there directly, into parts by hash that the threads fill at once.
 type Sink<W, E> = Vec<Mutex<CompactTable<W, E>>>;
 
-/// The terms buffered for one part of a [`Sink`] before they are added to it.
-const SINK_FLUSH: usize = 1024;
-
 /// The part of a [`Sink`] of `n` parts that hash `h` goes to: a mix of its top bits, since
 /// the tables take their buckets from those in order.
 #[inline]
@@ -267,7 +269,8 @@ fn sink_push<R: Ring, W: LevelWord>(
     let k = part_of(h, sink.len());
     let buf = &mut bufs[k];
     buf.push((h, v));
-    if buf.len() >= SINK_FLUSH {
+    // As many as the extraction buffers for a shard, for as many parts.
+    if buf.len() >= flush_at(sink.len()) {
         add_all(ring, buf.drain(..), &mut sink[k].lock().unwrap());
     }
 }
@@ -373,16 +376,52 @@ fn new_tabs<W: LevelWord, E: Copy + Default>(
     (0..=max_deg).map(|_| Tab::new(marker, parts)).collect()
 }
 
+/// How many terms ahead [`ahead`] prefetches, a power of two.
+const ADD_AHEAD: usize = 8;
+
+/// Applies `f` to `state` and each term of `sources` in their order, after applying `pre` to
+/// it [`ADD_AHEAD`] terms earlier, which prefetches the entry of a table in `state` that `f`
+/// will add it to: each add misses the caches otherwise, which made the adds of buffered
+/// terms the costliest part of the tree.
+#[inline]
+fn ahead<S: ?Sized, T: Copy + Default>(
+    state: &mut S,
+    sources: impl IntoIterator<Item = T>,
+    pre: impl Fn(&S, T),
+    mut f: impl FnMut(&mut S, T),
+) {
+    let mut window = [T::default(); ADD_AHEAD];
+    let (mut read, mut done) = (0, 0);
+    for x in sources {
+        pre(state, x);
+        if read - done == ADD_AHEAD {
+            f(state, window[done % ADD_AHEAD]);
+            done += 1;
+        }
+        window[read % ADD_AHEAD] = x;
+        read += 1;
+    }
+    while done < read {
+        f(state, window[done % ADD_AHEAD]);
+        done += 1;
+    }
+}
+
 /// Adds the terms of `sources` to `target`.
 fn add_all<R: Ring, W: LevelWord>(
     ring: &R,
     sources: impl IntoIterator<Item = (W, R::Elem)>,
     target: &mut CompactTable<W, R::Elem>,
 ) {
-    for (h, v) in sources {
-        let t = target.get_or_insert(h);
-        *t = ring.add(*t, v);
-    }
+    ahead(
+        target,
+        sources,
+        |t, (h, _)| t.prefetch(h),
+        |t, (h, v)| {
+            let t = t.get_or_insert(h);
+            *t = ring.add(*t, v);
+        },
+    );
 }
 
 /// Adds $f_v l_j$ at $v + u_j$ to `target` for every source $(v, f_v)$ and every term
@@ -530,10 +569,9 @@ fn tree_with<R: Ring, L: KeyLayout, W: LevelWord>(
     drop(beta);
     let width = inst.width();
     if width == 1 {
-        tree_in(
+        return tree_in(
             ring, layout, level, &tree_rows, rows, inst, inv, max_deg, lightcone, source, 0, 1, out,
         );
-        return Ok(());
     }
     let mut map = SlotMap::new(width, inst.len());
     for k in 0..width {
@@ -562,7 +600,7 @@ fn tree_with<R: Ring, L: KeyLayout, W: LevelWord>(
                     map.get_or_insert(got.keys()[i], got.degs()[i])[k] = got.values(i)[0];
                 }
             },
-        );
+        )?;
     }
     out(map.take());
     Ok(())
@@ -616,7 +654,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
     k: usize,
     width: usize,
     out: Out<'_, L::Key, R::Elem>,
-) {
+) -> Result<(), Error> {
     let h11 = layout.dim();
     let marker = level.marker();
     let units: Vec<L::Key> = (0..h11)
@@ -670,7 +708,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
                 terms: Vec::new(),
                 curves: Vec::new(),
                 filled: Vec::new(),
-                out: (0..n_shards).map(|_| OutBuf::new()).collect(),
+                out: (0..n_shards).map(|_| OutBuf::new(n_shards)).collect(),
                 bufs: Vec::new(),
             })
         })
@@ -720,6 +758,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
     let mut stored: Vec<TreeCurve<L::Key, R::Elem>> = Vec::new();
     let mut d = 1;
     while d <= max_deg {
+        crate::interrupt::check(Error::Interrupted)?;
         let top = (d + delta).min(max_deg + 1);
         // A new window: the curves of the earlier ones add their terms of its degrees.
         if d >= win_end {
@@ -1133,6 +1172,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
         d = top;
     }
     evict(&mut shards, u32::MAX, true, 1, out);
+    Ok(())
 }
 
 /// The parts of the tables of the root and its children, per thread.

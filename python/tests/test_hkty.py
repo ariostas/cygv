@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import multiprocessing
-import os
+import _thread
 import pickle
-import sys
+import threading
+import time
 from fractions import Fraction
 from typing import Any
 
+import numpy as np
 import pytest
 
 from cygv import (
@@ -16,7 +17,6 @@ from cygv import (
     Problem,
     compute_gv,
     compute_gw,
-    hkty,
 )
 
 
@@ -320,6 +320,9 @@ def test_invalid_input() -> None:
         compute_gv(
             [[1], [1], [1], [1], [1]], {(0, 0, 0): 5}, generators=[[1]], max_deg=3
         )
+    # So does the origin of the polytope among the divisors, as CYTools includes by default.
+    with pytest.raises(ValueError, match="include_origin=False"):
+        compute_gv([[-5, 1, 1, 1, 1, 1]], {(0, 0, 0): 5}, generators=[[1]], max_deg=3)
     with pytest.raises(ValueError, match="Mori cone is needed"):
         compute_gv([[1, 1, 1, 1, 1]], {(0, 0, 0): 5}, max_deg=3)
     with pytest.raises(ValueError, match="not both"):
@@ -378,19 +381,40 @@ def test_integers() -> None:
         )
 
 
-def test_child_dies(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Only a forked child sees the patch.
-    if multiprocessing.get_start_method() != "fork":
-        pytest.skip("needs the fork start method")
+def test_arrays() -> None:
+    # The invariants are numpy arrays too, of int64 while they fit and of ints after.
+    gv = QUINTIC.gv(max_deg=12)
+    assert gv.curves.dtype == np.int32
+    assert gv.curves.shape == (12, 1)
+    assert gv.degrees.tolist() == list(range(1, 13))
+    assert gv.surfaces is None
+    assert gv.values.dtype == object
+    assert gv.values.tolist() == [v for _, v in gv]
+    assert [k for k, _ in gv] == [(d,) for d in range(1, 13)]
+    small = QUINTIC.gv(max_deg=5)
+    assert small.values.dtype == np.int64
+    assert small.values.tolist() == [v for _, v in gv[:5]]
+    # They cannot be changed behind the pairs' back.
+    with pytest.raises(ValueError, match="read-only"):
+        small.curves[0, 0] = 2
+    gw = QUINTIC.gw(max_deg=3)
+    assert gw.values.tolist() == [v for _, v in gw]
+    assert gw[-1] == list(gw)[-1]
 
-    def die(_kind: str, _args: Any) -> None:
-        sys.stderr.write("the end\n")
-        sys.stderr.flush()
-        os._exit(3)
 
-    monkeypatch.setattr(hkty, "_compute", die)
-    with pytest.raises(RuntimeError, match="exit code 3"):
-        compute_gv([[1, 1, 1, 1, 1]], {(0, 0, 0): 5}, generators=[[1]], max_deg=1)
+def test_interrupt() -> None:
+    # Ctrl+c stops the computation, which runs with the GIL released: the timer that sends
+    # it is a Python thread.
+    timer = threading.Timer(0.5, _thread.interrupt_main)
+    timer.start()
+    start = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        # About 20 s and a few MB, since the invariants need many primes.
+        QUINTIC.gv(max_deg=200, n_threads=2)
+    timer.join()
+    assert time.monotonic() - start < 5
+    # The next computation is not affected.
+    assert QUINTIC.gv(max_deg=2)[0] == ((1,), 2875)
 
 
 def test_vex_phase() -> None:
@@ -429,7 +453,7 @@ def test_vex_phase() -> None:
         by_inequalities.gv(max_deg=4, hilbert_bases=bases[:-1])
 
     # Without the stratum the invariants are not integers.
-    with pytest.raises(ComputationError, match="not integers"):
+    with pytest.raises(ComputationError, match="not an integer"):
         Problem(q, intnums, generators=generators).gv(max_deg=6)
 
     # The fan gives the stratum, the Mori cone and the grading vector.

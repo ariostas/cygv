@@ -1660,6 +1660,20 @@ Other follow-ups, not from #102:
     - Caveats: a laptop with other load (a security agent and a backup took a core or two at
       times), so the timings are medians of alternating runs and differences under 5% are
       noise.
+  - *After the review of `a63e8ab`* (dev machine, `h11_10` at 20, two alternating runs,
+    identical outputs). The adds of buffered terms into the tree's tables (the split pieces,
+    the sinks, the leaves' terms) were the hottest code, 24–33% of the cycles, three quarters
+    of them on the probe's load: prefetched `ADD_AHEAD` = 8 terms ahead (`tree::ahead`), 4
+    threads 20.7 → 18.6 s, 8 threads 18.1 → 17.0 s, low-memory 57.6 → 54.2 s, one thread
+    43.3 → 42.2 s. They are still 25% of the cycles, now split between the prefetch itself
+    (the line fill buffers full) and the probes it missed, and an entry of 24 bytes straddles
+    two lines a quarter of the time: memory-bound, so the newer machines should gain more.
+    Malloc's huge pages (`GLIBC_TUNABLES=glibc.malloc.hugetlb=1`, with transparent huge pages
+    on `madvise`) gave 0–4%, within the noise; worth trying with `madvise` on the large
+    tables on a machine with less noise. Prefetching the instanton's adds into its
+    `ShardedMap` gave nothing (the stage stays at 1.8 s of 18), and was dropped. The Python
+    call, now in process, takes 18.2 s against 17.9 s in Rust, where the subprocess took 32
+    against 20.
 
 - [ ] **Certifying vex phases** (`Error::CertifyStrata` today, as in the C): the stratum
   terms need bounds of their own in the majorant run.

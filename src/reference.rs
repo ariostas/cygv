@@ -33,6 +33,8 @@ pub enum Error {
     FundamentalPeriod(FundamentalPeriodError),
     Instanton(PolynomialError),
     SeriesInversion(SeriesInversionError),
+    /// The computation was interrupted ([`crate::Interrupt`]).
+    Interrupted,
 }
 
 impl fmt::Display for Error {
@@ -43,6 +45,7 @@ impl fmt::Display for Error {
             Self::FundamentalPeriod(e) => write!(f, "{e}"),
             Self::Instanton(e) => write!(f, "{e}"),
             Self::SeriesInversion(e) => write!(f, "{e}"),
+            Self::Interrupted => write!(f, "the computation was interrupted"),
         }
     }
 }
@@ -116,8 +119,7 @@ where
     // installed in. A private pool is built here rather than reaching for the
     // global one, both to honour `n_threads` and to keep a library consumer's
     // own use of rayon out of the picture.
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(n_threads)
+    let pool = crate::interrupt::pool(n_threads)
         .build()
         .expect("failed to build the worker thread pool");
 
@@ -133,6 +135,7 @@ where
         )
         .map_err(Error::FundamentalPeriod)?;
         log::info!("fundamental period done");
+        crate::interrupt::check(Error::Interrupted)?;
 
         let inst_data = instanton::compute_instanton_data(
             fp,
@@ -144,9 +147,14 @@ where
         )
         .map_err(Error::Instanton)?;
         log::info!("instanton corrections done");
+        crate::interrupt::check(Error::Interrupted)?;
 
-        series_inversion::invert_series(inst_data, &poly_props, invariant_kind, cy_kind)
-            .map_err(Error::SeriesInversion)
+        series_inversion::invert_series(inst_data, &poly_props, invariant_kind, cy_kind).map_err(
+            |e| match e {
+                SeriesInversionError::Interrupted => Error::Interrupted,
+                e => Error::SeriesInversion(e),
+            },
+        )
     })?;
 
     let mut gv_sorted: Vec<_> = gv.into_iter().collect();

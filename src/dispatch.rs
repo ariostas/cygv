@@ -43,6 +43,8 @@ pub enum Error {
     Modular(modular::Error),
     /// The reference pipeline failed.
     Reference(reference::Error),
+    /// The computation was interrupted through [`Options::interrupt`].
+    Interrupted,
 }
 
 impl fmt::Display for Error {
@@ -53,6 +55,7 @@ impl fmt::Display for Error {
             Self::MoriCone(e) => write!(f, "{e}"),
             Self::Modular(e) => write!(f, "{e}"),
             Self::Reference(e) => write!(f, "{e}"),
+            Self::Interrupted => write!(f, "the computation was interrupted"),
         }
     }
 }
@@ -61,13 +64,19 @@ impl std::error::Error for Error {}
 
 impl From<modular::Error> for Error {
     fn from(e: modular::Error) -> Self {
-        Self::Modular(e)
+        match e {
+            modular::Error::Interrupted => Self::Interrupted,
+            e => Self::Modular(e),
+        }
     }
 }
 
 impl From<reference::Error> for Error {
     fn from(e: reference::Error) -> Self {
-        Self::Reference(e)
+        match e {
+            reference::Error::Interrupted => Self::Interrupted,
+            e => Self::Reference(e),
+        }
     }
 }
 
@@ -140,6 +149,17 @@ pub fn compute_gw(problem: &Problem, options: &Options) -> Result<Invariants<Rat
 
 /// Computes the invariants of the given kind.
 pub fn compute(
+    problem: &Problem,
+    kind: InvariantKind,
+    options: &Options,
+) -> Result<Computed, Error> {
+    crate::interrupt::with(options.interrupt.as_ref(), || {
+        compute_in(problem, kind, options)
+    })
+}
+
+/// [`compute`], with the interrupt of the options current.
+fn compute_in(
     problem: &Problem,
     kind: InvariantKind,
     options: &Options,

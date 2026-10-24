@@ -145,6 +145,7 @@ where
     distinct_degs.sort_unstable();
 
     for d in distinct_degs.iter() {
+        crate::interrupt::check(SeriesInversionError::Interrupted)?;
         log::debug!("series inversion: degree {d}");
         let mut vec_deg = Vec::new();
         let mut qn_to_compute = Vec::new();

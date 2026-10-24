@@ -156,6 +156,23 @@ impl From<Error> for IoError {
 impl Input {
     /// Parse every YAML document of the given string into an [`Input`], and check each.
     pub fn load_all(data: &str) -> Result<Vec<Self>, IoError> {
+        Self::each_document(data, Self::from_yaml)
+    }
+
+    /// Parse every YAML document of the given string into an [`Input`] without checking how
+    /// the fields fit together, which is left to [`Input::validate`], so that the caller can
+    /// change the inputs first, as the command line interface does with its options. A
+    /// document that selects no curve classes takes those up to `max_deg` when it is given.
+    pub fn parse_all(data: &str, max_deg: Option<u32>) -> Result<Vec<Self>, IoError> {
+        Self::each_document(data, |doc| Self::parse(doc, max_deg))
+    }
+
+    /// Apply `f` to every YAML document of the given string, saying which document an error
+    /// is about when there are several.
+    fn each_document(
+        data: &str,
+        f: impl Fn(&Yaml) -> Result<Self, IoError>,
+    ) -> Result<Vec<Self>, IoError> {
         let docs =
             YamlLoader::load_from_str(data).map_err(|e| IoError::InvalidYaml(e.to_string()))?;
         if docs.is_empty() {
@@ -165,7 +182,7 @@ impl Input {
         docs.iter()
             .enumerate()
             .map(|(i, doc)| {
-                Input::from_yaml(doc).map_err(|e| match several {
+                f(doc).map_err(|e| match several {
                     true => IoError::InDocument {
                         number: i + 1,
                         error: Box::new(e),
@@ -178,7 +195,7 @@ impl Input {
 
     /// Parse a single YAML document into an [`Input`], and check it ([`Input::validate`]).
     pub fn from_yaml(doc: &Yaml) -> Result<Self, IoError> {
-        let input = Self::parse(doc)?;
+        let input = Self::parse(doc, None)?;
         input.validate()?;
         Ok(input)
     }
@@ -189,8 +206,9 @@ impl Input {
     }
 
     /// Parse a single YAML document into an [`Input`], checking the shapes of the fields but
-    /// not how they fit together.
-    fn parse(doc: &Yaml) -> Result<Self, IoError> {
+    /// not how they fit together. Without a selection, it takes the curve classes up to
+    /// `max_deg` when that is given.
+    fn parse(doc: &Yaml, max_deg_default: Option<u32>) -> Result<Self, IoError> {
         let hash = doc.as_hash().ok_or(IoError::NotAMapping)?;
         for key in hash.keys() {
             match key.as_str() {
@@ -283,14 +301,17 @@ impl Input {
             (Some(d), None, None, None) => Selection::MaxDeg(d),
             (None, None, Some(n), None) => Selection::MinPoints(n),
             (None, None, None, Some(classes)) => Selection::CurveClasses(classes),
-            (None, None, None, None) => {
-                return Err(IoError::MissingOneOf(&[
-                    "max_deg",
-                    "target_points",
-                    "min_points",
-                    "curve_classes",
-                ]))
-            }
+            (None, None, None, None) => match max_deg_default {
+                Some(d) => Selection::MaxDeg(d),
+                None => {
+                    return Err(IoError::MissingOneOf(&[
+                        "max_deg",
+                        "target_points",
+                        "min_points",
+                        "curve_classes",
+                    ]))
+                }
+            },
             (max_deg, target_points, min_points, curve_classes) => {
                 let given: Vec<&'static str> = [
                     ("max_deg", max_deg.is_some()),
@@ -1352,6 +1373,16 @@ hilbert_bases:
         assert!(matches!(
             load_one(&transposed),
             Err(IoError::InvalidField { field, reason }) if field == "q" && reason.contains("transposed")
+        ));
+        // So do charges that include the origin of the polytope, which give a CY of the right
+        // kind and the wrong dimension otherwise.
+        let origin = THREEFOLD.replace(
+            "q: [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]",
+            "q: [[-6, 1, 1, 1, 0, 1, 2], [0, 0, 0, -1, 1, 1, -1]]",
+        );
+        assert!(matches!(
+            load_one(&origin),
+            Err(IoError::InvalidField { field, reason }) if field == "q" && reason.contains("origin")
         ));
     }
 

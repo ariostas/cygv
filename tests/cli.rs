@@ -238,6 +238,14 @@ max_deg: 6
         &quintic.replace("max_deg: 6", "min_points: 4"),
     );
     assert!(!output.status.success());
+    // An input that selects no curve classes takes the flag's maximum degree.
+    let output = run(&["--max-deg", "2"], &quintic.replace("max_deg: 6\n", ""));
+    assert!(output.status.success());
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        out.contains("degree: 2") && !out.contains("degree: 3"),
+        "{out}"
+    );
 
     // The modular method needs max_deg, whether it is asked for in the input or with
     // the flag, which overrides the input.
