@@ -264,33 +264,54 @@ impl<K: Key> Residues<K> {
     /// Whether the lift from all primes but the last `check` agrees with the residues modulo
     /// those at every curve. False unless there are more than `check` primes.
     pub fn is_stable(&self, check: usize) -> bool {
-        let n = self.primes.len();
-        if n <= check {
-            return false;
-        }
-        let lift = Lift::new(&self.primes);
-        (0..self.keys.len() * self.width)
-            .into_par_iter()
-            .map_init(
-                || vec![0; n - check],
-                |digits, i| {
-                    lift.digits(|j| self.columns[j][i], digits);
-                    (n - check..n)
-                        .all(|j| lift.residue(digits, self.primes[j]) == self.columns[j][i])
-                },
-            )
-            .all(|agrees| agrees)
+        self.unstable(check, 1).is_some_and(|u| u.is_empty())
     }
 
-    /// A value that is a fraction rather than an integer, with its degree: one of the first
-    /// `limit` values whose lift from all primes but the last `check` disagrees with those,
-    /// in order of degree, that is a fraction $a / b$ with $b > 1$ modulo all but the last
+    /// The first `limit` values, in order of degree, whose lift from all primes but the last
+    /// `check` disagrees with the residues modulo those, as indices of the columns, or `None`
+    /// unless there are more than `check` primes.
+    pub fn unstable(&self, check: usize, limit: usize) -> Option<Vec<usize>> {
+        let n = self.primes.len();
+        if n <= check {
+            return None;
+        }
+        let lift = Lift::new(&self.primes);
+        let len = self.keys.len() * self.width;
+        let mut res = Vec::new();
+        // In pieces, so that a lift far from stable is not scanned to the end.
+        let piece = (len / 16).max(1 << 16);
+        for start in (0..len).step_by(piece) {
+            let found: Vec<usize> = (start..len.min(start + piece))
+                .into_par_iter()
+                .map_init(
+                    || vec![0; n - check],
+                    |digits, i| {
+                        lift.digits(|j| self.columns[j][i], digits);
+                        let agrees = (n - check..n)
+                            .all(|j| lift.residue(digits, self.primes[j]) == self.columns[j][i]);
+                        (!agrees).then_some(i)
+                    },
+                )
+                .flatten()
+                .collect();
+            res.extend(found);
+            if res.len() >= limit {
+                res.truncate(limit);
+                break;
+            }
+        }
+        Some(res)
+    }
+
+    /// A value that is a fraction rather than an integer, with its degree: one of `unstable`,
+    /// values whose lift from all primes but the last `check` disagrees with those (from
+    /// [`Residues::unstable`]), that is a fraction $a / b$ with $b > 1$ modulo all but the last
     /// `check` primes, by rational reconstruction, and agrees with the residues modulo
     /// those. An integer that is only too large for the primes so far passes that test by
     /// accident with a chance of about one in a prime, as for [`Residues::is_stable`]. So
     /// invariants that are not integers, which is what inconsistent input gives, show after
     /// a few primes rather than after all of those allowed.
-    pub fn fraction(&self, check: usize, limit: usize) -> Option<(u32, Rational)> {
+    pub fn fraction(&self, check: usize, unstable: &[usize]) -> Option<(u32, Rational)> {
         let n = self.primes.len();
         if n < check + FRACTION_PRIMES {
             return None;
@@ -301,12 +322,7 @@ impl<K: Key> Residues<K> {
             .fold(Integer::from(1), |m, &p| m * Integer::from(p));
         let bound = Integer::from((&m >> 1u32).unsigned_abs().floor_sqrt());
         let mut digits = vec![0; n - check];
-        let unstable = (0..self.keys.len() * self.width).filter(|&i| {
-            lift.digits(|j| self.columns[j][i], &mut digits);
-            (n - check..n).any(|j| lift.residue(&digits, self.primes[j]) != self.columns[j][i])
-        });
-        let mut digits = vec![0; n - check];
-        for i in unstable.take(limit) {
+        for &i in unstable {
             lift.digits(|j| self.columns[j][i], &mut digits);
             let mut x = lift.integer(&digits);
             if x < 0 {
@@ -492,13 +508,18 @@ mod tests {
         res.add_pass(&lanes[1], &pass(&lanes[1]));
         // Four primes are too few, with one of them to check.
         assert!(!res.is_stable(1));
-        assert_eq!(res.fraction(1, 64), None);
+        assert_eq!(res.fraction(1, &res.unstable(1, 64).unwrap()), None);
         res.add_pass(&lanes[2], &pass(&lanes[2]));
+        // Only the fraction is unstable, the integer fitting five primes.
+        let unstable = res.unstable(1, 64).unwrap();
+        assert_eq!(unstable, [1]);
         assert_eq!(
-            res.fraction(1, 64),
+            res.fraction(1, &unstable),
             Some((2, Rational::from_signeds(-7, 3)))
         );
-        // Only the first unstable values are tried.
-        assert_eq!(res.fraction(1, 0), None);
+        // Only the values given are tried.
+        assert_eq!(res.fraction(1, &[]), None);
+        assert_eq!(res.fraction(1, &[0, 2]), None);
+        assert_eq!(res.unstable(6, 1), None);
     }
 }

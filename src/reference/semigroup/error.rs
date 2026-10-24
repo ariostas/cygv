@@ -10,6 +10,8 @@ pub enum SemigroupError {
     DimensionMismatchError,
     DuplicateElementError,
     DegreeTooLargeError,
+    /// The computation was interrupted ([`crate::Interrupt`]).
+    Interrupted,
 }
 
 /// Implement Display trait for SemigroupError.
@@ -25,6 +27,7 @@ impl fmt::Display for SemigroupError {
             }
             SemigroupError::DuplicateElementError => "an element is given more than once",
             SemigroupError::DegreeTooLargeError => "a degree does not fit in 32 bits",
+            SemigroupError::Interrupted => "the computation was interrupted",
         };
         write!(f, "{message}")
     }

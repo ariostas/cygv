@@ -53,8 +53,9 @@ pub enum FanError {
     Vex2Cone([usize; 2]),
     /// The Mori cone contains a line, i.e. the fan is not regular.
     NotRegular,
-    /// The grading vector does not have $h^{1,1}$ entries, or is not positive on the Mori cone.
-    NonpositiveGrading,
+    /// The grading vector does not have $h^{1,1}$ entries, or is not positive on the Mori cone:
+    /// on this class of a wall, if it has the entries.
+    NonpositiveGrading(Option<Vec<i32>>),
     /// The intersection numbers have an index above $h^{1,1}$, or two of them, of the same
     /// divisors, differ.
     InvalidIntnums,
@@ -66,6 +67,8 @@ pub enum FanError {
     /// A fan was given for something other than a threefold hypersurface (returned by the
     /// entry points, such as [`crate::compute`]).
     NotHypersurface,
+    /// The computation was interrupted ([`crate::Interrupt`]).
+    Interrupted,
 }
 
 impl fmt::Display for FanError {
@@ -96,11 +99,17 @@ impl fmt::Display for FanError {
                  is fine and uses every boundary point not interior to a facet"
             ),
             Self::NotRegular => write!(f, "the fan is not regular (its Mori cone has a line)"),
-            Self::NonpositiveGrading => write!(
-                f,
-                "the grading vector must have h11 entries and be positive on the Mori cone, \
-                 which has none if the fan is not regular"
-            ),
+            Self::NonpositiveGrading(class) => {
+                write!(
+                    f,
+                    "the grading vector must have h11 entries and be positive on the Mori cone, \
+                     which has none if the fan is not regular"
+                )?;
+                match class {
+                    Some(c) => write!(f, "; it is not positive on the class {c:?} of a wall"),
+                    None => Ok(()),
+                }
+            }
             Self::InvalidIntnums => write!(
                 f,
                 "the intersection numbers must have indices below h11 and agree on permutations"
@@ -115,6 +124,7 @@ impl fmt::Display for FanError {
             Self::NotHypersurface => {
                 write!(f, "a fan is only supported for threefold hypersurfaces")
             }
+            Self::Interrupted => write!(f, "the computation was interrupted"),
         }
     }
 }
@@ -124,6 +134,15 @@ impl std::error::Error for FanError {}
 impl From<cone::TooLarge> for FanError {
     fn from(_: cone::TooLarge) -> Self {
         Self::TooLarge
+    }
+}
+
+impl From<cone::HullError> for FanError {
+    fn from(e: cone::HullError) -> Self {
+        match e {
+            cone::HullError::TooLarge => Self::TooLarge,
+            cone::HullError::Interrupted => Self::Interrupted,
+        }
     }
 }
 
@@ -433,10 +452,13 @@ impl Fan {
     /// that is not regular has no such vector, which the error does not tell apart: that would
     /// take the Mori cone, which takes minutes for a large fan.
     pub fn check_grading(&self, grading_vector: &RowDVector<i32>) -> Result<(), FanError> {
-        if grading_vector.len() == self.h11() && positive(grading_vector, &self.wall_classes()?) {
-            return Ok(());
+        if grading_vector.len() != self.h11() {
+            return Err(FanError::NonpositiveGrading(None));
         }
-        Err(FanError::NonpositiveGrading)
+        match columns(&self.wall_classes()?).find(|c| degree(grading_vector, c) <= 0) {
+            Some(c) => Err(FanError::NonpositiveGrading(Some(c.to_vec()))),
+            None => Ok(()),
+        }
     }
 
     /// The first class of a wall, primitive, that is outside the cone of the inequalities
@@ -743,14 +765,16 @@ fn left_inverse(q: &[Vec<i64>], h: usize) -> Vec<(usize, Vec<Rational>)> {
 
 /// Whether the grading vector is positive on every column of `classes`.
 fn positive(grading_vector: &RowDVector<i32>, classes: &DMatrix<i32>) -> bool {
-    columns(classes).all(|c| {
-        grading_vector
-            .iter()
-            .zip(c)
-            .map(|(&w, &x)| w as i64 * x as i64)
-            .sum::<i64>()
-            > 0
-    })
+    columns(classes).all(|c| degree(grading_vector, c) > 0)
+}
+
+/// The degree of a class under the grading vector.
+fn degree(grading_vector: &RowDVector<i32>, c: &[i32]) -> i64 {
+    grading_vector
+        .iter()
+        .zip(c)
+        .map(|(&w, &x)| w as i64 * x as i64)
+        .sum()
 }
 
 fn gcd(a: i128, b: i128) -> i128 {
@@ -840,9 +864,14 @@ mod tests {
         assert_eq!(mori.grading_vector, RowDVector::from_element(1, 1));
         assert_eq!(fan.strata(), Ok(Vec::new()));
         assert_eq!(fan.check_grading(&RowDVector::from_element(1, 2)), Ok(()));
-        for g in [RowDVector::from_element(1, -1), RowDVector::zeros(2)] {
-            assert_eq!(fan.check_grading(&g), Err(FanError::NonpositiveGrading));
-        }
+        assert!(matches!(
+            fan.check_grading(&RowDVector::from_element(1, -1)),
+            Err(FanError::NonpositiveGrading(Some(_)))
+        ));
+        assert_eq!(
+            fan.check_grading(&RowDVector::zeros(2)),
+            Err(FanError::NonpositiveGrading(None))
+        );
         // The quintic.
         let mut intnums = HashMap::from([((0, 0, 0), 5)]);
         assert_eq!(fan.check_intnums(&intnums), Ok(()));

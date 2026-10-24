@@ -38,6 +38,8 @@ pub enum ConeError {
     /// facets, has this many lattice points in its fundamental parallelepiped, more than it
     /// allows.
     Parallelepiped(i128),
+    /// The computation was interrupted ([`crate::Interrupt`]).
+    Interrupted,
 }
 
 impl fmt::Display for ConeError {
@@ -60,6 +62,7 @@ impl fmt::Display for ConeError {
                  hyperplanes of the Mori cone, so another order of them may do, or the \
                  Hilbert bases can be given (hilbert_bases)"
             ),
+            Self::Interrupted => write!(f, "the computation was interrupted"),
         }
     }
 }
@@ -69,6 +72,15 @@ impl std::error::Error for ConeError {}
 impl From<TooLarge> for ConeError {
     fn from(_: TooLarge) -> Self {
         Self::TooLarge
+    }
+}
+
+impl From<super::HullError> for ConeError {
+    fn from(e: super::HullError) -> Self {
+        match e {
+            super::HullError::TooLarge => Self::TooLarge,
+            super::HullError::Interrupted => Self::Interrupted,
+        }
     }
 }
 
@@ -191,7 +203,8 @@ fn cut(
     basis: &[Elem],
     lambda: &[i64],
     truncate: Option<(&[i64], i64)>,
-) -> Result<Vec<Elem>, TooLarge> {
+) -> Result<Vec<Elem>, ConeError> {
+    crate::interrupt::check(ConeError::Interrupted)?;
     let k = basis.first().map_or(0, |e| e.y.len());
     let (mut pos, mut neg, mut zero) = (Vec::new(), Vec::new(), Vec::new());
     for e in basis {
@@ -765,7 +778,7 @@ impl Tree<'_> {
         basis: Vec<Elem>,
         skipped: &mut Vec<usize>,
         found: &mut Vec<(Vec<usize>, Vec<Elem>)>,
-    ) -> Result<(), TooLarge> {
+    ) -> Result<(), ConeError> {
         if r == self.rows.len() {
             let needed = match skipped.len() {
                 0 => false,

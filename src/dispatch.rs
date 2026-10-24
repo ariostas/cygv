@@ -9,8 +9,8 @@
 //! the Hilbert bases of the cones $K_T$: those of [`Options::hilbert_bases`], or else computed
 //! ([`crate::cone::cone_data`]).
 //!
-//! [`Method::Auto`] runs the modular pipeline for [`Selection::MaxDeg`] and
-//! [`Selection::TargetPoints`], and the reference one for the other selections. Curve classes
+//! [`Method::Auto`] runs the modular pipeline for every selection but
+//! [`Selection::MinPoints`], which only the reference one supports. Curve classes
 //! that do not fit the modular keys are an error, since the reference pipeline, which takes
 //! them, is too slow where they occur (high $h^{1,1}$) to run unasked.
 
@@ -82,7 +82,10 @@ impl From<reference::Error> for Error {
 
 impl From<ConeError> for Error {
     fn from(e: ConeError) -> Self {
-        Self::MoriCone(e)
+        match e {
+            ConeError::Interrupted => Self::Interrupted,
+            e => Self::MoriCone(e),
+        }
     }
 }
 
@@ -172,11 +175,16 @@ fn compute_in(
     } = problem.check(options)?;
     let geometry = &problem.geometry;
     let q = &geometry.q;
-    let fan_err = |field| move |e: crate::phase::FanError| input_err(field, e.to_string());
+    let fan_err = |field| {
+        move |e: crate::phase::FanError| match e {
+            crate::phase::FanError::Interrupted => Error::Interrupted,
+            e => input_err(field, e.to_string()),
+        }
+    };
     // The Mori cone by inequalities.
     let (hyperplanes, equations) = match &problem.cone {
         MoriCone::Generators(g) => {
-            let f = crate::cone::facets(g).map_err(|_| ConeError::TooLarge)?;
+            let f = crate::cone::facets(g).map_err(ConeError::from)?;
             (f.hyperplanes, f.equations)
         }
         MoriCone::Inequalities {
@@ -234,20 +242,46 @@ fn compute_in(
             )
         })?,
     };
-    if let Selection::TargetPoints { points, .. } = &problem.selection {
+    // Curve classes are computed as the targets of their lightcones, which hold every class
+    // their invariants depend on, and only theirs are kept.
+    let mut listed = None;
+    let selection = match &problem.selection {
+        Selection::CurveClasses(classes) => {
+            let points = curve_classes(classes, &grading_vector)?;
+            listed = Some(
+                columns(&points)
+                    .map(<[i32]>::to_vec)
+                    .collect::<std::collections::HashSet<_>>(),
+            );
+            std::borrow::Cow::Owned(Selection::TargetPoints {
+                points,
+                max_deg: None,
+            })
+        }
+        selection => std::borrow::Cow::Borrowed(selection),
+    };
+    if let Selection::TargetPoints { points, .. } = &*selection {
         check_target_degrees(points, grading_vector.as_slice())?;
         let in_cone = |p: &[i32]| {
             columns(&hyperplanes).all(|h| dot(h, p) >= 0)
                 && columns(&equations).all(|e| dot(e, p) == 0)
         };
         if let Some(p) = columns(points).find(|p| !in_cone(p)) {
+            let field = problem.selection.name();
             return Err(input_err(
-                "target_points",
-                format!("the target point {p:?} lies outside the Mori cone"),
+                field,
+                format!(
+                    "the {} {p:?} lies outside the Mori cone",
+                    if listed.is_some() {
+                        "curve class"
+                    } else {
+                        "target point"
+                    }
+                ),
             ));
         }
     }
-    let use_modular = options.method != Method::Reference && problem.selection.modular_supported();
+    let use_modular = options.method != Method::Reference && selection.modular_supported();
     log::info!(
         "grading vector {:?}{}, {} method",
         grading_vector.as_slice(),
@@ -284,7 +318,7 @@ fn compute_in(
                         q,
                         &strata,
                         grading_vector.as_slice(),
-                        top_degree(&problem.selection, &grading_vector),
+                        top_degree(&selection, &grading_vector),
                     )?;
                     &computed
                 }
@@ -305,6 +339,7 @@ fn compute_in(
             );
             run_modular(
                 problem,
+                &selection,
                 cy_kind,
                 &strata,
                 &grading_vector,
@@ -328,6 +363,7 @@ fn compute_in(
             }
             run_reference(
                 problem,
+                &selection,
                 cy_kind,
                 strata,
                 &grading_vector,
@@ -339,6 +375,12 @@ fn compute_in(
         })
     };
     let mut res = run().map_err(|e| cone_input(problem, e))?;
+    if let Some(listed) = &listed {
+        match &mut res {
+            Entries::Gv(e) => e.retain(|i| listed.contains(&i.curve)),
+            Entries::Gw(e) => e.retain(|i| listed.contains(&i.curve)),
+        }
+    }
     log::info!(
         "done: {} nonzero invariants",
         match &res {
@@ -463,8 +505,10 @@ fn nefpart_vectors(nefpart: &[Vec<usize>]) -> Vec<DVector<i32>> {
 }
 
 /// Runs the modular pipeline, with the candidates from the cone data.
+#[allow(clippy::too_many_arguments)]
 fn run_modular(
     problem: &Problem,
+    selection: &Selection,
     cy_kind: CYKind,
     strata: &[Stratum],
     grading_vector: &RowDVector<i32>,
@@ -473,7 +517,7 @@ fn run_modular(
     options: &Options,
 ) -> Result<Entries, Error> {
     let g = grading_vector.as_slice();
-    let (max_deg, targets): (u32, Vec<&[i32]>) = match &problem.selection {
+    let (max_deg, targets): (u32, Vec<&[i32]>) = match selection {
         Selection::MaxDeg(d) => (*d, Vec::new()),
         // The targets lower it to their largest degree.
         Selection::TargetPoints { points, max_deg } => {
@@ -558,11 +602,11 @@ fn entries<T: PartialEq + Default>(
     res
 }
 
-/// Runs the reference pipeline, on the Hilbert basis of the Mori cone or on the given curve
-/// classes.
+/// Runs the reference pipeline, on the Hilbert basis of the Mori cone.
 #[allow(clippy::too_many_arguments)]
 fn run_reference(
     problem: &Problem,
+    selection: &Selection,
     cy_kind: CYKind,
     strata: Vec<Stratum>,
     grading_vector: &RowDVector<i32>,
@@ -571,36 +615,20 @@ fn run_reference(
     kind: InvariantKind,
     options: &Options,
 ) -> Result<Entries, Error> {
-    let (generators, max_deg, min_points, target_points) = match &problem.selection {
-        Selection::CurveClasses(classes) => {
-            let in_cone = |c: &[i32]| {
-                columns(hyperplanes).all(|h| dot(h, c) >= 0)
-                    && columns(equations).all(|e| dot(e, c) == 0)
-            };
-            if !columns(classes).all(in_cone) {
-                return Err(input_err(
-                    "curve_classes",
-                    "a curve class lies outside the Mori cone",
-                ));
-            }
-            (curve_classes(classes, grading_vector)?, None, None, None)
-        }
-        selection => {
-            // Every lattice point of the Mori cone, from the Hilbert basis.
-            let basis = crate::cone::hilbert_basis(hyperplanes, equations)?;
-            log::info!("Hilbert basis of the Mori cone: {} elements", basis.ncols());
-            if columns(&basis).any(|g| degree(g, grading_vector) <= 0) {
-                return Err(ConeError::NonpositiveDegree.into());
-            }
-            match selection {
-                Selection::MaxDeg(d) => (basis, Some(*d), None, None),
-                Selection::TargetPoints { points, max_deg } => {
-                    (basis, *max_deg, None, Some(points.clone()))
-                }
-                Selection::MinPoints(n) => (basis, None, Some(*n), None),
-                Selection::CurveClasses(_) => unreachable!(),
-            }
-        }
+    // Every lattice point of the Mori cone, from the Hilbert basis.
+    let generators = crate::cone::hilbert_basis(hyperplanes, equations)?;
+    log::info!(
+        "Hilbert basis of the Mori cone: {} elements",
+        generators.ncols()
+    );
+    if columns(&generators).any(|g| degree(g, grading_vector) <= 0) {
+        return Err(ConeError::NonpositiveDegree.into());
+    }
+    let (max_deg, min_points, target_points) = match selection {
+        Selection::MaxDeg(d) => (Some(*d), None, None),
+        Selection::TargetPoints { points, max_deg } => (*max_deg, None, Some(points.clone())),
+        Selection::MinPoints(n) => (None, Some(*n), None),
+        Selection::CurveClasses(_) => unreachable!("curve classes run as target points"),
     };
     // The reference truncates by the target points alone, so a maximum degree is applied to
     // its results.
@@ -662,15 +690,15 @@ fn dot(a: &[i32], b: &[i32]) -> i64 {
     a.iter().zip(b).map(|(&x, &y)| x as i64 * y as i64).sum()
 }
 
-/// The curve classes of [`Selection::CurveClasses`]: the given ones, once each, after zero,
-/// which is added if it is missing. The others must have positive degree.
+/// The curve classes of [`Selection::CurveClasses`]: the nonzero ones, once each, which must
+/// have positive degree.
 fn curve_classes(
     classes: &DMatrix<i32>,
     grading_vector: &RowDVector<i32>,
 ) -> Result<DMatrix<i32>, Error> {
     let h11 = classes.nrows();
     let mut seen = std::collections::HashSet::new();
-    let mut res = vec![0; h11];
+    let mut res = Vec::new();
     for c in columns(classes) {
         if c.iter().all(|&x| x == 0) || !seen.insert(c) {
             continue;
@@ -682,6 +710,12 @@ fn curve_classes(
             ));
         }
         res.extend_from_slice(c);
+    }
+    if res.is_empty() {
+        return Err(input_err(
+            "curve_classes",
+            "there must be at least one nonzero curve class",
+        ));
     }
     Ok(DMatrix::from_vec(h11, res.len() / h11, res))
 }

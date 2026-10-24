@@ -4,7 +4,9 @@ pub mod error;
 
 use super::polynomial::properties::PolynomialProperties;
 use crate::reference::factorial::factorial_prod;
-use crate::reference::polynomial::{coefficient::PolynomialCoeff, Polynomial};
+use crate::reference::polynomial::{
+    coefficient::PolynomialCoeff, error::PolynomialError, Polynomial,
+};
 use crate::reference::semigroup::Semigroup;
 use crate::{check_strata, CYKind, Stratum};
 use error::FundamentalPeriodError;
@@ -430,6 +432,10 @@ fn send_c<T, F>(
     curves.par_iter().for_each_init(
         || CScratch::new(&poly_props.zero, h11),
         |scratch, &t| {
+            // An interrupted computation skips the rest, which the caller then discards.
+            if crate::interrupt::interrupted() {
+                return;
+            }
             let mut out = Vec::new();
             compute(t, scratch, &mut out);
             // The receiver only goes away early if filing panicked, in which
@@ -583,16 +589,17 @@ where
         },
     );
 
+    crate::interrupt::check(FundamentalPeriodError::Interrupted)?;
     c0.nonzero = c0.coeffs.keys().cloned().collect();
     c0.nonzero.sort_unstable();
     c0.clean_up();
 
     // Now compute the inverse and the derivatives in parallel.
-    let (mut c0_inv, _) = file_while(
+    let (c0_inv, _) = file_while(
         |coeff| file_coeff(coeff, None, &mut c1, &mut c2),
         |tx| {
             rayon::join(
-                || c0.recipr(poly_props).unwrap(),
+                || c0.recipr(poly_props),
                 || {
                     rayon::join(
                         || {
@@ -628,6 +635,11 @@ where
         },
     );
 
+    crate::interrupt::check(FundamentalPeriodError::Interrupted)?;
+    let mut c0_inv = c0_inv.map_err(|e| match e {
+        PolynomialError::Interrupted => FundamentalPeriodError::Interrupted,
+        e => panic!("the constant term of the fundamental period is one: {e}"),
+    })?;
     c0_inv.clean_up();
     for p in c1.iter_mut() {
         p.nonzero = p.coeffs.keys().cloned().collect();

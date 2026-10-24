@@ -23,7 +23,7 @@ use super::table::{SlotMap, SparsePoly};
 use super::{CurveInvariants, Error};
 use crate::CYKind;
 use malachite::{Integer, Rational};
-use std::collections::HashMap;
+use rayon::prelude::*;
 
 /// The greatest common divisor of the absolute values of the coordinates.
 pub(crate) fn gcd(c: &[i32]) -> u32 {
@@ -149,43 +149,57 @@ pub fn multicover<R: Ring, L: KeyLayout>(
 /// degree at most `max_deg`, from the GV invariants of those classes, with $e = 3$ for a
 /// threefold and $2$ for an n-fold. The result is in increasing order of degree and then
 /// curve class, and leaves out the classes where all of them vanish.
+///
+/// Every multiple is a term (its degree, the index of its GV invariant and the factor), the
+/// terms are sorted in parallel by the class they give, which is computed in the comparisons
+/// rather than held, and each run of equal classes is summed, the runs in parallel.
 pub fn gw_from_gv(
     kind: CYKind,
     gv: &[CurveInvariants],
     max_deg: u32,
-) -> Vec<CurveInvariants<Rational>> {
+) -> Result<Vec<CurveInvariants<Rational>>, Error> {
     let exponent = if kind.is_threefold() { 3 } else { 2 };
-    let mut gw: HashMap<Vec<i32>, (u32, Vec<Rational>)> = HashMap::new();
-    for inv in gv.iter().filter(|inv| inv.degree != 0) {
-        for m in 1..=max_deg / inv.degree {
-            let denom = Integer::from(u64::from(m).pow(exponent));
-            let curve = inv
-                .curve
-                .iter()
-                .map(|&x| {
-                    x.checked_mul(m as i32)
-                        .expect("a multiple of a curve overflows")
-                })
-                .collect();
-            let (_, values) = gw
-                .entry(curve)
-                .or_insert_with(|| (m * inv.degree, vec![Rational::default(); inv.values.len()]));
-            for (x, v) in values.iter_mut().zip(&inv.values) {
-                *x += Rational::from_integers_ref(v, &denom);
-            }
-        }
+    // The multiples must fit the curves' integers, as the classes up to the degree do when
+    // the keys could hold them.
+    let fits = gv.par_iter().all(|inv| {
+        let m = (max_deg / inv.degree.max(1)) as i64;
+        inv.curve
+            .iter()
+            .all(|&x| i32::try_from(x as i64 * m).is_ok())
+    });
+    if !fits {
+        return Err(Error::Key(super::key::KeyError::BoundTooLarge));
     }
-    let mut gw: Vec<CurveInvariants<Rational>> = gw
-        .into_iter()
-        .filter(|(_, (_, values))| values.iter().any(|x| *x != 0))
-        .map(|(curve, (degree, values))| CurveInvariants {
-            curve,
-            degree,
-            values,
+    let mut terms: Vec<(u32, u32, u32)> = gv
+        .par_iter()
+        .enumerate()
+        .filter(|(_, inv)| inv.degree != 0 && inv.degree <= max_deg)
+        .flat_map_iter(|(i, inv)| {
+            (1..=max_deg / inv.degree).map(move |m| (m * inv.degree, i as u32, m))
         })
         .collect();
-    gw.sort_unstable_by(|a, b| (a.degree, &a.curve).cmp(&(b.degree, &b.curve)));
-    gw
+    let class =
+        |&(_, i, m): &(u32, u32, u32)| gv[i as usize].curve.iter().map(move |&x| x * m as i32);
+    terms.par_sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| class(a).cmp(class(b))));
+    let same = |a: &(u32, u32, u32), b: &(u32, u32, u32)| a.0 == b.0 && class(a).eq(class(b));
+    Ok(terms
+        .par_chunk_by(same)
+        .filter_map(|run| {
+            let first = &gv[run[0].1 as usize];
+            let mut values = vec![Rational::default(); first.values.len()];
+            for &(_, i, m) in run {
+                let denom = Integer::from(u64::from(m).pow(exponent));
+                for (x, v) in values.iter_mut().zip(&gv[i as usize].values) {
+                    *x += Rational::from_integers_ref(v, &denom);
+                }
+            }
+            values.iter().any(|x| *x != 0).then(|| CurveInvariants {
+                curve: class(&run[0]).collect(),
+                degree: run[0].0,
+                values,
+            })
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -193,6 +207,7 @@ mod tests {
     use super::*;
     use crate::modular::field::{primes, LaneField, Lanes};
     use crate::modular::key::{PackedKey, PackedLayout};
+    use std::collections::HashMap;
 
     type E = Lanes<2>;
 
@@ -309,7 +324,7 @@ mod tests {
                 .map(|&(n, d)| Rational::from_signeds(n, d))
                 .collect()
         };
-        let got = gw_from_gv(CYKind::Threefold, &gv, 4);
+        let got = gw_from_gv(CYKind::Threefold, &gv, 4).unwrap();
         let expected = vec![
             (vec![1, 0], 1, rat(&[(8, 1), (2, 1)])),
             (vec![0, 1], 2, rat(&[(0, 1), (3, 1)])),
@@ -328,7 +343,7 @@ mod tests {
         assert_eq!(got, expected);
 
         // Exponent 2 for an n-fold.
-        let got = gw_from_gv(CYKind::Nfold, &gv[..1], 2);
+        let got = gw_from_gv(CYKind::Nfold, &gv[..1], 2).unwrap();
         assert_eq!(got[1].curve, [2, 0]);
         assert_eq!(got[1].values, rat(&[(2, 1), (1, 2)]));
     }

@@ -64,10 +64,36 @@ impl fmt::Display for TooLarge {
 
 impl std::error::Error for TooLarge {}
 
+/// Why [`facets`] or [`rays`] failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HullError {
+    /// An entry overflowed (see [`TooLarge`]).
+    TooLarge,
+    /// The computation was interrupted ([`crate::Interrupt`]).
+    Interrupted,
+}
+
+impl fmt::Display for HullError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::TooLarge => TooLarge.fmt(f),
+            Self::Interrupted => write!(f, "the computation was interrupted"),
+        }
+    }
+}
+
+impl std::error::Error for HullError {}
+
+impl From<TooLarge> for HullError {
+    fn from(_: TooLarge) -> Self {
+        Self::TooLarge
+    }
+}
+
 /// The facets and equations of the cone spanned by the columns of `generators`, in any
 /// dimension. Redundant, repeated and zero columns are allowed; no columns give the cone
 /// $\{0\}$, which has no facets.
-pub fn facets(generators: &DMatrix<i32>) -> Result<Inequalities, TooLarge> {
+pub fn facets(generators: &DMatrix<i32>) -> Result<Inequalities, HullError> {
     let (rays, lineality) = dual(generators.nrows(), columns(generators).map(widen).collect())?;
     Ok(Inequalities {
         hyperplanes: to_matrix(generators.nrows(), rays)?,
@@ -81,7 +107,7 @@ pub fn facets(generators: &DMatrix<i32>) -> Result<Inequalities, TooLarge> {
 /// # Panics
 ///
 /// Panics if both have columns and their numbers of rows differ.
-pub fn rays(hyperplanes: &DMatrix<i32>, equations: &DMatrix<i32>) -> Result<Generators, TooLarge> {
+pub fn rays(hyperplanes: &DMatrix<i32>, equations: &DMatrix<i32>) -> Result<Generators, HullError> {
     let n = if hyperplanes.ncols() > 0 {
         hyperplanes.nrows()
     } else {
@@ -177,7 +203,7 @@ fn insert(set: &mut [u64], i: usize) {
 
 /// The extreme rays and a basis of the lineality space of the dual of the cone spanned by the
 /// `n`-dimensional `vectors`, both canonical as [`Inequalities`] describes.
-fn dual(n: usize, mut vectors: Vectors) -> Result<(Vectors, Vectors), TooLarge> {
+fn dual(n: usize, mut vectors: Vectors) -> Result<(Vectors, Vectors), HullError> {
     vectors.retain(|v| v.iter().any(|&x| x != 0));
     // By 1-norm and then entries, the vectors moved next to their norms rather than cloned.
     let norm = |v: &[i128]| v.iter().map(|x| x.unsigned_abs()).sum::<u128>();
@@ -192,6 +218,7 @@ fn dual(n: usize, mut vectors: Vectors) -> Result<(Vectors, Vectors), TooLarge> 
         .collect();
     let mut rays: Vec<Ray> = Vec::new();
     for (k, v) in vectors.iter().enumerate() {
+        crate::interrupt::check(HullError::Interrupted)?;
         let mut first = None;
         for (i, l) in lineality.iter().enumerate() {
             let s = dot(l, v)?;
@@ -552,7 +579,7 @@ mod tests {
         // The facet through (big, 1, 0) and (0, big, 1) has the normal (1, -big, big^2).
         assert_eq!(
             facets(&dmatrix![big, 0, 1; 1, big, 0; 0, 1, big]),
-            Err(TooLarge)
+            Err(HullError::TooLarge)
         );
     }
 }

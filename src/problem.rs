@@ -80,15 +80,16 @@ pub enum Selection {
     /// The lowest degrees that hold at least this many classes (reference pipeline only).
     MinPoints(u32),
     /// Exactly these classes, one per column, which must lie in the Mori cone and have
-    /// positive degree; zero is added if it is missing (reference pipeline only). The results
-    /// are only right if every class below one of them is listed too.
+    /// positive degree (zero is ignored). They are computed as the targets of
+    /// [`Selection::TargetPoints`], since the invariants of a class depend on every class in
+    /// its lightcone, and only theirs are kept.
     CurveClasses(DMatrix<i32>),
 }
 
 impl Selection {
     /// Whether the modular pipeline supports this selection.
     pub(crate) fn modular_supported(&self) -> bool {
-        matches!(self, Self::MaxDeg(_) | Self::TargetPoints { .. })
+        !matches!(self, Self::MinPoints(_))
     }
 
     /// The name of this selection in the input formats.
@@ -138,7 +139,7 @@ pub struct Options {
     /// The tuning of the modular pipeline.
     pub tuning: modular::Tuning,
     /// A handle that interrupts the computation from another thread: it then stops at its
-    /// next checkpoint, within about the time of one degree, with [`Error::Interrupted`].
+    /// next checkpoint, usually within a fraction of a second, with [`Error::Interrupted`].
     pub interrupt: Option<Interrupt>,
 }
 
@@ -368,10 +369,14 @@ impl Problem {
                 let degree = |c: &[i32]| -> i64 {
                     c.iter().zip(g).map(|(&x, &w)| x as i64 * w as i64).sum()
                 };
-                if columns(gens).any(|c| c.iter().any(|&x| x != 0) && degree(c) <= 0) {
+                if let Some(c) = columns(gens).find(|c| c.iter().any(|&x| x != 0) && degree(c) <= 0)
+                {
                     return Err(input_err(
                         "grading_vector",
-                        "the grading vector must be positive on every nonzero generator",
+                        format!(
+                            "the grading vector must be positive on every nonzero generator, \
+                             and is not on {c:?}"
+                        ),
                     ));
                 }
             }

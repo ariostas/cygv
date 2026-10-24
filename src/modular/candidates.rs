@@ -38,6 +38,18 @@ pub fn generated_semigroup<'a, L: KeyLayout>(
     grading_vector: &[i32],
     max_deg: u32,
 ) -> Result<Vec<(L::Key, u32)>, Error> {
+    lowest_elements(layout, generators, grading_vector, max_deg, usize::MAX)
+}
+
+/// [`generated_semigroup`], stopping after the lowest degrees that hold at least `count`
+/// elements, if those are below `max_deg`.
+pub fn lowest_elements<'a, L: KeyLayout>(
+    layout: &L,
+    generators: impl IntoIterator<Item = &'a [i32]>,
+    grading_vector: &[i32],
+    max_deg: u32,
+    count: usize,
+) -> Result<Vec<(L::Key, u32)>, Error> {
     let mut gens = Vec::new();
     for g in generators {
         if g.len() != grading_vector.len() || layout.dim() != g.len() {
@@ -75,6 +87,7 @@ pub fn generated_semigroup<'a, L: KeyLayout>(
     let mut done: Vec<u32> = Vec::new();
     let mut next_gen = gens.iter().peekable();
     loop {
+        crate::interrupt::check(Error::Interrupted)?;
         let d = match (heap.min_deg(), next_gen.peek()) {
             (None, None) => break,
             (Some(d), None) => d,
@@ -104,13 +117,18 @@ pub fn generated_semigroup<'a, L: KeyLayout>(
                 add(&mut map, &mut heap, ks + key, d + dg);
             }
         }
+        if done.len() >= count {
+            break;
+        }
     }
 
+    let top = done.last().map_or(0, |&s| map.deg(s));
     let mut points: Vec<_> = map
         .keys()
         .iter()
         .copied()
         .zip(map.degs().iter().copied())
+        .filter(|&(_, deg)| deg <= top)
         .collect();
     points.sort_unstable_by_key(|&(key, deg)| (deg, key));
     Ok(points)

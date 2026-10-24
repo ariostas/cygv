@@ -439,6 +439,7 @@ pub fn period<R: Ring, L: KeyLayout>(
     let parts = candidates
         .par_chunks(chunk)
         .map(|cands| {
+            crate::interrupt::check(Error::Interrupted)?;
             let mut c = vec![0; dim];
             let mut sc = eval.scratch();
             let mut c0 = SparsePoly::new(1);

@@ -29,7 +29,7 @@
 //! # Whether to compute GV or GW invariants. Defaults to gv.
 //! invariants: gv
 //! # Which pipeline to use: auto, modular or reference. Defaults to auto, which uses the
-//! # modular one, which is much faster, for max_deg and target_points.
+//! # modular one, which is much faster, for everything but min_points.
 //! method: auto
 //! # Whether to prove the results exact, taking more primes if needed (not in vex phases).
 //! # Defaults to false.
@@ -231,13 +231,12 @@ impl Input {
             }
         }
 
+        // A number, such as the id of a polytope, is a name too.
         let name = match get_field(hash, "name") {
             None => None,
-            Some(y) => Some(
-                y.as_str()
-                    .ok_or_else(|| IoError::invalid_field("name", "expected a string"))?
-                    .to_owned(),
-            ),
+            Some(Yaml::String(s) | Yaml::Real(s)) => Some(s.clone()),
+            Some(Yaml::Integer(n)) => Some(n.to_string()),
+            Some(_) => return Err(IoError::invalid_field("name", "expected a string")),
         };
         let q = as_matrix(require_field(hash, "q")?, "q")?;
         let h11 = q.ncols();
@@ -260,10 +259,11 @@ impl Input {
             (Some(_), Some(_), _) => {
                 return Err(IoError::Conflicting("generators", "mori_hyperplanes"))
             }
-            (Some(_), None, Some(_)) => {
+            // No equations are none, as in Python.
+            (Some(_), None, Some(e)) if !e.as_vec().is_some_and(Vec::is_empty) => {
                 return Err(IoError::Conflicting("generators", "mori_equations"))
             }
-            (Some(g), None, None) => MoriCone::Generators(as_matrix(g, "generators")?),
+            (Some(g), None, _) => MoriCone::Generators(as_matrix(g, "generators")?),
             (None, Some(h), e) => MoriCone::Inequalities {
                 hyperplanes: as_matrix(h, "mori_hyperplanes")?,
                 equations: match e {
@@ -288,13 +288,13 @@ impl Input {
             .map(|y| as_u32(y, "max_deg"))
             .transpose()?;
         let target_points = get_field(hash, "target_points")
-            .map(|y| as_target_points(y, h11))
+            .map(|y| as_points(y, h11, "target_points"))
             .transpose()?;
         let min_points = get_field(hash, "min_points")
             .map(|y| as_u32(y, "min_points"))
             .transpose()?;
         let curve_classes = get_field(hash, "curve_classes")
-            .map(|y| as_matrix(y, "curve_classes"))
+            .map(|y| as_points(y, h11, "curve_classes"))
             .transpose()?;
         let selection = match (max_deg, target_points, min_points, curve_classes) {
             (max_deg, Some(points), None, None) => Selection::TargetPoints { points, max_deg },
@@ -489,10 +489,21 @@ fn require_field<'a>(hash: &'a Hash, field: &'static str) -> Result<&'a Yaml, Io
     get_field(hash, field).ok_or(IoError::MissingField(field))
 }
 
+/// An integer, or a float with an integral value, as Python takes them.
+fn integer(data: &Yaml) -> Option<i64> {
+    match data {
+        Yaml::Integer(n) => Some(*n),
+        Yaml::Real(_) => data
+            .as_f64()
+            .filter(|x| x.fract() == 0.0 && x.abs() < 2f64.powi(63))
+            .map(|x| x as i64),
+        _ => None,
+    }
+}
+
 /// Read a value that must be an integer.
 fn as_i64(data: &Yaml, field: &str) -> Result<i64, IoError> {
-    data.as_i64()
-        .ok_or_else(|| IoError::invalid_field(field, "expected an integer"))
+    integer(data).ok_or_else(|| IoError::invalid_field(field, "expected an integer"))
 }
 
 /// Read a value that must be a 32-bit integer.
@@ -527,7 +538,7 @@ fn as_index_lists(data: &Yaml, field: &'static str) -> Result<Vec<Vec<usize>>, I
                 .ok_or_else(err)?
                 .iter()
                 .map(|i| {
-                    i.as_i64()
+                    integer(i)
                         .and_then(|i| usize::try_from(i).ok())
                         .ok_or_else(err)
                 })
@@ -689,14 +700,13 @@ fn as_fraction(data: &Yaml) -> Result<Rational, IoError> {
     }
 }
 
-/// Read the target points, which can be given either as a single vector or as a list
-/// of vectors.
-fn as_target_points(data: &Yaml, h11: usize) -> Result<DMatrix<i32>, IoError> {
-    let field = "target_points";
-    let is_single_point = matches!(
-        data.as_vec().and_then(|v| v.first()),
-        Some(Yaml::Integer(_))
-    );
+/// Read the target points or the curve classes, which can be given either as a single vector
+/// or as a list of vectors.
+fn as_points(data: &Yaml, h11: usize, field: &'static str) -> Result<DMatrix<i32>, IoError> {
+    let is_single_point = data
+        .as_vec()
+        .and_then(|v| v.first())
+        .is_some_and(|x| integer(x).is_some());
     let points = if is_single_point {
         let point = as_int_vec(data, field)?;
         DMatrix::from_column_slice(point.len(), 1, &point)
@@ -943,6 +953,19 @@ min_points: 20
         assert_eq!(problem.selection, Selection::MinPoints(20));
         assert_eq!(input.kind, InvariantKind::GV);
         assert_eq!(input.options, Options::default());
+
+        // A number is a name, and no equations are none, as in Python.
+        let input = load_one(&THREEFOLD.replace("name: test", "name: 127226")).unwrap();
+        assert_eq!(input.name.as_deref(), Some("127226"));
+        let input = load_one(&format!("{THREEFOLD}mori_equations: []\n")).unwrap();
+        assert_eq!(
+            input.problem.cone,
+            MoriCone::Generators(dmatrix![0, 1; -1, 2])
+        );
+        assert_eq!(
+            load_one(&format!("{THREEFOLD}mori_equations: [[1, 0]]\n")),
+            Err(IoError::Conflicting("generators", "mori_equations"))
+        );
     }
 
     #[test]
@@ -955,6 +978,13 @@ min_points: 20
             selection("curve_classes: [[0, -1], [1, 0]]\n"),
             Ok(Selection::CurveClasses(dmatrix![0, 1; -1, 0]))
         );
+        // One class, and integral floats, as in Python.
+        assert_eq!(
+            selection("curve_classes: [1.0, 2]\n"),
+            Ok(Selection::CurveClasses(dmatrix![1; 2]))
+        );
+        assert_eq!(selection("max_deg: 5.0\n"), Ok(Selection::MaxDeg(5)));
+        assert!(selection("max_deg: 5.5\n").is_err());
         assert_eq!(
             selection(""),
             Err(IoError::MissingOneOf(&[
@@ -972,7 +1002,7 @@ min_points: 20
             selection("max_deg: 5\ncurve_classes: [[1, 0]]\n"),
             Err(IoError::Conflicting("max_deg", "curve_classes"))
         );
-        // The modular method does not support min_points or curve_classes.
+        // The modular method does not support min_points.
         assert!(matches!(
             selection("min_points: 3\nmethod: modular\n"),
             Err(IoError::Unsupported(reason)) if reason.contains("min_points")

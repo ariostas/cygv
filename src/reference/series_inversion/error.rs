@@ -31,6 +31,9 @@ impl fmt::Display for SeriesInversionError {
 
 impl From<PolynomialError> for SeriesInversionError {
     fn from(e: PolynomialError) -> Self {
-        SeriesInversionError::PolynomialError(e)
+        match e {
+            PolynomialError::Interrupted => SeriesInversionError::Interrupted,
+            e => SeriesInversionError::PolynomialError(e),
+        }
     }
 }

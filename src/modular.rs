@@ -668,13 +668,13 @@ pub fn compute_gw(
         geometry,
         options,
         |gv, max_deg, in_lightcone| {
-            let mut gw = multicover::gw_from_gv(geometry.kind(), &gv, max_deg);
+            let mut gw = multicover::gw_from_gv(geometry.kind(), &gv, max_deg)?;
             // Every divisor of a curve in the lightcones is in them, so the GW invariants are
             // right there, but not at the multiples outside them.
             gw.retain(|inv| in_lightcone(&inv.curve));
-            gw
+            Ok(gw)
         },
-    )
+    )?
 }
 
 /// Upper bounds on the absolute values of the GV invariants of [`compute_gv`], for the
@@ -1630,12 +1630,18 @@ fn passes<const NL: usize, L: KeyLayout>(
             Err(e) => return Err(e),
         }
         let check = options.tuning.check_primes;
-        if residues.primes().len() >= min_primes && residues.is_stable(check) {
-            log::info!("the lift is stable with {} primes", residues.primes().len());
-            return Ok(residues);
+        let Some(unstable) = residues.unstable(check, FRACTION_LIMIT) else {
+            continue;
+        };
+        if unstable.is_empty() {
+            if residues.primes().len() >= min_primes {
+                log::info!("the lift is stable with {} primes", residues.primes().len());
+                return Ok(residues);
+            }
+            continue;
         }
         // Inconsistent input gives fractions, which need not take every prime to show.
-        if let Some((degree, value)) = residues.fraction(check, FRACTION_LIMIT) {
+        if let Some((degree, value)) = residues.fraction(check, &unstable) {
             return Err(Error::NotInteger { degree, value });
         }
     }

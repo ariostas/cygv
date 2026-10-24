@@ -217,7 +217,9 @@ exponential again for each later window) and `multicover` (the GV
 invariants from those, by gcd of the coordinates, solved in place in order of degree;
 exponent 3 and a division by the degree for threefolds, exponent 2 for n-folds). `compute_gv` in `src/modular.rs` repeats passes with the
 next primes until `crt::Residues` gives a stable lift (the lift from all but the last
-`check_primes` primes must agree with those), skipping a pass whose primes cannot invert a
+`check_primes` primes must agree with those; `Residues::unstable` finds the first values
+that do not, in parallel, and `Residues::fraction` tries them as fractions, `Error::NotInteger`),
+skipping a pass whose primes cannot invert a
 denominator of the strata (`Error::NotInvertible`), with `Options` for the lane count (1 to 4 primes
 per pass; by default `choose_lanes` predicts it from a probe run at 3/4 of the degree, as the
 C's driver does), a minimum number of primes and a maximum (`max_primes`, 32 by default
@@ -227,7 +229,11 @@ need more are `Error::CertifyPrimes`), the thread count, the extraction's tuning
 of one degree, for about a third of the memory in two and a half times the time; the
 command line and the Python module also call `return_freed_memory`, which sets glibc's
 `M_MMAP_THRESHOLD` so that large freed blocks go back to the system, a third less resident
-memory, for the rest of the process, Python's included); big integers (`malachite::Integer`) are only built by `crt`, for the final values.
+memory; that turns off glibc's moving threshold for good, which made numpy code after it
+five times slower, so the Python module then sets it and the trim threshold to the most they
+move to, `keep_freed_memory`. Both also call `trim_freed_memory` (`malloc_trim`) after each
+computation, or document, which gives back about half of what the exited threads' arenas
+keep: 578 MB to 274 MB after h11_10 at degree 20); big integers (`malachite::Integer`) are only built by `crt`, for the final values.
 With `certify` (the certifier, `PLAN.md` phase 8, after the C's `cgv_maj` and `certify.py`),
 `lifted` runs the majorant pass on the lift and `primes_needed` compares the largest bound
 with half the product of the primes, adding passes until it is below (when the new primes
@@ -242,7 +248,10 @@ from `period`, $\beta$ from `instanton`, `rows` in `extract`), so a term vanishe
 $Q_r \cdot C$; the result matches `cgv_maj`'s curve set and is at or below its bounds. Vex
 phases are refused (`Error::CertifyStrata`), as by the C. `bound_gv` exposes the bounds.
 `compute_gw` derives the GW invariants from the lifted GV invariants
-(`multicover::gw_from_gv`, in `malachite::Rational`), since they are not integers. Both truncate by
+(`multicover::gw_from_gv`, in `malachite::Rational`), since they are not integers: every
+multiple is a term of three integers, sorted in parallel by the class it gives (computed in
+the comparisons) and summed by runs in parallel, 0.2 s on h11_10 at degree 20 where a map of
+the classes took 2. Both truncate by
 `max_deg` and optionally by target points: `lightcone` holds the union of their backward
 lightcones (the $C$ with $P - C$ in the Mori cone), tested by the Mori cone's hyperplanes with
 cone data and by membership in the generated semigroup otherwise (which is then enumerated up
@@ -266,7 +275,11 @@ The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
 
 1. **`semigroup`** — builds the truncated affine semigroup $S_\sigma = \sigma \cap \mathbb{Z}^n$ of
    curve classes in the Mori cone. Four constructors select which points get computed:
-   `from_data`, `with_max_degree`, `with_min_elements`, `with_target_points`. Elements are stored
+   `from_data`, `with_max_degree`, `with_min_elements`, `with_target_points`. The middle two
+   (and the base of the last) enumerate the semigroup with the modular pipeline's
+   `candidates::lowest_elements`, in packed keys, when 128 bits hold the classes, and with
+   sets of vectors otherwise, over four times slower (h11_8 at degree 14, 1.26M classes: 1.3 s
+   against 5.6). Elements are stored
    as **columns** of a `DMatrix<i32>`, sorted by degree under the grading vector and then
    lexicographically, so the order does not depend on hashing; downstream code relies on that
    sort order and on element 0 being the identity. Degrees are taken in `i64`.
@@ -298,15 +311,23 @@ indices differently (the first index is a reference surface in the n-fold case).
   `log_to_stderr` in `src/lib.rs`, a minimal one stamping the seconds since it was installed,
   which the CLI's `-v`/`-vv` installs, and the Python bindings' `Progress`, which keeps the
   lines for the wait of `_compute` to write to Python's `sys.stderr` (the one Jupyter shows)
-  when the keyword `verbose` (read by `src/python.rs`, not part of `Options`) is set.
+  when the keyword `verbose` (read by `src/python.rs`, not part of `Options`) is set. It keeps
+  each computation's verbosity, clock and lines apart, by the identifier of its interrupt
+  handle (`interrupt::current_id`, which the pools' threads have), and only ever raises the
+  process's level, so that concurrent computations and other loggers are left alone.
 
 - **Interrupts** (`src/interrupt.rs`): `Options::interrupt` holds an `Interrupt`, an
   `Arc<AtomicBool>` that another thread sets. The dispatch makes it the current thread's
   (`interrupt::with`), the pipelines build their pools with `interrupt::pool`, whose threads
-  take it, and `interrupt::check` polls it at the checkpoints: each layer of the extraction
-  and of the tree, each block of the instanton, and the stages and degrees of the
-  reference's series inversion, returning `Error::Interrupted` (the sub-errors' variants map
-  to it). Checking a thread-local saves threading the handle through every stage.
+  take it, and `interrupt::check` polls it at the checkpoints: each vector of the double
+  description (`HullError`), each cut of the Hilbert bases, each degree of the modular
+  candidates, each chunk of the period, each layer of the extraction and of the tree, each
+  block of the instanton, each round of the reference's semigroup, the end of each half of
+  its period (whose producers skip their curves once it is set), each term of its series
+  (`PolynomialError`) and each degree of its series inversion, returning
+  `Error::Interrupted` (the sub-errors' variants map to it). Checking a thread-local saves
+  threading the handle through every stage. The lift and the final sort have none. In
+  Python, a second ctrl+c stops the wait for the computation to stop.
 
 - **One problem, one dispatch.** The public input is `src/problem.rs` (decided in
   `INTERFACE.md`, phase 9): a `Problem` of a `Geometry` (`q` with one row per divisor,
@@ -334,14 +355,14 @@ indices differently (the first index is a reference surface in the n-fold case).
   `Fan::mori_cone`), checks that a cone given with a fan contains its wall classes
   (`Fan::wall_outside`; the fan's own cone would take minutes at large $h^{1,1}$) and that the
   target points lie in the cone, takes the default grading vector (the primitive sum of those
-  inequalities), and picks the pipeline: `Auto` runs `modular` for `MaxDeg` and `TargetPoints` and the
-  reference otherwise; curve classes too wide for the modular keys are `Error::Unsupported`
+  inequalities), runs `CurveClasses` as the `TargetPoints` of the nonzero classes (whose
+  lightcones their invariants depend on; a set not closed downward gave wrong invariants
+  silently) and keeps only theirs, and picks the pipeline: `Auto` runs `modular` for
+  everything but `MinPoints` and the reference for that; curve classes too wide for the modular keys are `Error::Unsupported`
   naming `method: reference`, never a silent fallback. `modular` takes its candidates from
   `Options::hilbert_bases` (checked by `check_cone_data`) or from `cone::cone_data` of the
   inequalities, truncated at the maximum degree lowered to the targets'; the reference runs on
-  `cone::hilbert_basis` of the inequalities, or for `CurveClasses` on those classes as given
-  (checked to lie in the cone, zero added, duplicates dropped, `Semigroup::from_data`), and
-  checks the Hilbert bases but does not use them. Errors of the cone computations that come
+  `cone::hilbert_basis` of the inequalities, and checks the Hilbert bases but does not use them. Errors of the cone computations that come
   from the input (`NotPointed`, `NonpositiveDegree`) name the Mori cone's field or the grading
   vector's (`cone_input`). With `TargetPoints` and `max_deg` the reference's results are
   truncated by degree, since its semigroup only takes the targets. `run_hkty<T>` is generic over

@@ -7,6 +7,8 @@ use core::fmt;
 pub enum PolynomialError {
     ZeroConstantTermError,
     NonZeroConstantTermError,
+    /// The computation was interrupted ([`crate::Interrupt`]).
+    Interrupted,
 }
 
 /// Implement Display trait for PolynomialError.
@@ -19,6 +21,7 @@ impl fmt::Display for PolynomialError {
             PolynomialError::NonZeroConstantTermError => {
                 "this operation requires a zero constant term"
             }
+            PolynomialError::Interrupted => "the computation was interrupted",
         };
         write!(f, "{message}")
     }

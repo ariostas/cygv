@@ -326,17 +326,17 @@ fn test_invalid_input() {
         );
     }
 
-    // The curve classes are used as given, with zero added, each once.
+    // The curve classes are computed from their lightcones, so a class is right without
+    // those below it, and each is given once, zero left out.
     let expected = gv(Selection::MaxDeg(2), &[], &quintic, Method::Reference).unwrap();
     assert_eq!(expected.len(), 2);
-    for classes in [dmatrix![1, 2], dmatrix![2, 0, 1], dmatrix![1, 2, 1]] {
-        let res = gv(
-            Selection::CurveClasses(classes),
-            &[],
-            &quintic,
-            Method::Auto,
-        );
-        assert_eq!(res.unwrap(), expected);
+    for m in [Method::Auto, Method::Reference] {
+        for classes in [dmatrix![1, 2], dmatrix![2, 0, 1], dmatrix![1, 2, 1]] {
+            let res = gv(Selection::CurveClasses(classes), &[], &quintic, m);
+            assert_eq!(res.unwrap(), expected, "{m:?}");
+        }
+        let res = gv(Selection::CurveClasses(dmatrix![2]), &[], &quintic, m);
+        assert_eq!(res.unwrap(), expected[1..], "{m:?}");
     }
     assert_eq!(
         field(gv(

@@ -4,6 +4,7 @@ import operator
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields
 from fractions import Fraction
+from functools import cached_property
 from typing import Any, overload
 
 import numpy as np
@@ -39,6 +40,9 @@ class Invariants(Sequence[tuple[Any, Any]]):
     then by curve class, where the key is the curve class (a tuple), or for an n-fold the pair
     of the curve class and the reference surface. ``dict(invariants)`` maps the keys to the
     values.
+
+    ``invariants[key]`` and ``invariants.get(key)`` look up the value of a key (with a lookup
+    table built on the first use), and an int index gives the pair at that position.
 
     The same data are available as numpy arrays, which is much faster for many invariants:
     ``curves``, one row per curve class; ``surfaces``, the reference surfaces of an n-fold
@@ -81,19 +85,21 @@ class Invariants(Sequence[tuple[Any, Any]]):
         self.dimension = dimension
         self.grading_vector = grading_vector
         self.report = report
+        self._index: dict[Key, int] | None = None
         for array in (curves, surfaces, degrees, values, denominators):
             if isinstance(array, np.ndarray):
                 array.flags.writeable = False
 
-    @property
+    @cached_property
     def values(self) -> NDArray[Any]:
         """The invariants, in an array of ``int64`` when they are integers that all fit, and
         of Python objects otherwise."""
-        if self._denominators is None:
-            if isinstance(self._values, np.ndarray):
-                return self._values
-            return np.array(self._values, dtype=object)
-        return np.array(self._value_list(), dtype=object)
+        if self._denominators is None and isinstance(self._values, np.ndarray):
+            return self._values
+        values = np.empty(len(self), dtype=object)
+        values[:] = self._value_list()
+        values.flags.writeable = False
+        return values
 
     def _value_list(self) -> list[int] | list[Fraction]:
         """The invariants as Python ints or fractions."""
@@ -124,7 +130,19 @@ class Invariants(Sequence[tuple[Any, Any]]):
     @overload
     def __getitem__(self, i: slice) -> list[tuple[Any, Any]]: ...
 
-    def __getitem__(self, i: int | slice) -> tuple[Any, Any] | list[tuple[Any, Any]]:
+    @overload
+    def __getitem__(self, i: tuple[Any, ...]) -> Any: ...
+
+    def __getitem__(
+        self, i: int | slice | tuple[Any, ...]
+    ) -> tuple[Any, Any] | list[tuple[Any, Any]] | Any:
+        if isinstance(i, tuple):
+            if self._index is None:
+                self._index = {k: j for j, k in enumerate(self._keys())}
+            j = self._index.get(self._key(i))
+            if j is None:
+                raise KeyError(i)
+            return self[j][1]
         if isinstance(i, slice):
             return [self[j] for j in range(*i.indices(len(self)))]
         i = range(len(self))[i]
@@ -134,6 +152,23 @@ class Invariants(Sequence[tuple[Any, Any]]):
         if self._denominators is not None:
             value = Fraction(value, int(self._denominators[i]))
         return key, value
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        """The value of a key (a curve class, or for an n-fold the pair of a curve class and a
+        reference surface), or ``default`` if it has no nonzero invariant here."""
+        try:
+            return self[tuple(key)]
+        except KeyError:
+            return default
+
+    def _key(self, key: tuple[Any, ...]) -> Key:
+        """A key as :meth:`_keys` gives them, from any sequences of ints."""
+        if self.surfaces is None:
+            return tuple(int(x) for x in key)
+        if len(key) != 2:
+            msg = "the keys of an n-fold's invariants are (curve, surface) pairs"
+            raise KeyError(msg)
+        return (tuple(int(x) for x in key[0]), int(key[1]))
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Sequence):
@@ -150,6 +185,9 @@ class Invariants(Sequence[tuple[Any, Any]]):
 
     def degree(self, curve: Sequence[int]) -> int:
         """The degree of a curve class under the grading vector."""
+        if len(curve) != len(self.grading_vector):
+            msg = f"the curve class must have {len(self.grading_vector)} entries"
+            raise ValueError(msg)
         return sum(int(c) * g for c, g in zip(curve, self.grading_vector, strict=True))
 
     def __reduce__(self) -> Any:
@@ -211,18 +249,17 @@ def _int_array(x: ArrayLike, name: str) -> Any:
         if not np.all(np.isfinite(array) & (array == np.round(array))):
             msg = f"{name} must hold integers"
             raise ValueError(msg)
-        array = array.astype(np.int64)
     elif array.dtype.kind not in "iub":
         values = [_int(v, name) for v in array.ravel()]
         if any(not -(2**31) <= v < 2**31 for v in values):
             msg = f"{name} must hold integers that fit in 32 bits"
             raise ValueError(msg)
         array = np.array(values, dtype=np.int64).reshape(array.shape)
-    array = array.astype(np.int64)
+    # Checked before the cast, which would wrap large unsigned and float values.
     if array.size and (array.min() < -(2**31) or array.max() >= 2**31):
         msg = f"{name} must hold integers that fit in 32 bits"
         raise ValueError(msg)
-    return array
+    return array.astype(np.int64)
 
 
 def _vectors(vectors: ArrayLike | None, name: str) -> list[Any] | None:
@@ -260,12 +297,35 @@ def _vector(vector: ArrayLike | None, name: str) -> list[int] | None:
     return res
 
 
+def _indices(x: ArrayLike, name: str) -> list[int]:
+    """A list of indices, which must not be negative."""
+    res: list[int] = _int_array(x, name).ravel().tolist()
+    if any(i < 0 for i in res):
+        msg = f"{name} must hold nonnegative indices"
+        raise ValueError(msg)
+    return res
+
+
 def _index_lists(
     lists: Iterable[ArrayLike] | None, name: str
 ) -> list[list[int]] | None:
     if lists is None:
         return None
-    return [_int_array(x, name).ravel().tolist() for x in lists]
+    return [_indices(x, name) for x in lists]
+
+
+def _flag(x: Any, name: str) -> bool:
+    """A bool, from a bool (numpy's too) or the int 0 or 1."""
+    if isinstance(x, bool | np.bool_):
+        return bool(x)
+    try:
+        v = operator.index(x)
+    except TypeError:
+        v = None
+    if v not in (0, 1):
+        msg = f"{name} must be True or False, not {x!r}"
+        raise ValueError(msg)
+    return bool(v)
 
 
 def _intnums(intnums: Mapping[Any, int] | Iterable[Sequence[int]]) -> dict[Any, int]:
@@ -307,9 +367,12 @@ def _strata(
     res = []
     for divisors, cls in strata:
         fracs = [Fraction(x) for x in cls]
+        if any(not (abs(f.numerator) < 2**63 and f.denominator < 2**63) for f in fracs):
+            msg = "the classes of the strata must be fractions of integers that fit in 64 bits"
+            raise ValueError(msg)
         res.append(
             (
-                _int_array(divisors, "strata").ravel().tolist(),
+                _indices(divisors, "strata"),
                 [(f.numerator, f.denominator) for f in fracs],
             )
         )
@@ -323,14 +386,30 @@ def _hilbert_bases(
         return None
     return [
         (
-            _int_array(divisors, "hilbert_bases").ravel().tolist(),
+            _indices(divisors, "hilbert_bases"),
             _vectors(basis, "hilbert_bases"),
         )
         for divisors, basis in bases
     ]
 
 
-@dataclass
+def _method(method: Any) -> str | None:
+    if method is not None and not isinstance(method, str):
+        msg = f'method must be "auto", "modular" or "reference", not {method!r}'
+        raise ValueError(msg)
+    return method
+
+
+def _verbosity(verbose: Any) -> int:
+    """The verbosity, 0 to 2, from a bool or an int (larger ones are 2)."""
+    if isinstance(verbose, bool | np.bool_):
+        return int(verbose)
+    v = _count(verbose, "verbose")
+    return min(v or 0, 2)
+
+
+# Not compared by value, since the fields may be arrays.
+@dataclass(eq=False)
 class Problem:
     """A Calabi-Yau hypersurface or complete intersection in a toric variety, and its Mori
     cone, whose GV or GW invariants :meth:`gv` and :meth:`gw` compute.
@@ -388,11 +467,12 @@ class Problem:
           the Mori cone), up to their largest degree, or ``max_deg`` if it is also given and
           lower;
         - ``min_points``: the lowest degrees that hold at least this many classes;
-        - ``curve_classes``: exactly the classes listed (zero is added if it is missing).
+        - ``curve_classes``: exactly the classes listed (computed as ``target_points``, whose
+          lightcones their invariants depend on, keeping only these).
 
         ``method`` is "auto" (the default), "modular" or "reference": auto runs the much
-        faster modular pipeline for ``max_deg`` and ``target_points``, and the reference one
-        otherwise. ``certify`` proves the results exact. ``low_memory`` prefers memory to
+        faster modular pipeline for every selection but ``min_points``, and the reference one
+        for that. ``certify`` proves the results exact. ``low_memory`` prefers memory to
         speed, for the runs that do not fit otherwise: the modular pipeline then takes about a
         third of the memory, for about two and a half times the time. ``n_threads`` defaults
         to one per logical CPU. ``hilbert_bases`` are the Hilbert bases of the cones ``K_T``
@@ -481,13 +561,13 @@ class Problem:
             "max_deg": _count(max_deg, "max_deg"),
             "target_points": _points(target_points, "target_points"),
             "min_points": _count(min_points, "min_points"),
-            "curve_classes": _vectors(curve_classes, "curve_classes"),
-            "method": method,
+            "curve_classes": _points(curve_classes, "curve_classes"),
+            "method": _method(method),
             "n_threads": _count(n_threads, "n_threads"),
-            "certify": certify,
-            "low_memory": low_memory,
+            "certify": _flag(certify, "certify"),
+            "low_memory": _flag(low_memory, "low_memory"),
             "hilbert_bases": _hilbert_bases(hilbert_bases),
-            "verbose": _count(verbose, "verbose"),
+            "verbose": _verbosity(verbose),
         }
         (
             curves,

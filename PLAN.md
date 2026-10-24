@@ -1674,6 +1674,17 @@ Other follow-ups, not from #102:
     `ShardedMap` gave nothing (the stage stays at 1.8 s of 18), and was dropped. The Python
     call, now in process, takes 18.2 s against 17.9 s in Rust, where the subprocess took 32
     against 20.
+  - *After the review of `6477b52`* (same setup). GW invariants: `gw_from_gv` sorts the
+    multiples in parallel rather than hashing them, the tail after the lift 2.2 s → 0.2 s
+    over GV's (19.9 → 18.4 s, identical output). The reference's semigroup goes through
+    `candidates::lowest_elements` in packed keys and sorts its indices in parallel: `h11_8`
+    at 14 (1.26M classes) 5.6 → 1.3 s, the whole reference run at 12 5.9 → 4.4 s. Running
+    its rounds in parallel over the sets of vectors was slower (6.3 s), sorting and
+    deduplicating the vectors, and was dropped. In Python, `malloc_trim` after each call
+    leaves 197 MB resident after `h11_10` at 20 while the result is held (687 before) and
+    143 MB once it is dropped (578), and restoring glibc's thresholds after a low-memory call
+    takes a numpy loop from 17.1 s back to 3.5 (3.4 before it). Interrupts in the reference's
+    semigroup and period, which had no checkpoint, now take 0.25–0.45 s (13.7–19.4 s).
 
 - [ ] **Certifying vex phases** (`Error::CertifyStrata` today, as in the C): the stratum
   terms need bounds of their own in the majorant run.
@@ -1683,7 +1694,11 @@ Other follow-ups, not from #102:
   `modular::run` to return them. `Report` is `#[non_exhaustive]`, so adding them breaks
   nothing.
 - [x] **An opt-out of the saturation** (6.2): `Selection::CurveClasses` (`curve_classes`)
-  computes on exactly the classes given, which is what the untruncated `generators` did.
+  computed on exactly the classes given, which is what the untruncated `generators` did.
+  Withdrawn after the review of `6477b52`: a set that is not closed downward gave wrong
+  invariants without an error (P(1,1,2,2,2): −192 at (1, 1), which is 640), so the classes
+  are now the targets of their lightcones, and only theirs are kept; the modular pipeline
+  then computes them.
 
 ## 6. Decisions needed
 

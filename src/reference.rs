@@ -80,16 +80,38 @@ pub fn run_hkty<T>(
 where
     T: PolynomialCoeff<T>,
 {
-    let sg = if let Some(target_points) = target_points {
-        Semigroup::with_target_points(generators, grading_vector, target_points)
-    } else if let Some(d) = max_deg {
-        Semigroup::with_max_degree(generators, grading_vector, d)
-    } else if let Some(n) = min_points {
-        Semigroup::with_min_elements(generators, grading_vector, n as usize)
-    } else {
-        Semigroup::from_data(generators, grading_vector)
-    }
-    .map_err(Error::Semigroup)?;
+    let n_threads = match n_threads {
+        None => thread::available_parallelism()
+            .unwrap_or(std::num::NonZeroUsize::new(1).unwrap())
+            .get(),
+        Some(0) => 1,
+        Some(n) => n as usize,
+    };
+
+    // The stages parallelize with rayon and so run in whichever pool they are
+    // installed in. A private pool is built here rather than reaching for the
+    // global one, both to honour `n_threads` and to keep a library consumer's
+    // own use of rayon out of the picture.
+    let pool = crate::interrupt::pool(n_threads)
+        .build()
+        .expect("failed to build the worker thread pool");
+
+    let sg = pool
+        .install(|| {
+            if let Some(target_points) = target_points {
+                Semigroup::with_target_points(generators, grading_vector, target_points)
+            } else if let Some(d) = max_deg {
+                Semigroup::with_max_degree(generators, grading_vector, d)
+            } else if let Some(n) = min_points {
+                Semigroup::with_min_elements(generators, grading_vector, n as usize)
+            } else {
+                Semigroup::from_data(generators, grading_vector)
+            }
+        })
+        .map_err(|e| match e {
+            SemigroupError::Interrupted => Error::Interrupted,
+            e => Error::Semigroup(e),
+        })?;
     log::info!(
         "semigroup: {} curve classes up to degree {}",
         sg.elements.ncols(),
@@ -107,22 +129,6 @@ where
         CYKind::Nfold => n_indices,
     };
 
-    let n_threads = match n_threads {
-        None => thread::available_parallelism()
-            .unwrap_or(std::num::NonZeroUsize::new(1).unwrap())
-            .get(),
-        Some(0) => 1,
-        Some(n) => n as usize,
-    };
-
-    // The stages parallelize with rayon and so run in whichever pool they are
-    // installed in. A private pool is built here rather than reaching for the
-    // global one, both to honour `n_threads` and to keep a library consumer's
-    // own use of rayon out of the picture.
-    let pool = crate::interrupt::pool(n_threads)
-        .build()
-        .expect("failed to build the worker thread pool");
-
     let gv = pool.install(|| {
         let fp = fundamental_period::compute_omega(
             &poly_props,
@@ -133,7 +139,10 @@ where
             cy_kind,
             &strata,
         )
-        .map_err(Error::FundamentalPeriod)?;
+        .map_err(|e| match e {
+            FundamentalPeriodError::Interrupted => Error::Interrupted,
+            e => Error::FundamentalPeriod(e),
+        })?;
         log::info!("fundamental period done");
         crate::interrupt::check(Error::Interrupted)?;
 
@@ -145,7 +154,10 @@ where
             &intnum_dict,
             cy_kind,
         )
-        .map_err(Error::Instanton)?;
+        .map_err(|e| match e {
+            PolynomialError::Interrupted => Error::Interrupted,
+            e => Error::Instanton(e),
+        })?;
         log::info!("instanton corrections done");
         crate::interrupt::check(Error::Interrupted)?;
 

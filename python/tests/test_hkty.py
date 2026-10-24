@@ -248,12 +248,10 @@ def test_methods() -> None:
     assert QUINTIC.gv(target_points=[4], method="modular") == expected
     assert QUINTIC.gv(target_points=[4], max_deg=3) == expected[:3]
 
-    # The modular method does not support min_points or curve_classes, which auto runs
-    # with the reference.
+    # The modular method does not support min_points, which auto runs with the reference.
     expected = QUINTIC.gv(min_points=3, method="reference")
     assert expected
     assert QUINTIC.gv(min_points=3, method="auto") == expected
-    # Three classes, zero included.
     assert QUINTIC.gv(curve_classes=[[1], [2]]) == expected
     with pytest.raises(ValueError, match="min_points"):
         QUINTIC.gv(min_points=3, method="modular")
@@ -265,6 +263,23 @@ def test_methods() -> None:
         QUINTIC.gv()
     with pytest.raises(ValueError, match="only one of"):
         QUINTIC.gv(max_deg=3, min_points=3)
+
+
+def test_curve_classes() -> None:
+    # The invariants of a class depend on the classes below it, which need not be listed.
+    p11222 = Problem(
+        [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]],
+        {(0, 0, 0): 8, (0, 0, 1): 4},
+        generators=[[1, 0], [0, 1]],
+    )
+    expected = dict(p11222.gv(max_deg=3))
+    assert expected[(1, 1)] == 640
+    for method in ["auto", "reference"]:
+        res = p11222.gv(curve_classes=[[2, 1], [1, 1]], method=method)
+        assert res.report.method == ("modular" if method == "auto" else "reference")
+        assert list(res) == [((1, 1), 640), ((2, 1), expected[(2, 1)])]
+    with pytest.raises(ValueError, match="outside the Mori cone"):
+        p11222.gv(curve_classes=[[2, -1]])
 
 
 def test_compute_functions() -> None:
@@ -292,6 +307,8 @@ def test_verbose(capsys: pytest.CaptureFixture[str]) -> None:
     assert "pass over primes" in capsys.readouterr().err
     with pytest.raises(ValueError, match="verbose"):
         QUINTIC.gv(max_deg=4, verbose=-1)
+    assert QUINTIC.gv(max_deg=4, verbose=300) == expected
+    capsys.readouterr()
 
 
 def test_invalid_input() -> None:
@@ -325,6 +342,21 @@ def test_invalid_input() -> None:
         compute_gv([[-5, 1, 1, 1, 1, 1]], {(0, 0, 0): 5}, generators=[[1]], max_deg=3)
     with pytest.raises(ValueError, match="Mori cone is needed"):
         compute_gv([[1, 1, 1, 1, 1]], {(0, 0, 0): 5}, max_deg=3)
+    # Options of the wrong type, and negative indices, are ValueErrors too.
+    for kwargs in (
+        {"certify": "yes"},
+        {"low_memory": 2},
+        {"method": 1},
+        {"nefpart": [[0, -1]]},
+    ):
+        with pytest.raises(ValueError, match=next(iter(kwargs))):
+            compute_gv(
+                [[1, 1, 1, 1, 1]], {(0, 0, 0): 5}, generators=[[1]], max_deg=3, **kwargs
+            )
+    assert QUINTIC.gv(max_deg=2, certify=1) == QUINTIC.gv(max_deg=2)  # type: ignore[arg-type]
+    # Problems compare by identity, since their fields may be arrays.
+    q = np.array([[1, 1, 1, 1, 1]])
+    assert Problem(q, {(0, 0, 0): 5}) != Problem(q, {(0, 0, 0): 5})
     with pytest.raises(ValueError, match="not both"):
         compute_gv(
             [[1, 1, 1, 1, 1]],
@@ -362,8 +394,13 @@ def test_integers() -> None:
         quintic(intnums={(0, 0, 0): 5.5})
     with pytest.raises(ValueError, match="rectangular"):
         quintic(q=[[1, 1, 1, 1, 1], [1, 1]])
-    with pytest.raises(ValueError, match="32 bits"):
-        quintic(q=[[2**40, 1, 1, 1, 1]])
+    for big in (
+        [[2**40, 1, 1, 1, 1]],
+        np.array([[2**64 - 1, 1, 1, 1, 1]], dtype=np.uint64),
+        np.array([[1e30, 1, 1, 1, 1]]),
+    ):
+        with pytest.raises(ValueError, match="32 bits"):
+            quintic(q=big)
     with pytest.raises(ValueError, match="32 bits"):
         quintic(intnums={(0, 0, 0): 2**40})
     for max_deg in (-1, 2.5, 2**40):
@@ -399,7 +436,16 @@ def test_arrays() -> None:
         small.curves[0, 0] = 2
     gw = QUINTIC.gw(max_deg=3)
     assert gw.values.tolist() == [v for _, v in gw]
+    assert gw.values is gw.values
     assert gw[-1] == list(gw)[-1]
+
+    # The values by key.
+    assert gv[(2,)] == gv.get([2]) == dict(gv)[(2,)]
+    assert gv.get((13,)) is None
+    with pytest.raises(KeyError):
+        gv[(13,)]
+    with pytest.raises(ValueError, match="1 entries"):
+        gv.degree((1, 0))
 
 
 def test_interrupt() -> None:

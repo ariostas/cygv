@@ -286,6 +286,7 @@ where
         let mut tmp_poly = Self::one(&poly_props.zero);
         let min_deg = p0.min_degree(poly_props);
         for i in 1..=max_deg / min_deg {
+            crate::interrupt::check(PolynomialError::Interrupted)?;
             let tmp_poly2 = tmp_poly.mul(&p0, poly_props);
             tmp_poly2.move_into(&mut tmp_poly);
             if i % 2 == 0 {
@@ -361,6 +362,7 @@ where
         let mut tmp_var = poly_props.zero.clone();
         tmp_var.assign(1);
         for i in 1..=max_deg / min_deg {
+            crate::interrupt::check(PolynomialError::Interrupted)?;
             let tmp_poly2 = self.mul(&tmp_poly, poly_props);
             tmp_poly2.move_into(&mut tmp_poly);
             tmp_var *= i;
@@ -386,6 +388,7 @@ where
         let min_deg = self.min_degree(poly_props);
         let max_deg = poly_props.semigroup.max_degree;
         for i in 2..=max_deg / min_deg {
+            crate::interrupt::check(PolynomialError::Interrupted)?;
             let tmp_poly2 = self.mul(&tmp_poly, poly_props);
             tmp_poly2.move_into(&mut tmp_poly);
             res.div_scalar_add_assign(i * i, &tmp_poly, &poly_props.zero);

@@ -31,6 +31,12 @@ impl Interrupt {
     pub fn is_interrupted(&self) -> bool {
         self.0.load(Ordering::Relaxed)
     }
+
+    /// The identifier of [`current_id`].
+    #[cfg(feature = "python")]
+    pub(crate) fn id(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
+    }
 }
 
 /// Two handles are equal when they share their flag.
@@ -66,6 +72,13 @@ pub(crate) fn pool(threads: usize) -> rayon::ThreadPoolBuilder {
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .start_handler(move |_| CURRENT.with(|c| *c.borrow_mut() = current.clone()))
+}
+
+/// An identifier of the computation that the current thread runs, the address of its
+/// handle, unique while the handle lives.
+#[cfg(feature = "python")]
+pub(crate) fn current_id() -> Option<usize> {
+    CURRENT.with(|c| c.borrow().as_ref().map(Interrupt::id))
 }
 
 /// Whether the computation that the current thread runs was interrupted.

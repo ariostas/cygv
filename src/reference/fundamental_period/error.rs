@@ -12,6 +12,8 @@ pub enum FundamentalPeriodError {
     NegativeAnticanonicalDegree,
     /// The strata do not fit the geometry, for the given reason.
     InvalidStrata(&'static str),
+    /// The computation was interrupted ([`crate::Interrupt`]).
+    Interrupted,
 }
 
 /// Implement Display trait for SemigroupError.
@@ -29,6 +31,7 @@ impl fmt::Display for FundamentalPeriodError {
                  intersections with the toric divisors"
             }
             FundamentalPeriodError::InvalidStrata(reason) => reason,
+            FundamentalPeriodError::Interrupted => "the computation was interrupted",
         };
         write!(f, "{message}")
     }

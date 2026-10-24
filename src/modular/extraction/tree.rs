@@ -257,20 +257,21 @@ fn sink_flush<R: Ring, W: LevelWord>(
 }
 
 /// Buffers the term $(h, v)$ for its part of `sink` in `bufs`, and adds the buffer to the
-/// part if it is full.
+/// part if it holds `flush` terms, `flush_at(sink.len())` (as many as the extraction buffers
+/// for a shard, for as many parts), which the callers take once.
 #[inline]
 fn sink_push<R: Ring, W: LevelWord>(
     ring: &R,
     sink: &Sink<W, R::Elem>,
     bufs: &mut [Vec<(W, R::Elem)>],
+    flush: usize,
     h: W,
     v: R::Elem,
 ) {
     let k = part_of(h, sink.len());
     let buf = &mut bufs[k];
     buf.push((h, v));
-    // As many as the extraction buffers for a shard, for as many parts.
-    if buf.len() >= flush_at(sink.len()) {
+    if buf.len() >= flush {
         add_all(ring, buf.drain(..), &mut sink[k].lock().unwrap());
     }
 }
@@ -283,8 +284,9 @@ fn sink_add<R: Ring, W: LevelWord>(
     bufs: &mut Vec<Vec<(W, R::Elem)>>,
 ) {
     bufs.resize_with(sink.len(), Vec::new);
+    let flush = flush_at(sink.len());
     for (h, v) in terms {
-        sink_push(ring, sink, bufs, h, v);
+        sink_push(ring, sink, bufs, flush, h, v);
     }
     sink_flush(ring, sink, bufs);
 }
@@ -1133,9 +1135,10 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
                     if bufs.len() < parts.len() {
                         bufs.resize_with(parts.len(), Vec::new);
                     }
+                    let flush = flush_at(parts.len());
                     for &(hb, fb) in &s[range] {
                         for (&hu, &lu) in hs.iter().zip(vs) {
-                            sink_push(ring, parts, bufs, hb.wadd(hu), ring.mul(lu, fb));
+                            sink_push(ring, parts, bufs, flush, hb.wadd(hu), ring.mul(lu, fb));
                         }
                     }
                     sink_flush(ring, parts, bufs);

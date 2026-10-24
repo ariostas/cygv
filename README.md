@@ -13,7 +13,7 @@ Every computation needs three things:
   (`mori_hyperplanes`, with `mori_equations` for a face), or nothing when the `fan` gives it;
 - **which curve classes**: those up to a degree (`max_deg`), those below some classes
   (`target_points`), the lowest degrees holding a number of them (`min_points`), or exactly the
-  ones listed (`curve_classes`).
+  ones listed (`curve_classes`, computed from their lightcones as for `target_points`).
 
 Everything else has a default: the degree is taken with the `grading_vector`, by default the
 primitive sum of the inequalities of the Mori cone; the computation picks its method; and every
@@ -47,8 +47,8 @@ problem = Problem(
 
 gv = problem.gv(max_deg=3)
 # Invariants(gv, [((0, 1), 4), ((1, 0), 640), ((1, 1), 640), ((2, 0), 10032), ((2, 1), 72224), ... (6 in all)])
-dict(gv)[(1, 0)]
-# 640
+gv[(1, 0)], gv.get((5, 5))
+# (640, None)
 gv.curves[:2], gv.values[:2]
 # (array([[0, 1], [1, 0]], dtype=int32), array([  4, 640]))
 gv.grading_vector, gv.report
@@ -59,7 +59,8 @@ list(problem.gw(max_deg=3))
 ```
 
 The results are a sequence of `(curve_class, invariant)` pairs sorted by degree and then by curve
-class, with GV invariants as `int`s and GW invariants as `fractions.Fraction`s. For CYs of
+class, with GV invariants as `int`s and GW invariants as `fractions.Fraction`s; indexing by a
+curve class (or `get`) looks up its invariant, and `dict(gv)` maps them all. For CYs of
 dimension greater than three, an invariant is labeled by a curve class and by a reference surface
 (the first index of the intersection numbers), as in `(((1, 0, -4, 0, 0, 0), 2), 80)`. The same
 data are numpy arrays, which is much faster for many invariants: `curves`, one row per curve
@@ -98,17 +99,17 @@ fan = [
 ]
 q = [[1, 0, -1, 1, 0, 1], [0, 1, 1, 1, 1, 0]]
 Problem(q, {(0, 1, 1): 4, (1, 1, 1): 2}, fan=fan).gv(max_deg=3)
-# [((0, 1), 640), ((1, -1), 1), ((0, 2), 10032), ((1, 0), 20), ...]
+# Invariants(gv, [((0, 1), 640), ((1, -1), 1), ((0, 2), 10032), ((1, 0), 20), ((0, 3), 288384), ... (6 in all)])
 ```
 
 Two implementations of the computation are available, selected with `method`. The `modular` one
 computes modulo word-sized primes and recovers the exact integers by the Chinese remainder
-theorem, which is much faster, but only supports `max_deg` and `target_points`, and curve classes
+theorem, which is much faster, but does not support `min_points`, and only takes curve classes
 whose coordinates fit its keys of up to 512 bits. On a face of the Mori cone it takes their
 coordinates in a reduced basis of the lattice they span, which keeps them small: faces of rank
 up to a few dozen fit even when $h^{1,1}$ is in the hundreds. The `reference` one is a faithful
 implementation of the HKTY procedure with exact rational arithmetic. The default, `auto`, uses
-the modular one for `max_deg` and `target_points` and the reference one otherwise; curve
+the modular one for every selection but `min_points`, and the reference one for that; curve
 classes too large for the modular one are an error rather than a slow run of the reference.
 `n_threads` sets the number of threads, which defaults to one per logical CPU.
 
@@ -153,8 +154,11 @@ dimension.
 Invalid input raises a `ValueError`, and a computation that fails (for instance because the
 invariants are not integers, which usually means inconsistent input) a `cygv.ComputationError`.
 The computation runs on threads of its own with the GIL released, so that other Python threads
-go on meanwhile, and ctrl+c (or interrupting a Jupyter kernel) stops it within about the time
-of one degree, raising `KeyboardInterrupt`.
+go on meanwhile, and ctrl+c (or interrupting a Jupyter kernel) stops it, usually within a
+fraction of a second, raising `KeyboardInterrupt`; a second ctrl+c raises it without waiting
+for the computation to stop. Since it runs in the Python process, a computation that runs out
+of memory takes the process (or the Jupyter kernel) with it: `low_memory=True` takes about a
+third of the memory.
 
 ## Rust crate
 

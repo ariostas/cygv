@@ -11,6 +11,7 @@ pub mod error;
 use core::cmp::Ordering;
 use error::SemigroupError;
 use nalgebra::{DMatrix, DVector, RowDVector};
+use rayon::prelude::*;
 use rustc_hash::FxHashSet as HashSet;
 
 /// A structure for an affine truncated semigroup.
@@ -38,12 +39,13 @@ impl Semigroup {
         mut elements: DMatrix<i32>,
         grading_vector: RowDVector<i32>,
     ) -> Result<Self, SemigroupError> {
-        let mut seen = HashSet::default();
-        if !elements.column_iter().all(|c| seen.insert(c)) {
+        let degrees = sort_elements(&mut elements, &grading_vector);
+        // Sorted, an element given twice is next to itself.
+        let cols: Vec<&[i32]> = crate::cone::columns(&elements).collect();
+        if cols.windows(2).any(|w| w[0] == w[1]) {
             return Err(SemigroupError::DuplicateElementError);
         }
-        drop(seen);
-        let degrees = sort_elements(&mut elements, &grading_vector);
+        drop(cols);
         let degrees = check_final_degrees(degrees)?;
         if elements.column(0).iter().any(|x| *x != 0) {
             return Err(SemigroupError::MissingIdentityError);
@@ -69,17 +71,21 @@ impl Semigroup {
         // Make sure that the input elements are valid.
         check_degrees(&elements, &grading_vector)?;
 
+        if let Some(elements) = enumerate(&elements, &grading_vector, max_degree, usize::MAX) {
+            return Self::from_data(elements?, grading_vector);
+        }
+
         // Remove elements that exceed the maximum degree from the start.
         let elements = trim_by_max_deg(&elements, &grading_vector, max_degree);
 
         let generators = find_generators(&elements);
 
         let mut elements_set = matrix_columns_to_set(&elements);
-        let mut starting_elements = elements_set.clone();
+        let mut starting_elements: Vec<_> = elements_set.iter().cloned().collect();
         drop(elements);
 
-        // TODO: This part might be easy to parallelize, so it's worth checking out.
         loop {
+            crate::interrupt::check(SemigroupError::Interrupted)?;
             let new_elements = find_new_elements_until_max_deg(
                 &generators,
                 &starting_elements,
@@ -90,9 +96,7 @@ impl Semigroup {
             if new_elements.is_empty() {
                 break;
             }
-            for c in new_elements.iter() {
-                elements_set.insert(c.clone());
-            }
+            elements_set.extend(new_elements.iter().cloned());
             starting_elements = new_elements;
         }
         // Make sure that the zero vector is in the set of elements.
@@ -116,6 +120,25 @@ impl Semigroup {
         // Make sure that the input elements are valid.
         check_degrees(&elements, &grading_vector)?;
 
+        // Up to a degree that is doubled until it holds enough elements, or the keys no longer
+        // hold them.
+        let top_generator = elements
+            .column_iter()
+            .map(|g| degree(&grading_vector, g))
+            .max()
+            .unwrap_or(0);
+        let mut bound = u32::try_from(top_generator.max(1)).unwrap_or(u32::MAX);
+        loop {
+            match enumerate(&elements, &grading_vector, bound, min_elements) {
+                Some(Ok(found)) if found.ncols() >= min_elements || top_generator == 0 => {
+                    return Self::from_data(found, grading_vector);
+                }
+                Some(Err(e)) => return Err(e),
+                Some(Ok(_)) if bound < u32::MAX / 2 => bound *= 2,
+                _ => break,
+            }
+        }
+
         let generators = find_generators(&elements);
 
         let mut elements_set = HashSet::default();
@@ -135,12 +158,13 @@ impl Semigroup {
             // largest degree of a generator below it, so each round starts from those,
             // and afterwards only the frontier of newly found elements is expanded.
             let low = max_degree as i64 - top_generator.unwrap_or(0);
-            let mut starting_elements: HashSet<DVector<i32>> = elements_set
+            let mut starting_elements: Vec<DVector<i32>> = elements_set
                 .iter()
                 .filter(|&c| degree(&grading_vector, c) >= low)
                 .cloned()
                 .collect();
             loop {
+                crate::interrupt::check(SemigroupError::Interrupted)?;
                 let new_elements = find_new_elements_until_max_deg(
                     &generators,
                     &starting_elements,
@@ -151,9 +175,7 @@ impl Semigroup {
                 if new_elements.is_empty() {
                     break;
                 }
-                for c in new_elements.iter() {
-                    elements_set.insert(c.clone());
-                }
+                elements_set.extend(new_elements.iter().cloned());
                 starting_elements = new_elements;
             }
         }
@@ -207,8 +229,9 @@ impl Semigroup {
             }
         }
 
-        let mut starting_elements = elements_set.clone();
+        let mut starting_elements: Vec<_> = elements_set.iter().cloned().collect();
         loop {
+            crate::interrupt::check(SemigroupError::Interrupted)?;
             let new_elements = find_new_elements_in_reflected_targets(
                 &generators,
                 &starting_elements,
@@ -220,9 +243,7 @@ impl Semigroup {
             if new_elements.is_empty() {
                 break;
             }
-            for c in new_elements.iter() {
-                elements_set.insert(c.clone());
-            }
+            elements_set.extend(new_elements.iter().cloned());
             starting_elements = new_elements;
         }
 
@@ -247,30 +268,50 @@ impl Semigroup {
     }
 }
 
+/// The elements of the semigroup generated by the columns of `generators` of degree at most
+/// `max_degree`, or of the lowest degrees that hold at least `count` of them, with the
+/// modular pipeline's enumeration, which keeps them in packed keys (many times faster than
+/// the sets of vectors here); `None` if those cannot hold them.
+fn enumerate(
+    generators: &DMatrix<i32>,
+    grading_vector: &RowDVector<i32>,
+    max_degree: u32,
+    count: usize,
+) -> Option<Result<DMatrix<i32>, SemigroupError>> {
+    use crate::modular::candidates::lowest_elements;
+    use crate::modular::key::{coordinate_bounds, KeyLayout, PackedLayout};
+    let g = grading_vector.as_slice();
+    let gens: Vec<&[i32]> = crate::cone::columns(generators).collect();
+    let bounds = coordinate_bounds(gens.iter().copied(), g, max_degree).ok()?;
+    let layout = PackedLayout::<u128>::new(&bounds).ok()?;
+    let points = match lowest_elements(&layout, gens, g, max_degree, count) {
+        Ok(points) => points,
+        Err(crate::modular::Error::Interrupted) => return Some(Err(SemigroupError::Interrupted)),
+        Err(_) => return None,
+    };
+    let dim = g.len();
+    let mut elements = DMatrix::zeros(dim, points.len());
+    for (mut c, &(key, _)) in elements.column_iter_mut().zip(&points) {
+        layout.unpack(key, c.as_mut_slice());
+    }
+    Some(Ok(elements))
+}
+
 /// Sort the elements by degree and make sure that only the identity has degree
 /// zero.
 fn sort_elements(elements: &mut DMatrix<i32>, grading_vector: &RowDVector<i32>) -> Vec<i64> {
-    // TODO: figure out if there's a way to sort in place.
-
-    let mut degs_vecs: Vec<(i64, DVector<i32>)> = elements
-        .column_iter()
-        .map(|v| (degree(grading_vector, v), v.clone_owned()))
-        .collect();
-
     // By degree, then lexicographically, so that the order does not depend on how the
-    // elements were found.
-    degs_vecs.sort_unstable_by(|a, b| (a.0, a.1.as_slice()).cmp(&(b.0, b.1.as_slice())));
-
-    let mut degrees = vec![0; elements.ncols()];
-    degrees
-        .iter_mut()
-        .zip(elements.column_iter_mut())
-        .zip(degs_vecs)
-        .for_each(|((d, mut v), d_v)| {
-            *d = d_v.0;
-            v.copy_from(&d_v.1);
-        });
-
+    // elements were found: the indices are sorted, in parallel, and the columns copied once.
+    let cols: Vec<&[i32]> = crate::cone::columns(elements).collect();
+    let degrees: Vec<i64> = cols.iter().map(|&c| degree(grading_vector, c)).collect();
+    let mut order: Vec<usize> = (0..cols.len()).collect();
+    order.par_sort_unstable_by(|&a, &b| (degrees[a], cols[a]).cmp(&(degrees[b], cols[b])));
+    let mut sorted = DMatrix::zeros(elements.nrows(), elements.ncols());
+    for (mut c, &i) in sorted.column_iter_mut().zip(&order) {
+        c.copy_from_slice(cols[i]);
+    }
+    let degrees = order.iter().map(|&i| degrees[i]).collect();
+    *elements = sorted;
     degrees
 }
 
@@ -390,54 +431,53 @@ fn find_generators(elements: &DMatrix<i32>) -> DMatrix<i32> {
     generators_mat
 }
 
-/// Find new elements up to a maximum degree using the generators and the starting elements.
-fn find_new_elements_until_max_deg(
+/// The sums of a starting element and a generator that `keep` takes and that are not among
+/// the elements, once each.
+fn find_new_elements(
     generators: &DMatrix<i32>,
-    starting_elements: &HashSet<DVector<i32>>,
+    starting_elements: &[DVector<i32>],
     elements_set: &HashSet<DVector<i32>>,
-    grading_vector: &RowDVector<i32>,
-    max_degree: u32,
-) -> HashSet<DVector<i32>> {
+    keep: impl Fn(&DVector<i32>) -> bool,
+) -> Vec<DVector<i32>> {
     let mut new_elements = HashSet::default();
     let mut tmp_vec = DVector::zeros(generators.nrows());
     for c1 in generators.column_iter() {
-        for c2 in starting_elements.iter() {
+        for c2 in starting_elements {
             tmp_vec.copy_from(c2);
             tmp_vec += c1;
-            let deg = degree(grading_vector, &tmp_vec);
-            if deg <= max_degree as i64 && !elements_set.contains(&tmp_vec) {
+            if keep(&tmp_vec) && !elements_set.contains(&tmp_vec) {
                 new_elements.insert(tmp_vec.clone());
             }
         }
     }
-    new_elements
+    new_elements.into_iter().collect()
+}
+
+/// Find new elements up to a maximum degree using the generators and the starting elements.
+fn find_new_elements_until_max_deg(
+    generators: &DMatrix<i32>,
+    starting_elements: &[DVector<i32>],
+    elements_set: &HashSet<DVector<i32>>,
+    grading_vector: &RowDVector<i32>,
+    max_degree: u32,
+) -> Vec<DVector<i32>> {
+    find_new_elements(generators, starting_elements, elements_set, |v| {
+        degree(grading_vector, v) <= max_degree as i64
+    })
 }
 
 /// Find new elements that lie in the reflected target regions.
 fn find_new_elements_in_reflected_targets(
     generators: &DMatrix<i32>,
-    starting_elements: &HashSet<DVector<i32>>,
+    starting_elements: &[DVector<i32>],
     elements_set: &HashSet<DVector<i32>>,
     reflected_set: &HashSet<DVector<i32>>,
     grading_vector: &RowDVector<i32>,
     max_degree: u32,
-) -> HashSet<DVector<i32>> {
-    let mut new_elements = HashSet::default();
-    let mut tmp_vec = DVector::zeros(generators.nrows());
-    for c1 in generators.column_iter() {
-        for c2 in starting_elements.iter() {
-            tmp_vec.copy_from(c2);
-            tmp_vec += c1;
-            let deg = degree(grading_vector, &tmp_vec);
-            if deg <= max_degree as i64
-                && reflected_set.contains(&tmp_vec)
-                && !elements_set.contains(&tmp_vec)
-            {
-                new_elements.insert(tmp_vec.clone());
-            }
-        }
-    }
-    new_elements
+) -> Vec<DVector<i32>> {
+    find_new_elements(generators, starting_elements, elements_set, |v| {
+        degree(grading_vector, v) <= max_degree as i64 && reflected_set.contains(v)
+    })
 }
 
 #[cfg(test)]
@@ -500,6 +540,28 @@ mod tests {
         let sg = sg_result.unwrap();
         assert_eq!(sg.degrees.len(), 3);
         assert_eq!(sg.degrees, RowDVector::from_row_slice(&[0, 1, 1]));
+    }
+
+    #[test]
+    fn test_semigroup_too_wide_for_keys() {
+        // Five coordinates of up to 3 * 2^26 take more bits than the packed keys have, so
+        // the sets of vectors find the elements, a g + b h with a + b <= 3.
+        let big = 1 << 26;
+        let elements = DMatrix::from_column_slice(
+            6,
+            3,
+            &[
+                0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, big, big, big, big, big,
+            ],
+        );
+        let grading_vector = RowDVector::from_row_slice(&[1, 0, 0, 0, 0, 0]);
+        assert!(enumerate(&elements, &grading_vector, 3, usize::MAX).is_none());
+        let sg = Semigroup::with_max_degree(elements.clone(), grading_vector.clone(), 3).unwrap();
+        assert_eq!(sg.elements.ncols(), 10);
+        let b = 3 * big;
+        assert_eq!(sg.elements.column(9).as_slice(), &[3, b, b, b, b, b]);
+        let sg = Semigroup::with_min_elements(elements, grading_vector, 4).unwrap();
+        assert_eq!(sg.elements.ncols(), 6);
     }
 
     #[test]

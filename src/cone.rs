@@ -19,7 +19,7 @@ mod hull;
 
 pub use hilbert::{cone_data, hilbert_basis, ConeError};
 pub(crate) use hilbert::{det, kernel_basis, rank};
-pub use hull::{facets, rays, Generators, Inequalities, TooLarge};
+pub use hull::{facets, rays, Generators, HullError, Inequalities, TooLarge};
 
 use crate::Stratum;
 use nalgebra::DMatrix;

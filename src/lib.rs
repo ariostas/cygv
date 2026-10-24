@@ -233,9 +233,9 @@ pub(crate) const NON_INTEGER_CAUSES: &str = "this usually means that the input i
 
 /// Which pipeline computes the invariants.
 ///
-/// Both compute the same invariants exactly. The modular pipeline is much faster, but only
-/// supports the selections [`Selection::MaxDeg`] and [`Selection::TargetPoints`], and curve
-/// classes whose coordinates fit its keys; the reference pipeline cannot finish at high
+/// Both compute the same invariants exactly. The modular pipeline is much faster, but does
+/// not support [`Selection::MinPoints`], and only takes curve classes whose coordinates fit
+/// its keys; the reference pipeline cannot finish at high
 /// $h^{1,1}$ anyway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Method {
@@ -289,22 +289,59 @@ pub use python::cygv;
 /// keeps the resident memory of a run close to what it holds: about a third less in the
 /// low-memory mode ([`Options::low_memory`]), for a few percent of time. It changes a setting
 /// of the whole process, glibc's `M_MMAP_THRESHOLD`, which otherwise rises as large blocks
-/// are freed, so that later ones come from a heap that keeps their memory. The command line
-/// and the Python module call it for a run in the low-memory mode; it does nothing on other
-/// platforms than Linux with glibc.
+/// are freed, so that later ones come from a heap that keeps their memory. That also makes
+/// every later allocation of 128 KiB or more a system call, which slows code that makes many
+/// (numpy's, five times on arrays of 1.6 MB). The command line and the Python module call it
+/// for a run in the low-memory mode, and the Python module undoes it afterwards as far as
+/// glibc allows; it does nothing on other platforms than Linux with glibc.
 pub fn return_freed_memory() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    {
-        extern "C" {
-            fn mallopt(param: core::ffi::c_int, value: core::ffi::c_int) -> core::ffi::c_int;
-        }
-        const M_MMAP_THRESHOLD: core::ffi::c_int = -3;
-        // SAFETY: mallopt only changes a setting of glibc's allocator, which is safe to do at
-        // any time.
-        unsafe {
-            mallopt(M_MMAP_THRESHOLD, 128 * 1024);
-        }
+    // SAFETY: mallopt only changes a setting of glibc's allocator, which is safe to do at any
+    // time.
+    unsafe {
+        glibc::mallopt(glibc::M_MMAP_THRESHOLD, 128 * 1024);
     }
+}
+
+/// Undoes [`return_freed_memory`] as far as glibc allows: its threshold no longer moves once
+/// set, so this sets it, and the threshold above which the heap is trimmed, to the most they
+/// rise to by themselves (32 MiB, and twice that).
+#[cfg(feature = "python")]
+pub(crate) fn keep_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: as in return_freed_memory.
+    unsafe {
+        glibc::mallopt(glibc::M_MMAP_THRESHOLD, 32 << 20);
+        glibc::mallopt(glibc::M_TRIM_THRESHOLD, 64 << 20);
+    }
+}
+
+/// Gives the memory that the allocator holds free back to the system. A computation leaves
+/// much of it in the arenas of its threads, which have exited: on a run that peaks at 1.26 GB,
+/// 578 MB stay resident once its results are dropped, and 274 MB after this, which takes 25
+/// ms. The command line calls it after each document and the Python module after each
+/// computation; it does nothing on other platforms than Linux with glibc.
+pub fn trim_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim only releases free memory, and may be called at any time.
+    unsafe {
+        glibc::malloc_trim(0);
+    }
+}
+
+/// The settings of glibc's allocator.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod glibc {
+    use core::ffi::c_int;
+
+    extern "C" {
+        pub fn mallopt(param: c_int, value: c_int) -> c_int;
+        pub fn malloc_trim(pad: usize) -> c_int;
+    }
+
+    #[cfg(feature = "python")]
+    pub const M_TRIM_THRESHOLD: c_int = -1;
+    pub const M_MMAP_THRESHOLD: c_int = -3;
 }
 
 /// Writes the progress messages of the computations to the standard error, each line
@@ -313,8 +350,9 @@ pub fn return_freed_memory() {
 ///
 /// The messages go through the [`log`](https://docs.rs/log) facade, at the levels `info`
 /// and `debug`, so library users can route them through any logger instead. This one is
-/// what the command line's `--verbose` and the Python keyword `verbose` install; once a
-/// logger is set, later calls only change the verbosity.
+/// what the command line's `--verbose` installs (the Python keyword `verbose` has a logger of
+/// its own); once a logger is set, later calls only change the verbosity, which is that of
+/// the whole process (`log::set_max_level`).
 pub fn log_to_stderr(verbosity: u8) {
     use std::io::Write;
     use std::time::Instant;

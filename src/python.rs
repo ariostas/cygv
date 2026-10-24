@@ -234,10 +234,16 @@ fn to_py_err(e: Error) -> PyErr {
     }
 }
 
-/// The progress of the computations, kept for the waits to write to `sys.stderr`.
-struct Progress {
-    start: Mutex<Option<Instant>>,
-    lines: Mutex<String>,
+/// The progress of the computations, kept for the waits to write to `sys.stderr`, by the
+/// identifier of each computation's interrupt handle (`interrupt::current_id`), which the
+/// threads of its pools have too.
+struct Progress(Mutex<Option<HashMap<usize, Run>>>);
+
+/// The progress of one computation.
+struct Run {
+    level: log::LevelFilter,
+    start: Instant,
+    lines: String,
 }
 
 impl log::Log for Progress {
@@ -246,42 +252,79 @@ impl log::Log for Progress {
     }
 
     fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            let secs = self
-                .start
-                .lock()
-                .unwrap()
-                .map_or(0.0, |s| s.elapsed().as_secs_f64());
-            let line = format!("[{secs:9.2}s] {}\n", record.args());
-            self.lines.lock().unwrap().push_str(&line);
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let Some(id) = crate::interrupt::current_id() else {
+            return;
+        };
+        if let Some(run) = self.0.lock().unwrap().as_mut().and_then(|r| r.get_mut(&id)) {
+            if record.level() <= run.level {
+                let secs = run.start.elapsed().as_secs_f64();
+                let line = format!("[{secs:9.2}s] {}\n", record.args());
+                run.lines.push_str(&line);
+            }
         }
     }
 
     fn flush(&self) {}
 }
 
-static PROGRESS: Progress = Progress {
-    start: Mutex::new(None),
-    lines: Mutex::new(String::new()),
-};
+static PROGRESS: Progress = Progress(Mutex::new(None));
 
-/// Has the progress of the computations kept at `verbosity` (see `crate::log_to_stderr`),
-/// stamped with the seconds from now. The level is that of the process, so concurrent
-/// computations share it.
-fn start_progress(verbosity: u8) {
-    // Fails only when a logger is already set, which keeps it.
-    let _ = log::set_logger(&PROGRESS);
-    *PROGRESS.start.lock().unwrap() = Some(Instant::now());
-    log::set_max_level(match verbosity {
-        0 => log::LevelFilter::Off,
-        1 => log::LevelFilter::Info,
-        _ => log::LevelFilter::Debug,
-    });
+/// Keeps the progress of the computation of the interrupt handle `id` at `verbosity` (see
+/// `crate::log_to_stderr`), stamped with the seconds from now, until it is dropped. The level
+/// of the process is only ever raised, so that a computation with less progress leaves the
+/// others', and those of any other logger, alone.
+struct ProgressRun(usize);
+
+impl ProgressRun {
+    fn start(id: usize, verbosity: u8) -> Self {
+        // Fails only when a logger is already set, which keeps it.
+        let _ = log::set_logger(&PROGRESS);
+        let level = match verbosity {
+            0 => log::LevelFilter::Off,
+            1 => log::LevelFilter::Info,
+            _ => log::LevelFilter::Debug,
+        };
+        if level > log::max_level() {
+            log::set_max_level(level);
+        }
+        let run = Run {
+            level,
+            start: Instant::now(),
+            lines: String::new(),
+        };
+        PROGRESS
+            .0
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashMap::new)
+            .insert(id, run);
+        Self(id)
+    }
 }
 
-/// Writes the progress kept so far to `sys.stderr`.
-fn forward_progress(py: Python<'_>) {
-    let lines = std::mem::take(&mut *PROGRESS.lines.lock().unwrap());
+impl Drop for ProgressRun {
+    fn drop(&mut self) {
+        if let Some(runs) = PROGRESS.0.lock().unwrap().as_mut() {
+            runs.remove(&self.0);
+        }
+    }
+}
+
+/// Writes the progress of the computation `run` kept so far to `sys.stderr`.
+fn forward_progress(py: Python<'_>, run: &ProgressRun) {
+    let lines = match PROGRESS
+        .0
+        .lock()
+        .unwrap()
+        .as_mut()
+        .and_then(|r| r.get_mut(&run.0))
+    {
+        Some(r) => std::mem::take(&mut r.lines),
+        None => return,
+    };
     if !lines.is_empty() {
         // The progress is not worth an exception of its own, as for a closed stream.
         let _ = py.import("sys").and_then(|sys| {
@@ -425,12 +468,13 @@ pub fn compute_py<'py>(
     }
     let interrupt = Interrupt::new();
     options.interrupt = Some(interrupt.clone());
-    start_progress(verbosity);
+    let progress = ProgressRun::start(interrupt.id(), verbosity);
     let (tx, mut rx) = mpsc::channel();
     let worker = std::thread::Builder::new()
         .name("cygv".to_owned())
         .stack_size(STACK)
         .spawn(move || {
+            let low_memory = options.low_memory;
             let columns = compute(&problem, kind, &options).map(|c| match c {
                 Computed::Gv(gv) => Columns::new(gv, |v| (v, None)),
                 Computed::Gw(gw) => Columns::new(gw, |v: Rational| {
@@ -442,6 +486,13 @@ pub fn compute_py<'py>(
                     )
                 }),
             });
+            drop((problem, options));
+            if low_memory {
+                // Several computations at once share the setting, which then only keeps a
+                // later one's memory a little longer.
+                crate::keep_freed_memory();
+            }
+            crate::trim_freed_memory();
             // The receiver only goes away with a panic of its own.
             let _ = tx.send(columns);
         })
@@ -450,16 +501,27 @@ pub fn compute_py<'py>(
         // The receiver goes to the wait and back, since it cannot be shared.
         let (received, back) = py.detach(move || (rx.recv_timeout(POLL), rx));
         rx = back;
-        forward_progress(py);
+        forward_progress(py, &progress);
         match received {
             Ok(result) => break result,
             Err(RecvTimeoutError::Timeout) => {
                 if let Err(e) = py.check_signals() {
                     // The computation stops at its next checkpoint; it is waited for, so that
-                    // its threads and its memory are gone when the exception is raised.
+                    // its threads and its memory are gone when the exception is raised, unless
+                    // a second interrupt comes first, which leaves it to stop by itself.
                     interrupt.interrupt();
-                    let _ = py.detach(|| worker.join());
-                    forward_progress(py);
+                    loop {
+                        let (received, back) = py.detach(move || (rx.recv_timeout(POLL), rx));
+                        rx = back;
+                        forward_progress(py, &progress);
+                        if !matches!(received, Err(RecvTimeoutError::Timeout)) {
+                            let _ = worker.join();
+                            break;
+                        }
+                        if py.check_signals().is_err() {
+                            break;
+                        }
+                    }
                     return Err(e);
                 }
             }

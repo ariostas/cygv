@@ -1,7 +1,7 @@
 //! Command line interface to compute GV and GW invariants of CY manifolds.
 
 use clap::Parser;
-use cygv::io::Input;
+use cygv::io::{error::IoError, Input};
 use cygv::{InvariantKind, Method};
 use std::error::Error;
 use std::fs::File;
@@ -57,14 +57,14 @@ Which curve classes, one of:
                  Mori cone), up to their largest degree, or max_deg if it is
                  also given and lower.
   min_points     The lowest degrees that hold at least this many classes.
-  curve_classes  Exactly the classes listed (zero is added if it is missing).
+  curve_classes  Exactly the classes listed (computed from their lightcones).
 
 Options:
   name           A label that is echoed back in the output.
   invariants     Either gv or gw. It defaults to gv.
   method         Which pipeline to use: auto, modular or reference. It defaults
                  to auto, which uses the much faster modular pipeline for
-                 max_deg and target_points, and the reference one otherwise.
+                 everything but min_points, and the reference one for that.
   certify        Whether to prove the results exact: the modular pipeline then
                  bounds every invariant, and takes more primes until the bounds
                  are below half their product. Not in vex phases. It defaults to
@@ -184,7 +184,12 @@ fn run(args: &Args) -> Result<(), Box<dyn Error>> {
     }
     let data = read_input(args.file.as_ref())?;
     // The documents are checked once the options have been applied to them.
-    let mut inputs = Input::parse_all(&data, args.max_deg)?;
+    let mut inputs = Input::parse_all(&data, args.max_deg).map_err(|e| match e {
+        IoError::MissingOneOf(fields) if fields.contains(&"max_deg") => {
+            format!("{e} (or pass --max-deg)")
+        }
+        e => e.to_string(),
+    })?;
     // With several documents, the errors say which one they are about.
     let several = inputs.len() > 1;
     let which = |i: usize, input: &Input| match (several, &input.name) {
@@ -240,6 +245,10 @@ fn run(args: &Args) -> Result<(), Box<dyn Error>> {
         // The results of each document are flushed as they are computed, so that they
         // can be inspected while the remaining ones are still being computed.
         writer.flush()?;
+        if i + 1 < inputs.len() {
+            drop(results);
+            cygv::trim_freed_memory();
+        }
     }
     Ok(())
 }
