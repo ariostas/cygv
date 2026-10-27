@@ -1464,7 +1464,7 @@ After phase 8e:
     each in order, so the first run took the largest tasks one after the other: on 16 threads
     only about three were busy in the products. That alone took them from 2.18 to 1.35 s.
   - The tables of the root and its children are in one part per thread (`Tab`, by
-    `part_of`, as the sinks are), and a product into one of them goes in pieces of its
+    `part_of`, as the sinks are; since 2026-10-27 the root's only, see the M1 Max below), and a product into one of them goes in pieces of its
     sources (`PIECES_PER_THREAD`, at least `PIECE_MIN_PAIRS` pairs), which the threads add
     to the parts through buffers as `sink_push` does; the sinks take their products in pieces
     too. Only for an exact ring, as the sinks: the certifier keeps one part. 1.35 → 0.97 s.
@@ -1616,7 +1616,8 @@ Other follow-ups, not from #102:
       parts (1 to 512), so it stays whole there; on eight, 64–256 parts were not clearly
       better than 32 (faster products, slower emission). The merge kept the Zen 5 branch's
       split, of the children's tables too, in pieces sized by the threads (*Products of the
-      tree split between the threads* above), which found the same fix.
+      tree split between the threads* above), which found the same fix; the children's were
+      made whole again after it (below).
     - Prefetch was x86-64 only; `prfm pldl1keep` on AArch64 takes the products on one thread
       from 5.0 to 4.55 s, the exponentials unchanged (their level tables stay in cache).
     - The serial tail: the dispatch's sort of the 1.17 M invariants (0.21 s; now sorted in the
@@ -1685,6 +1686,22 @@ Other follow-ups, not from #102:
     143 MB once it is dropped (578), and restoring glibc's thresholds after a low-memory call
     takes a numpy loop from 17.1 s back to 3.5 (3.4 before it). Interrupts in the reference's
     semigroup and period, which had no checkpoint, now take 0.25–0.45 s (13.7–19.4 s).
+  - *The merge on the M1 Max* (2026-10-27, `7ae12b0` against `perf-m1` and `ee45d46`,
+    medians of 7–11 alternating runs, identical outputs in every mode). The certified,
+    low-memory and one-thread runs kept the M1's gains, but the default on 8 threads was
+    3–10% slower than `perf-m1`: `h11_10` at 20 4.68 against 4.31 s, `h11_8` at 22 1.00
+    against 0.92, `h11_9` at 20 0.46 against 0.42, `h11_11` at 20 0.70 against 0.68. The CPU
+    time was the same (24 s on `h11_10`), the cores less busy: the products into the
+    children's tables, in pieces since the merge, at about twice the time per pair, went from
+    2.4 to 5.8 s of it. With the children's tables whole again and the root's in parts (a later
+    set of alternating runs, the merge / this / `perf-m1`): `h11_10` at 20 4.75 / 4.46 /
+    4.36 s, with 75 MB less peak than the merge; `h11_8` at 22 0.92 / 0.85 / 0.80 s; `h11_11`
+    at 20 0.61 / 0.57 / 0.58 s; `h11_9` at 20 0.46 / 0.43 / 0.41 s; certified `h11_8` at 22
+    1.65 / 1.64 / 1.62 s, as the low-memory and one-thread runs (the certifier and one thread
+    never split). With only the root in parts, neither one to four
+    parts per thread nor the size of the pieces (`PIECES_PER_THREAD` 8 or 32, or pieces of
+    2^14 or 2^16 pairs regardless of the threads) changed the time. To check on the Zen 5,
+    where the split children were measured: `h11_10` at 20 and `h11_8` at 24 on 16 threads.
 
 - [ ] **Certifying vex phases** (`Error::CertifyStrata` today, as in the C): the stratum
   terms need bounds of their own in the majorant run.

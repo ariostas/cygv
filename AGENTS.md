@@ -417,9 +417,9 @@ indices differently (the first index is a reference surface in the n-fold case).
   into the tree's tables prefetch `ADD_AHEAD` terms ahead (`ahead`), since each one misses
   the caches otherwise. The extraction's tree builds the curves' exponentials in parallel by curve,
   sums up the tree by parent, subtracts by table and multiplies by target table (its products
-  into one table are one task, but for the tables of the root and its children, which are in
-  one part per thread for an exact ring on several threads, `Tab`, and take the products in
-  pieces of their sources through buffers), and reads each layer's curves from the shards in
+  into one table are one task, but for the tables of the root, which are in one part per
+  thread for an exact ring on several threads, `Tab`, and take the products in pieces of
+  their sources through buffers), and reads each layer's curves from the shards in
   parallel. Lists of tasks sorted largest first go through rayon with `with_max_len(1)`: left
   to itself it runs such a list in about twice as many runs as threads, each in order, and the
   first run takes the largest tasks one after the other. The instanton's products by

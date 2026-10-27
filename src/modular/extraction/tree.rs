@@ -40,11 +40,11 @@
 //! Each kind of work runs in parallel: the reading of the curves of a layer from the shards,
 //! and the curves themselves, as by [`extract`]; the sums by parent; the subtractions by
 //! table; and the products by target table, each writing one table of one node. The tables of
-//! the root and its children, the largest, are split by hash into one part per thread, and the
-//! products into them go in pieces of their sources, which the threads add to the parts
-//! through buffers, as they fill the sinks. Lists of tasks sorted largest first go one task at
-//! a time (`with_max_len(1)`): rayon would otherwise run them in a few runs in order, the first
-//! of which would take the largest one after the other. Unless the ring is exact, every sum is
+//! the root, the largest, are split by hash into one part per thread, and the products into
+//! them go in pieces of their sources, which the threads add to the parts through buffers, as
+//! they fill the sinks. Lists of tasks sorted largest first go one task at a time
+//! (`with_max_len(1)`): rayon would otherwise run them in a few runs in order, the first of
+//! which would take the largest one after the other. Unless the ring is exact, every sum is
 //! taken in an order that does not depend on the threads: the curves of a layer are sorted,
 //! their terms kept until those of a group of them are all built and then added in that order
 //! (a group keeps about a million terms), the subtractions buffered a batch of pieces of the
@@ -111,9 +111,10 @@ struct Node<W: LevelWord, E> {
 }
 
 /// The table of a node for one degree, in parts by hash ([`part_of`]): a single one for most
-/// nodes, and several for the root and its children, whose tables are the largest, so that a
-/// product into one of them can be split between the threads, which fill its parts through
-/// buffers as they fill a [`Sink`].
+/// nodes, and several for the root, whose tables are the largest, so that a product into one
+/// of them can be split between the threads, which fill its parts through buffers as they
+/// fill a [`Sink`]. Its children keep one part: a product in pieces takes about twice the
+/// time per pair, and theirs were faster whole (`PLAN.md`).
 struct Tab<W: LevelWord, E>(Sink<W, E>);
 
 impl<W: LevelWord, E: Copy + Default> Tab<W, E> {
@@ -339,31 +340,23 @@ fn sink_in_order<R: Ring, W: LevelWord>(
     }
 }
 
-/// The node of `prefix`, created with its ancestors if needed.
+/// The node of `prefix`, created with its ancestors if needed, with tables of one part.
 fn node_of<W: LevelWord, E: Copy + Default>(
     prefix: &[i64],
     nodes: &mut Vec<Node<W, E>>,
     index: &mut HashMap<Vec<i64>, usize>,
     marker: W,
     max_deg: u32,
-    parts: usize,
 ) -> usize {
     if let Some(&n) = index.get(prefix) {
         return n;
     }
-    let parent = node_of(
-        &prefix[..prefix.len() - 1],
-        nodes,
-        index,
-        marker,
-        max_deg,
-        parts,
-    );
+    let parent = node_of(&prefix[..prefix.len() - 1], nodes, index, marker, max_deg);
     nodes.push(Node {
         parent,
         depth: prefix.len(),
         m: prefix[prefix.len() - 1],
-        tabs: new_tabs(marker, max_deg, if prefix.len() <= 1 { parts } else { 1 }),
+        tabs: new_tabs(marker, max_deg, 1),
     });
     index.insert(prefix.to_vec(), nodes.len() - 1);
     nodes.len() - 1
@@ -715,8 +708,8 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             })
         })
         .collect();
-    // The tables of the root and its children are in parts when the threads can share the
-    // products into them, which needs an exact ring, whose sums may be taken in any order.
+    // The tables of the root are in parts when the threads can share the products into them,
+    // which needs an exact ring, whose sums may be taken in any order.
     let wide = if R::EXACT && threads > 1 {
         TAB_PARTS * threads
     } else {
@@ -949,7 +942,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             );
         for (i, t) in layer.iter_mut().enumerate() {
             let prefix = &prefixes[i * depth..(i + 1) * depth];
-            let leaf = node_of(prefix, &mut nodes, &mut index, marker, max_deg, wide);
+            let leaf = node_of(prefix, &mut nodes, &mut index, marker, max_deg);
             t.leaf = u32::try_from(leaf).expect("fewer than 2^32 nodes");
         }
 
@@ -1178,7 +1171,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
     Ok(())
 }
 
-/// The parts of the tables of the root and its children, per thread.
+/// The parts of the tables of the root, per thread.
 const TAB_PARTS: usize = 1;
 
 /// About how many pieces per thread the products into tables in parts are split into, at
