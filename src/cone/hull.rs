@@ -14,8 +14,7 @@
 //! both are tight on.
 //!
 //! The order of the inequalities only changes the run time, but by a lot: the iteration takes
-//! the short vectors first, which kept the intermediate cones small on every Mori cone tried
-//! (`PLAN.md`, phase 7a).
+//! the short vectors first, which kept the intermediate cones small on every Mori cone tried.
 
 use super::columns;
 use nalgebra::DMatrix;

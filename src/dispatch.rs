@@ -2,7 +2,7 @@
 //! [`Problem`], resolve its defaults, pick a pipeline and run it.
 //!
 //! Both pipelines use every lattice point of the Mori cone, even when the generators do not
-//! generate them all (decision 6.2 of `PLAN.md`): the cone is described by its inequalities,
+//! generate them all: the cone is described by its inequalities,
 //! given or else the facets of the generators ([`crate::cone::facets`]) or of the fan's wall
 //! classes. The reference pipeline takes the Hilbert basis of its lattice points as its
 //! generators ([`crate::cone::hilbert_basis`]), and the modular one takes its candidates from

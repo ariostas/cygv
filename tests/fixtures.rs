@@ -1,9 +1,8 @@
-//! Frozen fixtures: GV invariants that neither pipeline computed (layer 4 of the testing
-//! strategy in `PLAN.md` 5.2), so that they also catch a bug the two share. The inputs are CLI
-//! documents in `tests/data/refs.yaml` (computed by cygv 0.2.3) and `tests/data/refs_vex.yaml`
-//! (vex phases and FRSTs, computed by the C program of PR #94), and the expected results are
-//! in the matching `*_gv.yaml`, in the output format of the CLI. The files say where each
-//! geometry comes from.
+//! Frozen fixtures: GV invariants that neither pipeline computed, so that they also catch a
+//! bug the two share. The inputs are CLI documents in `tests/data/refs.yaml` (computed by
+//! cygv 0.2.3) and `tests/data/refs_vex.yaml` (vex phases and FRSTs, computed by the C program
+//! of PR #94), and the expected results are in the matching `*_gv.yaml`, in the output format
+//! of the CLI. The files say where each geometry comes from.
 #![cfg(feature = "cli")]
 
 use cygv::io::Input;

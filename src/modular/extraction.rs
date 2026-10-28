@@ -25,10 +25,10 @@
 //!
 //! With $\alpha$ along the rows of the charges, the exponentials of the rows of the most terms
 //! are instead shared between the curves, along a tree of the curves by their intersections
-//! with those rows (`tree`, `PLAN.md` phase 8e), and only the rest is built curve by curve.
+//! with those rows (`tree`), and only the rest is built curve by curve.
 //!
 //! This stage only takes plain series and tables and returns a series, so that other
-//! implementations of it, such as a GPU one, can take its place (`PLAN.md`, section 4.1).
+//! implementations of it, such as a GPU one, can take its place.
 
 use super::field::Ring;
 use super::key::{Key, KeyError, KeyLayout};

@@ -13,7 +13,7 @@
 //! arithmetic, so only the final integers need a big-number type.
 //!
 //! The residue sets do not depend on how the primes were split into passes, which is what
-//! lets a run be split across machines (`PLAN.md`, section 4.1).
+//! lets a run be split across machines.
 
 use super::field::{LaneField, Lanes};
 use super::key::Key;

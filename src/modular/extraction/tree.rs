@@ -1,5 +1,5 @@
 //! The extraction along a tree of the rows of the charges, which shares the exponentials of
-//! the rows of the most terms between the curves (`PLAN.md` phase 8e, `ALGORITHMS.md` idea 1).
+//! the rows of the most terms between the curves.
 //!
 //! Along the rows $M_r$, $C \cdot \alpha = \sum_r m_r(C)\, \beta_r$ with $m_r(C) = M_r \cdot C$,
 //! so with $E_r = \exp \beta_r$ the exponential of a curve factors as
@@ -28,7 +28,7 @@
 //! the extraction touches.
 //!
 //! Most of the memory is the terms that wait for their degree, and two options of
-//! [`Tuning`] trade time for it (`PLAN.md` phase 10). With [`Tuning::sinks`], the terms of the
+//! [`Tuning`] trade time for it. With [`Tuning::sinks`], the terms of the
 //! degrees above `max_deg - delta`, which no power reaches beyond and which therefore only sum
 //! up to the root, go to the root directly wherever they arise, into a table per degree split
 //! in parts by hash that the threads fill through buffers, instead of into every node on the
@@ -114,7 +114,7 @@ struct Node<W: LevelWord, E> {
 /// nodes, and several for the root, whose tables are the largest, so that a product into one
 /// of them can be split between the threads, which fill its parts through buffers as they
 /// fill a [`Sink`]. Its children keep one part: a product in pieces takes about twice the
-/// time per pair, and theirs were faster whole (`PLAN.md`).
+/// time per pair, and theirs were faster whole (by 3–10% on 8 threads of an M1 Max).
 struct Tab<W: LevelWord, E>(Sink<W, E>);
 
 impl<W: LevelWord, E: Copy + Default> Tab<W, E> {

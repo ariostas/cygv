@@ -46,8 +46,7 @@ Every dependency is pure Rust, so a stock Rust toolchain builds everything, on W
 default MSVC one. The big integers and rationals come from `malachite` (LGPL-3.0-only, which
 GPL-3.0-or-later code may link: the combination is distributed under GPL-3.0). It replaced
 `rug`, whose GMP had to be compiled from source with a C toolchain, `m4` and `make` (and on
-Windows through MSYS2/MINGW64), and whose build and its caching dominated CI; see `PLAN.md`
-phase 5b for the comparison that chose it.
+Windows through MSYS2/MINGW64), and whose build and its caching dominated CI.
 
 Both CI workflows cache `~/.cargo/registry` and the dependencies in `target/` with
 `Swatinem/rust-cache`, which keys on the job id, the toolchain and the lockfile. Both workflows
@@ -87,24 +86,24 @@ PR titles must follow conventional commits (enforced by `.github/workflows/pr_ti
 The modules split into the pipeline and the front end shared by everything that calls it.
 There are two pipelines. `src/reference.rs` and `src/reference/` hold a faithful implementation
 of the HKTY procedure in exact rationals (named *reference* because the faster, differently
-structured `modular` pipeline sits beside it; see `PLAN.md`). `src/problem.rs` holds the public
+structured `modular` pipeline sits beside it). `src/problem.rs` holds the public
 input (`Problem`, `Options`) and `src/dispatch.rs` the public entry points, which pick a
 pipeline by the `Method` enum of `src/lib.rs`, and `src/io.rs`, the CLI and `src/python.rs` sit
 on top of those (see "One problem, one dispatch" below). `src/cone.rs` holds the *cone data*
 (`ConeData`: the Mori cone's inequalities and equations, and the Hilbert basis of each cone
 $K_T$, the curve classes in the Mori cone that only meet the divisors in $T$ negatively, for
 every $T$ of one or two divisors and, in a vex phase, the three divisors of every stratum) and
-its validation (`check_cone_data`), and the native cone computations of `PLAN.md` phase 7,
+its validation (`check_cone_data`), and the native cone computations,
 shared by both pipelines. Callers may still supply the Hilbert bases, computed with an
 external program such as Normaliz (`Options::hilbert_bases`, with the cone given by
-`MoriCone::Inequalities` or generators), and they are used as given. `src/cone/hull.rs` (phase 7a):
+`MoriCone::Inequalities` or generators), and they are used as given. `src/cone/hull.rs`:
 `cone::facets` and `cone::rays` convert between generators and inequalities by the double
 description method, in `i128` with overflow checks (`TooLarge`), with a canonical output
 (equations in reduced row echelon form, each hyperplane reduced to vanish at their pivots).
 It sorts its input by 1-norm first, which is what makes it fast on Mori cones of thousands of
 generators, and tests two rays for adjacency only if they share at least $n - l - 2$ tight
 inequalities ($l$ the dimension of the lineality space so far), a cheap necessary condition
-that cut a hard case from minutes to seconds. `src/cone/hilbert.rs` (phase 7b): `cone::hilbert_basis` and `cone::cone_data`
+that cut a hard case from minutes to seconds. `src/cone/hilbert.rs`: `cone::hilbert_basis` and `cone::cone_data`
 compute Hilbert bases by Pottier's algorithm (Normaliz's dual algorithm): cut a pointed cone
 with a known basis by one inequality at a time, pairing elements of opposite signs and
 dropping the sums an element of the same sign lies below. Its reduction is only sound for a
@@ -122,10 +121,10 @@ distinct cone is given once, labeled by a $T$ with the same negative set $M$ on 
 that is not a pair when there is one, so that the candidates' skip of vanishing pair forms
 keeps exactly the union of the full set (the Mori cone alone, as $K_{\{0\}}$, when nothing is
 negative): a face of the Mori cone at $h^{1,1} = 491$ goes from minutes to under a second.
-User-supplied Hilbert bases must still have every $T$. Errors are `ConeError`. Phase 7b
-also tried enumerating the lattice points of each $K_T$ directly (`PLAN.md`); both matched
+User-supplied Hilbert bases must still have every $T$. Errors are `ConeError`.
+Enumerating the lattice points of each $K_T$ directly was tried too; both matched
 Normaliz, and the Hilbert bases won because they feed the existing cone path unchanged.
-`src/phase.rs` (phase 7c, a port of `cgv_phase.py` of the C program of PR #94): `phase::Fan`
+`src/phase.rs` (a port of `cgv_phase.py` of the C program of PR #94): `phase::Fan`
 takes the maximal cones of the fan of the ambient toric fourfold and the charges, with the
 rays as the integer Gale dual of the charges (`kernel_basis` of `src/cone/hilbert.rs`), and
 checks the paper's assumptions as far as the fan shows them (simplicial, complete, a reflexive polytope of rays
@@ -150,14 +149,14 @@ tuned. It computes modulo word-sized primes and lifts the results with the CRT, 
 code with `reference`. Its primitives are `field` (Montgomery arithmetic,
 `Lanes<NL>` residues, and the `Ring` trait the stages are written against, which takes the
 primes as a context), `bound` (`BoundRing`, the other `Ring`: upward-rounded nonnegative
-bounds for the certifier of `PLAN.md` phase 8, an `f32` mantissa with an `i32` exponent, 8
+bounds for the certifier, an `f32` mantissa with an `i32` exponent, 8
 bytes, moved up by `next_up` after each operation, subtraction being addition), `key` (curve classes packed
 into keys of 128, 256 or 512 bits that add like the classes, `PackedLayout<W>` over a
 `Word`, `u128` or `Wide<N>` of `N` words, with field widths sized per run from coordinate
 bounds; `Setup` takes the narrowest word that fits, `Tuning::min_key_bits` forces a wider
 one for the tests, `with_word!` dispatches, and the `Lift` trait runs wide keys with four
 lanes only, which keeps the build from compiling the pipeline for every lane count and
-width; 64-bit keys were measured and gave nothing, see `PLAN.md` 5.3), `lattice` (after the
+width; 64-bit keys were measured and gave nothing), `lattice` (after the
 C's `setup_lattice`: when the vectors the candidates are sums of span a lattice of rank
 below $h^{1,1}$, as on a face of the Mori cone, the run keys the curves by their coordinates
 in an LLL-reduced basis of it, which takes a face of rank 24 at $h^{1,1} = 491$ from ~300
@@ -170,7 +169,7 @@ vector and the geometry into it (`Reduced`, `Geometry::in_lattice`), `pass` rest
 $\alpha$ to it after the instanton (`restrict_series`) unless the extraction goes along the
 rows, and the output goes back; `Tuning::lattice` turns it off), `table` (open-addressing tables and sparse series over those keys, each entry
 holding a run-time number of values; the index of a `SlotMap` has 8-byte buckets of a tag
-and a slot, at most three quarters full) and `level` (the extraction's level tables, `PLAN.md` phase 8b, after the C of
+and a slot, at most three quarters full) and `level` (the extraction's level tables, after the C of
 PR #102: they key the offsets of an exponential by the linear hash $H = \varphi(m) M$, with
 $\varphi$ packing a box of the offsets, less the coordinate the degree fixes, into a `u64`
 when it fits, a `u128` otherwise, and for wide keys into a word as wide as theirs
@@ -199,7 +198,7 @@ coefficients of $I$ in the basis $z^C \exp(C\cdot\alpha)$, curve by curve in ord
 each exponential built by the Euler recurrence in per-degree level tables, the emitted terms
 subtracted through shards whose buffers are hashed first and prefetched while they are
 folded in; along the rows of the charges, $\exp(C \cdot \alpha) = \prod_r E_r^{Q_r \cdot C}$
-with $E_r = \exp \beta_r$, and `extraction/tree.rs`, `PLAN.md` phase 8e, shares the powers of
+with $E_r = \exp \beta_r$, and `extraction/tree.rs` shares the powers of
 the rows of the most terms between the curves: a tree of the curves by their exponents on
 those rows, by default at most two of them, whose nodes are multiplied by the power of their
 row once for all of their curves, relaxed in the degree, while each curve builds the
@@ -225,7 +224,7 @@ per pass; by default `choose_lanes` predicts it from a probe run at 3/4 of the d
 C's driver does), a minimum number of primes and a maximum (`max_primes`, 32 by default
 whatever the lane count, after which an unstable lift is `Error::NotStable` and bounds that
 need more are `Error::CertifyPrimes`), the thread count, the extraction's tuning,
-`certify` and `low_memory` (`PLAN.md` phase 10: one prime per pass, the sinks and leaf windows
+`certify` and `low_memory` (one prime per pass, the sinks and leaf windows
 of one degree, for about a third of the memory in two and a half times the time; the
 command line and the Python module also call `return_freed_memory`, which sets glibc's
 `M_MMAP_THRESHOLD` so that large freed blocks go back to the system, a third less resident
@@ -234,7 +233,7 @@ five times slower, so the Python module then sets it and the trim threshold to t
 move to, `keep_freed_memory`. Both also call `trim_freed_memory` (`malloc_trim`) after each
 computation, or document, which gives back about half of what the exited threads' arenas
 keep: 578 MB to 274 MB after h11_10 at degree 20); big integers (`malachite::Integer`) are only built by `crt`, for the final values.
-With `certify` (the certifier, `PLAN.md` phase 8, after the C's `cgv_maj` and `certify.py`),
+With `certify` (the certifier, after the C's `cgv_maj` and `certify.py`),
 `lifted` runs the majorant pass on the lift and `primes_needed` compares the largest bound
 with half the product of the primes, adding passes until it is below (when the new primes
 leave the lift unchanged, `Residues::is_stable` over them, its bounds are not taken again);
@@ -329,8 +328,8 @@ indices differently (the first index is a reference surface in the n-fold case).
   threading the handle through every stage. The lift and the final sort have none. In
   Python, a second ctrl+c stops the wait for the computation to stop.
 
-- **One problem, one dispatch.** The public input is `src/problem.rs` (decided in
-  `INTERFACE.md`, phase 9): a `Problem` of a `Geometry` (`q` with one row per divisor,
+- **One problem, one dispatch.** The public input is `src/problem.rs`: a `Problem` of a
+  `Geometry` (`q` with one row per divisor,
   `intnums`, `nefpart` as divisor indices, and `ambient`: `Plain`, `Fan(cones)` or
   `Strata(list)`), a `MoriCone` (`Generators`, `Inequalities { hyperplanes, equations }` or
   `FromFan`), a `Selection` (`MaxDeg`, `TargetPoints { points, max_deg }`, `MinPoints`,
@@ -445,13 +444,12 @@ indices differently (the first index is a reference surface in the n-fold case).
   `GROUP_CURVES`), whose terms record their curve and are kept until the group is done, when
   each shard takes its terms in the order of the curves (`Shard::fold_ordered`;
   `modular::tests::test_bounds_threads`). That costs a certified run 3–13% of its time and
-  4–14% of its memory (measured again in `PLAN.md` phase 10, and kept); `tests/stress.rs` (ignored, run with
+  4–14% of its memory (measured again with the low-memory mode, and kept); `tests/stress.rs` (ignored, run with
   `cargo test --release --test stress -- --ignored` before releases and after changes to the
   parallel code) checks that over repeated runs, and `reference_tests::test_threads` forces
   trees of several depths and both modes of the curve-by-curve extraction on a few threads in
   every test run. The tuning constants were measured on a
-  4-core machine with hyperthreading, and checked on a 16-thread Zen 5 and an 8+2-core M1 Max
-  (`PLAN.md` 5.3, the measurement sessions).
+  4-core machine with hyperthreading, and checked on a 16-thread Zen 5 and an 8+2-core M1 Max.
 
 ### Command line interface
 
@@ -476,8 +474,7 @@ Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
 `tests/data/h11_9_*.yaml` holds the inequalities and Hilbert bases computed with Normaliz for
 `benches/data/h11_9.yaml` (the whole Mori cone, and a facet with its generators), which
 `tests/cones.rs` and the modular pipeline's comparison tests append to that file in place of
-its generators. `tests/data/refs.yaml` and `refs_vex.yaml` are the frozen fixtures (`PLAN.md`
-5.2, layer 4): CLI inputs whose GV invariants neither pipeline computed (cygv 0.2.3 for
+its generators. `tests/data/refs.yaml` and `refs_vex.yaml` are the frozen fixtures: CLI inputs whose GV invariants neither pipeline computed (cygv 0.2.3 for
 threefolds up to $h^{1,1} = 10$, the C program of PR #94 for vex phases and FRSTs, with the
 FRST side of each pair mapped from its vex phase), with the expected results in the output
 format in the matching `*_gv.yaml`, compared by `tests/fixtures.rs` (the reference method too,
@@ -540,7 +537,7 @@ low-memory mode without it. The modular
 ids end in `/modular`, `/modular-cones` or `/modular-lowmem` (the reference ones have no suffix, so that older
 baselines still match), so `cargo bench -- modular` runs only those. The modular scenarios go
 to much higher degrees, mostly with the cone data. Those without it compute the cone data from
-the generators (the facets, then the Hilbert bases); before phase 7b they enumerated the
+the generators (the facets, then the Hilbert bases); before the native cone computations they enumerated the
 semigroup of the generators, which took most of their time, so their numbers are not
 comparable across that change.
 

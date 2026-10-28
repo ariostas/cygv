@@ -1,5 +1,4 @@
-//! Upward-rounded bounds, the number system of the certifier's majorant run (`PLAN.md`
-//! phase 8).
+//! Upward-rounded bounds, the number system of the certifier's majorant run.
 //!
 //! The majorant run computes the pipeline over nonnegative reals, with subtraction replaced
 //! by addition and negation by the identity, so that every value bounds the absolute value of

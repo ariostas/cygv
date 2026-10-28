@@ -1,5 +1,5 @@
 # Frozen GV invariants of vex phases of the ambient toric variety, and of FRSTs, computed by the
-# C program of PR #94 (cgv/tests/refs_vex, removed in phase 9 of PLAN.md), which its author
+# C program of PR #94 (cgv/tests/refs_vex, since removed), which its author
 # checked against an independent exact-rational implementation of the HKTY procedure and across
 # flops. The expected values are in refs_vex_gv.yaml, which tests/fixtures.rs compares with
 # what this crate computes.

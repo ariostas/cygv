@@ -1,7 +1,7 @@
 # Frozen GV invariants of threefold hypersurfaces, computed by cygv 0.2.3: a selection of the
-# regression references of the C program of PR #94 (cgv/tests/refs, removed in phase 9 of
-# PLAN.md), which neither of today's pipelines produced. The expected values are in
-# refs_gv.yaml, which tests/fixtures.rs compares with what this crate computes.
+# regression references of the C program of PR #94 (cgv/tests/refs, since removed), which
+# neither of today's pipelines produced. The expected values are in refs_gv.yaml, which
+# tests/fixtures.rs compares with what this crate computes.
 #
 # quintic_D10 is the quintic; 2d7b127a is the h^{1,1} = 9 geometry of benches/data/h11_9.yaml;
 # the h10_* ones are threefolds with h^{1,1} = 10 (h10_88_1043_0 is benches/data/h11_10.yaml),

@@ -7,7 +7,7 @@
 //! [`primes`].
 //!
 //! The stages are written against the [`Ring`] trait rather than against [`LaneField`], so that
-//! the certifier planned in `PLAN.md` can run them over upward-rounded bounds instead.
+//! the certifier can run them over upward-rounded bounds instead.
 
 use core::fmt::Debug;
 

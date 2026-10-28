@@ -15,8 +15,8 @@
 //! A face of the Mori cone, cut out by equations, is handled in a basis of the lattice of its
 //! span, where it is full-dimensional.
 //!
-//! This replaced Normaliz for the cone data in phase 7b of `PLAN.md`, which records the
-//! comparison with enumerating the lattice points of the cones directly.
+//! This replaced Normaliz for the cone data. Enumerating the lattice points of each cone
+//! directly gave the same results, but the Hilbert bases feed the candidates unchanged.
 
 use super::{columns, CandidateCone, ConeData, TooLarge};
 use crate::Stratum;

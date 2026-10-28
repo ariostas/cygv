@@ -2,7 +2,7 @@
 //!
 //! It computes the invariants modulo a few word-sized primes and recovers them by the Chinese
 //! remainder theorem, stores curve classes as packed integer keys, and never enumerates the
-//! whole semigroup. The design follows the C program in PR #94 and is described in `PLAN.md`.
+//! whole semigroup. The design follows the C program of PR #94.
 //!
 //! The primitives the stages are built from are the arithmetic ([`field`]), the curve-class
 //! keys ([`key`]) and the tables keyed by them ([`table`]). A pass, i.e. the computation
@@ -537,11 +537,11 @@ pub struct Options {
     /// The number of worker threads, at least one, or `None` for one per logical CPU. The run
     /// builds a thread pool of its own rather than use rayon's global one.
     pub threads: Option<usize>,
-    /// Whether to prove the lift right (`PLAN.md` phase 8): the invariants are bounded by
+    /// Whether to prove the lift right: the invariants are bounded by
     /// [`bound_gv`], and more primes are taken until every bound is below half their product,
     /// so that, by induction on degree, every invariant is the one its residues determine.
     pub certify: bool,
-    /// Whether to prefer memory to speed (`PLAN.md` phase 10): one prime per pass instead of
+    /// Whether to prefer memory to speed: one prime per pass instead of
     /// two to four, unless [`Tuning::lanes`] says otherwise; the terms of the top degrees of
     /// the extraction's tree in shared tables ([`extraction::Tuning::sinks`]); and the leaves
     /// of the tree a degree at a time ([`extraction::Tuning::leaf_window`], unless it is set).
@@ -678,7 +678,7 @@ pub fn compute_gw(
 }
 
 /// Upper bounds on the absolute values of the GV invariants of [`compute_gv`], for the
-/// certifier (`PLAN.md` phase 8), in increasing order of degree and then key, leaving out the
+/// certifier, in increasing order of degree and then key, leaving out the
 /// curves where they all vanish.
 ///
 /// The stages run once more, over [`BoundRing`], and every curve passes on to those of higher

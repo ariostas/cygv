@@ -14,7 +14,7 @@
 //!
 //! $\varphi$ packs a box that holds every offset, and leaves out a coordinate that the degree
 //! determines, which usually makes it fit 64 bits. The layout and the tables follow the C
-//! program's (`PLAN.md`, PR #102).
+//! program of PR #102.
 
 use super::key::{Key, Wide};
 use super::table::prefetch;

@@ -1,5 +1,5 @@
-//! Phases of the ambient toric variety from its fan (`PLAN.md` phase 7c, a port of
-//! `cgv/tools/cgv_phase.py` of the C program of PR #94).
+//! Phases of the ambient toric variety from its fan (a port of `cgv/tools/cgv_phase.py` of
+//! the C program of PR #94).
 //!
 //! A threefold hypersurface is given by the charges $Q$ and the intersection numbers alone, but
 //! in a vex phase (MacFadden–Sheridan, arXiv:2512.14817) the invariants also need the strata
