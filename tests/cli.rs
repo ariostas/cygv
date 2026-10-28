@@ -13,6 +13,13 @@ fn example(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// The text of an example, with LF line endings, which a checkout on Windows may have changed.
+fn read_example(name: &str) -> String {
+    std::fs::read_to_string(example(name))
+        .unwrap()
+        .replace("\r\n", "\n")
+}
+
 /// Run the binary with the given arguments and standard input.
 fn run(args: &[&str], stdin: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_cygv"))
@@ -71,7 +78,7 @@ fn check_results(docs: &[Yaml], expected: &[&str]) {
 
 #[test]
 fn test_stdin_to_stdout() {
-    let input = std::fs::read_to_string(example("threefold.yaml")).unwrap();
+    let input = read_example("threefold.yaml");
     let output = run(&["--threads", "2"], &input);
     assert!(
         output.status.success(),
@@ -270,7 +277,7 @@ max_deg: 6
 fn test_cone_data() {
     // The example with cone data and no generators gives the same invariants as the
     // reference method with the generators.
-    let input = std::fs::read_to_string(example("cones.yaml")).unwrap();
+    let input = read_example("cones.yaml");
     let with_cones = run(&[], &input);
     assert!(
         with_cones.status.success(),
@@ -301,7 +308,7 @@ fn test_cone_data() {
 fn test_vex_cone_data() {
     // The vex example, with the cone of its stratum, gives the same invariants as the
     // reference method with the generators.
-    let input = std::fs::read_to_string(example("vex.yaml")).unwrap();
+    let input = read_example("vex.yaml");
     let with_cones = run(&[], &input);
     assert!(
         with_cones.status.success(),
