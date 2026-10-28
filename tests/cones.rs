@@ -161,7 +161,7 @@ fn test_saturation() {
         .filter(|l| l.trim().trim_start_matches("- ") != missing)
         .map(|l| format!("{l}\n"))
         .collect();
-    assert_eq!(bench.len(), H11_9.len() - 2 * (missing.len() + 5));
+    assert_eq!(bench.lines().count(), H11_9.lines().count() - 2);
     let input = input(&bench, true, 8, H11_9_CONES);
     let full = self::input(H11_9, true, 8, H11_9_CONES);
     let expected = results(&full, Method::Modular).unwrap();
