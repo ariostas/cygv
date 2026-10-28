@@ -1,6 +1,23 @@
 from __future__ import annotations
 
-from cygv import compute_gv, compute_gw
+import _thread
+import pickle
+import threading
+import time
+from fractions import Fraction
+from typing import Any
+
+import numpy as np
+import pytest
+
+from cygv import (
+    METHODS,
+    ComputationError,
+    Invariants,
+    Problem,
+    compute_gv,
+    compute_gw,
+)
 
 
 def test_threefold() -> None:
@@ -8,19 +25,25 @@ def test_threefold() -> None:
     grading_vector = [3, -1]
     q = [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]
     intnums = {(0, 0, 0): 2, (0, 0, 1): 1, (0, 1, 1): -1, (1, 1, 1): 5}
-    # For now, these are just smoke tests
-    compute_gv(generators, grading_vector, q, intnums, min_points=100)
-    compute_gv(generators, grading_vector, q, intnums, min_points=100, prec=200)
-    compute_gw(generators, grading_vector, q, intnums, min_points=100)
-    compute_gw(generators, grading_vector, q, intnums, min_points=100, prec=200)
-    compute_gv(generators, grading_vector, q, intnums, target_points=[10, 10])
-    compute_gv(
-        generators, grading_vector, q, intnums, target_points=[[10, 10], [12, 10]]
-    )
-    compute_gw(generators, grading_vector, q, intnums, target_points=[10, 10])
-    compute_gw(
-        generators, grading_vector, q, intnums, target_points=[[10, 10], [12, 10]]
-    )
+    # For now, these are just smoke tests. This is not a consistent geometry, on which the
+    # modular method finds invariants that are not integers, so the reference method is
+    # requested explicitly where the modular one would run.
+    problem = Problem(q, intnums, generators=generators, grading_vector=grading_vector)
+    gv = problem.gv(min_points=100)
+    assert isinstance(gv, Invariants)
+    assert gv.kind == "gv"
+    assert gv.dimension == 3
+    assert gv.grading_vector == (3, -1)
+    assert gv.report.method == "reference"
+    assert gv.report.certified
+    assert not gv.report.grading_vector_derived
+    # Sorted by degree, then by curve class.
+    keys = [(gv.degree(c), c) for c, _ in gv]
+    assert keys == sorted(keys)
+    problem.gw(min_points=100)
+    for target_points in ([10, 10], [[10, 10], [12, 10]]):
+        problem.gv(target_points=target_points, method="reference")
+        problem.gw(target_points=target_points, method="reference")
 
     generators = [
         [-1, 0, 0, 0, 0, 1, -1],
@@ -72,10 +95,9 @@ def test_threefold() -> None:
         (6, 6, 6): 7,
     }
     # For now, these are just smoke tests
-    compute_gv(generators, grading_vector, q, intnums, min_points=100)
-    compute_gv(generators, grading_vector, q, intnums, min_points=100, prec=200)
-    compute_gw(generators, grading_vector, q, intnums, min_points=100)
-    compute_gw(generators, grading_vector, q, intnums, min_points=100, prec=200)
+    problem = Problem(q, intnums, generators=generators, grading_vector=grading_vector)
+    problem.gv(min_points=100)
+    problem.gw(min_points=100)
 
 
 def test_fourfold() -> None:
@@ -175,7 +197,376 @@ def test_fourfold() -> None:
         (13, 5, 5): -1024,
     }
     # For now, these are just smoke tests
-    compute_gv(generators, grading_vector, q, intnums, min_points=100)
-    compute_gv(generators, grading_vector, q, intnums, min_points=100, prec=200)
-    compute_gw(generators, grading_vector, q, intnums, min_points=100)
-    compute_gw(generators, grading_vector, q, intnums, min_points=100, prec=200)
+    problem = Problem(
+        q,
+        intnums,
+        nefpart=[[0, 1, 2, 3], [4, 5, 6, 7, 8, 9, 10, 11]],
+        generators=generators,
+        grading_vector=grading_vector,
+    )
+    gv = problem.gv(min_points=100)
+    assert gv.dimension == 4
+    # The keys of an n-fold carry the reference surface.
+    (curve, surface), value = gv[0]
+    assert isinstance(curve, tuple)
+    assert isinstance(surface, int)
+    assert isinstance(value, int)
+    problem.gw(min_points=100)
+
+
+QUINTIC = Problem([[1, 1, 1, 1, 1]], {(0, 0, 0): 5}, generators=[[1]])
+
+
+def test_methods() -> None:
+    # The quintic, which both methods support with max_deg.
+    expected = QUINTIC.gv(max_deg=5, method="reference", n_threads=2)
+    assert expected[:2] == [((1,), 2875), ((2,), 609250)]
+    assert expected.grading_vector == (1,)
+    assert expected.report.grading_vector_derived
+    for method in (None, *METHODS, "Modular"):
+        assert QUINTIC.gv(max_deg=5, method=method) == expected
+    assert QUINTIC.gv(max_deg=5).report.method == "modular"
+    assert not QUINTIC.gv(max_deg=5).report.certified
+    certified = QUINTIC.gv(max_deg=5, certify=True)
+    assert certified == expected
+    assert certified.report.certified
+    assert QUINTIC.gv(max_deg=5, low_memory=True) == expected
+    expected = QUINTIC.gw(max_deg=5, method="reference")
+    assert expected[1] == ((2,), Fraction(609250 * 8 + 2875, 8))
+    assert QUINTIC.gw(max_deg=5, method="modular") == expected
+    assert dict(expected)[(2,)] == Fraction(609250 * 8 + 2875, 8)
+
+    # The results survive pickling, report included.
+    copy = pickle.loads(pickle.dumps(expected))
+    assert copy == expected
+    assert copy.report == expected.report
+
+    # Target points, below which both methods compute the same invariants, optionally
+    # with a lower maximum degree.
+    expected = QUINTIC.gv(target_points=[4], method="reference")
+    assert expected == QUINTIC.gv(max_deg=4, method="reference")
+    assert QUINTIC.gv(target_points=[4], method="modular") == expected
+    assert QUINTIC.gv(target_points=[4], max_deg=3) == expected[:3]
+
+    # The modular method does not support min_points, which auto runs with the reference.
+    expected = QUINTIC.gv(min_points=3, method="reference")
+    assert expected
+    assert QUINTIC.gv(min_points=3, method="auto") == expected
+    assert QUINTIC.gv(curve_classes=[[1], [2]]) == expected
+    with pytest.raises(ValueError, match="min_points"):
+        QUINTIC.gv(min_points=3, method="modular")
+    with pytest.raises(ValueError, match="unknown method"):
+        QUINTIC.gv(max_deg=3, method="fast")
+
+    # Exactly one selection.
+    with pytest.raises(ValueError, match="which curve classes"):
+        QUINTIC.gv()
+    with pytest.raises(ValueError, match="only one of"):
+        QUINTIC.gv(max_deg=3, min_points=3)
+
+
+def test_curve_classes() -> None:
+    # The invariants of a class depend on the classes below it, which need not be listed.
+    p11222 = Problem(
+        [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]],
+        {(0, 0, 0): 8, (0, 0, 1): 4},
+        generators=[[1, 0], [0, 1]],
+    )
+    expected = dict(p11222.gv(max_deg=3))
+    assert expected[(1, 1)] == 640
+    for method in ["auto", "reference"]:
+        res = p11222.gv(curve_classes=[[2, 1], [1, 1]], method=method)
+        assert res.report.method == ("modular" if method == "auto" else "reference")
+        assert list(res) == [((1, 1), 640), ((2, 1), expected[(2, 1)])]
+    with pytest.raises(ValueError, match="outside the Mori cone"):
+        p11222.gv(curve_classes=[[2, -1]])
+
+
+def test_compute_functions() -> None:
+    # compute_gv and compute_gw take the keywords of the problem and of the computation.
+    expected = QUINTIC.gv(max_deg=4)
+    q, intnums = [[1, 1, 1, 1, 1]], {(0, 0, 0): 5}
+    assert compute_gv(q, intnums, generators=[[1]], max_deg=4) == expected
+    assert compute_gv(q=q, intnums=intnums, generators=[[1]], max_deg=4) == expected
+    assert compute_gw(q, intnums, generators=[[1]], max_deg=4) == QUINTIC.gw(max_deg=4)
+    # The intersection numbers may also be [i, j, k, value] entries.
+    assert compute_gv(q, [[0, 0, 0, 5]], generators=[[1]], max_deg=4) == expected
+    with pytest.raises(TypeError):
+        compute_gv(q, intnums, generators=[[1]], max_deg=4, bad_keyword=1)
+    # The positional order of earlier versions, (generators, grading_vector, q, intnums),
+    # is rejected.
+    with pytest.raises(TypeError):
+        compute_gv([[1]], [1], q, intnums, max_deg=4)  # type: ignore[call-arg]
+
+
+def test_verbose(capsys: pytest.CaptureFixture[str]) -> None:
+    # The progress goes to stderr, and the results are those of a quiet run.
+    expected = QUINTIC.gv(max_deg=4)
+    assert not capsys.readouterr().err
+    assert QUINTIC.gv(max_deg=4, verbose=True) == expected
+    assert "pass over primes" in capsys.readouterr().err
+    with pytest.raises(ValueError, match="verbose"):
+        QUINTIC.gv(max_deg=4, verbose=-1)
+    assert QUINTIC.gv(max_deg=4, verbose=300) == expected
+    capsys.readouterr()
+
+
+def test_invalid_input() -> None:
+    # Invalid input is a ValueError with either method, not a crash of the computation.
+    bad_intnums = {(0, 0, 0): 5, (0, 0, 1): 1}
+    for method in ("reference", "modular"):
+        with pytest.raises(ValueError, match="every row"):
+            compute_gv(
+                [[1, 1, 1, 1, 1]],
+                {(0, 0, 0): 5},
+                generators=[[1]],
+                nefpart=[[0, 1, 2, 3]],
+                max_deg=3,
+                method=method,
+            )
+        with pytest.raises(ValueError, match="below h11"):
+            compute_gv(
+                [[1, 1, 1, 1, 1]],
+                bad_intnums,
+                generators=[[1]],
+                max_deg=3,
+                method=method,
+            )
+    # A transposed q says so.
+    with pytest.raises(ValueError, match="transposed"):
+        compute_gv(
+            [[1], [1], [1], [1], [1]], {(0, 0, 0): 5}, generators=[[1]], max_deg=3
+        )
+    # So does the origin of the polytope among the divisors, as CYTools includes by default.
+    with pytest.raises(ValueError, match="include_origin=False"):
+        compute_gv([[-5, 1, 1, 1, 1, 1]], {(0, 0, 0): 5}, generators=[[1]], max_deg=3)
+    with pytest.raises(ValueError, match="Mori cone is needed"):
+        compute_gv([[1, 1, 1, 1, 1]], {(0, 0, 0): 5}, max_deg=3)
+    # Options of the wrong type, and negative indices, are ValueErrors too.
+    for kwargs in (
+        {"certify": "yes"},
+        {"low_memory": 2},
+        {"method": 1},
+        {"nefpart": [[0, -1]]},
+    ):
+        with pytest.raises(ValueError, match=next(iter(kwargs))):
+            compute_gv(
+                [[1, 1, 1, 1, 1]], {(0, 0, 0): 5}, generators=[[1]], max_deg=3, **kwargs
+            )
+    assert QUINTIC.gv(max_deg=2, certify=1) == QUINTIC.gv(max_deg=2)  # type: ignore[arg-type]
+    # Problems compare by identity, since their fields may be arrays.
+    q = np.array([[1, 1, 1, 1, 1]])
+    assert Problem(q, {(0, 0, 0): 5}) != Problem(q, {(0, 0, 0): 5})
+    with pytest.raises(ValueError, match="not both"):
+        compute_gv(
+            [[1, 1, 1, 1, 1]],
+            {(0, 0, 0): 5},
+            generators=[[1]],
+            mori_hyperplanes=[[1]],
+            max_deg=3,
+        )
+    # No equations are none.
+    assert compute_gv(
+        [[1, 1, 1, 1, 1]],
+        {(0, 0, 0): 5},
+        generators=[[1]],
+        mori_equations=[],
+        max_deg=1,
+    ) == [((1,), 2875)]
+
+
+def test_integers() -> None:
+    def quintic(q: Any = None, intnums: Any = None, **kwargs: Any) -> Any:
+        args = {"generators": [[1]], "max_deg": 2, **kwargs}
+        return compute_gv(
+            [[1, 1, 1, 1, 1]] if q is None else q,
+            {(0, 0, 0): 5} if intnums is None else intnums,
+            **args,
+        )
+
+    expected = quintic()
+    # Integral floats are integers, and anything else is an error, not truncated.
+    assert quintic(q=[[1.0, 1, 1, 1, 1]], max_deg=2.0) == expected
+    for q in ([[1.5, 1, 1, 1, 1]], [["1", 1, 1, 1, 1]]):
+        with pytest.raises(ValueError, match="q must hold integers"):
+            quintic(q=q)
+    with pytest.raises(ValueError, match="intnums must hold integers"):
+        quintic(intnums={(0, 0, 0): 5.5})
+    with pytest.raises(ValueError, match="rectangular"):
+        quintic(q=[[1, 1, 1, 1, 1], [1, 1]])
+    for big in (
+        [[2**40, 1, 1, 1, 1]],
+        np.array([[2**64 - 1, 1, 1, 1, 1]], dtype=np.uint64),
+        np.array([[1e30, 1, 1, 1, 1]]),
+    ):
+        with pytest.raises(ValueError, match="32 bits"):
+            quintic(q=big)
+    with pytest.raises(ValueError, match="32 bits"):
+        quintic(intnums={(0, 0, 0): 2**40})
+    for max_deg in (-1, 2.5, 2**40):
+        with pytest.raises(ValueError, match="max_deg"):
+            quintic(max_deg=max_deg)
+    with pytest.raises(ValueError, match="n_threads"):
+        quintic(n_threads=-2)
+    # Target points outside the Mori cone.
+    with pytest.raises(ValueError, match="outside the Mori cone"):
+        compute_gv(
+            [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]],
+            {(0, 0, 0): 8, (0, 0, 1): 4},
+            generators=[[1, 0], [0, 1]],
+            target_points=[[2, -1]],
+        )
+
+
+def test_arrays() -> None:
+    # The invariants are numpy arrays too, of int64 while they fit and of ints after.
+    gv = QUINTIC.gv(max_deg=12)
+    assert gv.curves.dtype == np.int32
+    assert gv.curves.shape == (12, 1)
+    assert gv.degrees.tolist() == list(range(1, 13))
+    assert gv.surfaces is None
+    assert gv.values.dtype == object
+    assert gv.values.tolist() == [v for _, v in gv]
+    assert [k for k, _ in gv] == [(d,) for d in range(1, 13)]
+    small = QUINTIC.gv(max_deg=5)
+    assert small.values.dtype == np.int64
+    assert small.values.tolist() == [v for _, v in gv[:5]]
+    # They cannot be changed behind the pairs' back.
+    with pytest.raises(ValueError, match="read-only"):
+        small.curves[0, 0] = 2
+    gw = QUINTIC.gw(max_deg=3)
+    assert gw.values.tolist() == [v for _, v in gw]
+    assert gw.values is gw.values
+    assert gw[-1] == list(gw)[-1]
+
+    # The values by key.
+    assert gv[(2,)] == gv.get([2]) == dict(gv)[(2,)]
+    assert gv.get((13,)) is None
+    with pytest.raises(KeyError):
+        gv[(13,)]
+    with pytest.raises(ValueError, match="1 entries"):
+        gv.degree((1, 0))
+
+
+def test_interrupt() -> None:
+    # Ctrl+c stops the computation, which runs with the GIL released: the timer that sends
+    # it is a Python thread.
+    timer = threading.Timer(0.5, _thread.interrupt_main)
+    timer.start()
+    start = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        # About 20 s and a few MB, since the invariants need many primes.
+        QUINTIC.gv(max_deg=200, n_threads=2)
+    timer.join()
+    assert time.monotonic() - start < 5
+    # The next computation is not affected.
+    assert QUINTIC.gv(max_deg=2)[0] == ((1,), 2875)
+
+
+def test_vex_phase() -> None:
+    # A vex phase with h11 = 2, a flop of the resolved P(1,1,2,2,2)[8], which needs its
+    # stratum: three divisors and a class, whose entries may be fractions.
+    q = [[1, 0, -1, 1, 0, 1], [0, 1, 1, 1, 1, 0]]
+    intnums = {(0, 1, 1): 4, (1, 1, 1): 2}
+    generators = [[0, 1], [1, -1]]
+    strata = [((1, 2, 4), (1, Fraction(-1)))]
+
+    gv = dict(Problem(q, intnums, strata=strata, generators=generators).gv(max_deg=4))
+    assert gv[(0, 1)] == 640
+    assert gv[(1, -1)] == 1
+    assert gv[(1, 0)] == 20
+    as_strings = [([1, 2, 4], ["1", "-2/2"])]
+    problem = Problem(q, intnums, strata=as_strings, generators=generators)
+    assert dict(problem.gv(max_deg=4, method="reference")) == gv
+
+    # Both methods support strata, also with Hilbert bases, which then need the cone of the
+    # stratum.
+    assert dict(problem.gv(max_deg=4, method="modular")) == gv
+    sets: list[tuple[int, ...]] = [(s,) for s in range(6)]
+    sets += [(s, t) for s in range(6) for t in range(s + 1, 6)]
+    bases = [(T, [[0, 1], [1, 0]] if 2 in T else [[0, 1], [1, 1]]) for T in sets]
+    bases.append(((1, 2, 4), [[0, 1], [1, -1]]))
+    by_inequalities = Problem(
+        q,
+        intnums,
+        strata=strata,
+        mori_hyperplanes=[[1, 0], [1, 1]],
+        grading_vector=[2, 1],
+    )
+    assert dict(by_inequalities.gv(max_deg=4)) == gv
+    assert dict(by_inequalities.gv(max_deg=4, hilbert_bases=bases)) == gv
+    with pytest.raises(ValueError, match="stratum"):
+        by_inequalities.gv(max_deg=4, hilbert_bases=bases[:-1])
+
+    # Without the stratum the invariants are not integers.
+    with pytest.raises(ComputationError, match="not an integer"):
+        Problem(q, intnums, generators=generators).gv(max_deg=6)
+
+    # The fan gives the stratum, the Mori cone and the grading vector.
+    fan = [
+        (0, 1, 2, 3),
+        (0, 1, 2, 4),
+        (0, 1, 3, 4),
+        (0, 2, 3, 4),
+        (1, 2, 3, 5),
+        (1, 2, 4, 5),
+        (1, 3, 4, 5),
+        (2, 3, 4, 5),
+    ]
+    from_fan = Problem(q, intnums, fan=fan).gv(max_deg=4)
+    assert dict(from_fan) == gv
+    assert from_fan.report.grading_vector_derived
+    with pytest.raises(ValueError, match="not both"):
+        Problem(q, intnums, fan=fan, strata=strata).gv(max_deg=4)
+    with pytest.raises(ValueError, match="intersection ring"):
+        Problem(q, {(0, 1, 1): 4, (1, 1, 1): 3}, fan=fan).gv(max_deg=4)
+    with pytest.raises(ValueError, match="vex phase"):
+        Problem(q, intnums, fan=fan).gv(max_deg=4, certify=True)
+
+
+def test_inequalities() -> None:
+    # P(1,1,2,2,2)[8], whose Mori cone is spanned by (1, 0) and (0, 1). Only the last
+    # divisor can be negative, on the classes (x, y) with x < 2y.
+    q = [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]]
+    intnums = {(0, 0, 0): 8, (0, 0, 1): 4}
+    sets = [(s,) for s in range(6)] + [
+        (s, t) for s in range(6) for t in range(s + 1, 6)
+    ]
+    bases = [(T, [[1, 0], [0, 1]] if 5 in T else [[1, 0], [2, 1]]) for T in sets]
+
+    expected = Problem(q, intnums, generators=[[1, 0], [0, 1]]).gv(max_deg=6)
+    assert ((0, 1), 4) in expected
+    problem = Problem(q, intnums, mori_hyperplanes=[[1, 0], [0, 1]])
+    assert problem.gv(max_deg=6) == expected
+    assert problem.gv(max_deg=6, hilbert_bases=bases) == expected
+    assert problem.gv(max_deg=6, method="reference") == expected
+    res = problem.gw(max_deg=6, hilbert_bases=dict(bases).items())
+    assert ((0, 2), Fraction(1, 2)) in res
+
+    # On the face spanned by (1, 0), which meets no divisor negatively, so it is every K_T.
+    face = Problem(
+        q,
+        intnums,
+        mori_hyperplanes=[[1, 0]],
+        mori_equations=[[0, 1]],
+        grading_vector=[1, 1],
+    )
+    face_bases = [(T, [[1, 0]]) for T in sets]
+    assert face.gv(max_deg=6, hilbert_bases=face_bases) == [
+        (c, gv) for (c, gv) in expected if c[1] == 0
+    ]
+
+    # Below the targets (2, 2) and (4, 0), i.e. the classes (x, y) with x, y <= 2, or
+    # with x <= 4 and y = 0.
+    res = problem.gv(target_points=[[2, 2], [4, 0]], hilbert_bases=bases)
+    assert res == [
+        (c, gv)
+        for (c, gv) in expected
+        if (c[0] <= 2 and c[1] <= 2) or c in ((3, 0), (4, 0))
+    ]
+
+    # The Hilbert bases are checked.
+    with pytest.raises(ValueError, match="every set"):
+        problem.gv(max_deg=6, hilbert_bases=bases[1:])
+    with pytest.raises(ValueError, match="needs mori_hyperplanes"):
+        Problem(q, intnums, mori_equations=[[0, 1]]).gv(max_deg=6)

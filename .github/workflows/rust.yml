@@ -14,6 +14,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Full debug info makes the build and test binaries 9.8 GB, more than the disk of an arm
+  # runner holds; line tables (4.2 GB) still give the file and line of a panic.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   build-and-test:
@@ -23,75 +26,16 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, windows-2022]
-    defaults:
-      run:
-        shell: ${{ matrix.os == 'windows-2022' && 'msys2 {0}' || 'bash' }}
-    env:
-      # `gmp-mpfr-sys` keys its build cache on the compiler, so this has to be
-      # set for the whole job: a cargo step that ran without it would miss the
-      # cache and build GMP and MPFR from source again.
-      CC: clang
     steps:
-      - name: Set up MSYS2
-        if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-python
-            mingw-w64-x86_64-rust
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-clang
-            diffutils
-            m4
-            make
-            git
-            curl
       - name: Check out repo
         uses: actions/checkout@v7
-      # `rug` builds GMP and MPFR from source, which dominates the job (~13 min
-      # on Windows). `gmp-mpfr-sys` keeps the built libraries in the directory
-      # named by GMP_MPFR_SYS_CACHE, keyed internally by version, target and
-      # compiler, so restoring it turns the build into a file copy. The variable
-      # goes through GITHUB_ENV because the `runner` context is not available in
-      # a job-level `env` block.
-      - name: Point gmp-mpfr-sys at a cacheable directory
-        run: echo "GMP_MPFR_SYS_CACHE=${{ runner.temp }}/gmp-mpfr-sys" >> "$GITHUB_ENV"
-      - name: Cache GMP and MPFR builds
-        uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}/gmp-mpfr-sys
-          key: gmp-mpfr-sys-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: gmp-mpfr-sys-${{ matrix.os }}-
-      # Caches the registry and the target dir. Done by hand rather than with
-      # Swatinem/rust-cache because that action runs `cargo` from node instead
-      # of through the msys2 shell, so on Windows it would key the cache on the
-      # runner's preinstalled MSVC toolchain rather than the MINGW64 one that
-      # actually builds here.
-      #
-      # The toolchain has to be part of the key: an upgrade invalidates every
-      # artifact in `target/`, and since actions/cache skips saving whenever the
-      # primary key hits exactly, a stale entry would otherwise never be
-      # replaced. It is in the restore-key prefix too, so a new toolchain starts
-      # clean instead of restoring artifacts it cannot use.
-      # Keep only alphanumerics and dots: cache keys reject commas, and the
-      # MINGW64 toolchain reports `rustc 1.x.0 (hash date) (Rev1, Built by
-      # MSYS2 project)`.
-      - name: Record the toolchain for the cache key
-        run: echo "RUSTC_VERSION=$(rustc -V | tr -dc 'A-Za-z0-9.')" >> "$GITHUB_ENV"
+      # The action keys on the job id, the toolchain and the lockfile. Both
+      # workflows name their job `build-and-test`, so the extra key keeps this
+      # one's dev builds apart from the Python workflow's release builds.
       - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v6
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            target
-          # `dev-` because this workflow builds the dev profile while the Python
-          # workflow builds release; sharing a key would mean whichever saved
-          # first left the other restoring a target dir without its profile.
-          key: cargo-dev-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-dev-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-
+          key: dev
       # `--locked` fails the build rather than silently re-resolving when
       # `Cargo.lock` is out of date with `Cargo.toml`. Without it a manifest
       # change committed without its lockfile update would be tested against a
@@ -104,10 +48,29 @@ jobs:
       - name: Run tests
         run: cargo test --locked --verbose
 
+  # The pre-commit hooks run rustfmt and clippy locally, but pre-commit.ci skips them,
+  # since they need a Rust toolchain.
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run clippy on the Python bindings
+        run: cargo clippy --locked --no-default-features --features python -- -D warnings
+
   check-rust:
     name: Check Rust
     if: always()
-    needs: [build-and-test]
+    needs: [build-and-test, lint]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

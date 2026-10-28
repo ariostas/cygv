@@ -4,11 +4,14 @@ version = "0.3.0"
 description = "Compute GV and GW invariants of CY manifolds."
 authors = ["Andres Rios Tascon"]
 edition = "2021"
-# Keep in sync with the newest API used (currently u32::is_multiple_of).
-rust-version = "1.87"
+# Keep in sync with the newest API used, or the oldest toolchain malachite supports
+# (currently 1.90), whichever is newer.
+rust-version = "1.90"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/ariostas/cygv"
 readme = "README.md"
+# The tests and benchmarks read their data with `include_str!`, the unit tests of the
+# library among them, so all of it is published (about 300 KB compressed) for them to build.
 keywords = ["calabi-yau", "string-theory", "gopakumar-vafa", "gromov-witten", "mirror-symmetry"]
 categories = ["science", "mathematics", "algorithms"]
 
@@ -29,15 +32,20 @@ default = ["cli"]
 cli = ["dep:clap", "dep:yaml-rust2"]
 # The Python bindings, i.e. the `python` module. Only the extension module built
 # by maturin needs them (see `[tool.maturin]` in pyproject.toml), so plain Rust
-# builds do not have to compile pyo3.
-python = ["dep:pyo3", "dep:ctrlc"]
+# builds do not have to compile pyo3. numpy hands the results to Python as arrays without
+# copying them, and malachite converts the big integers.
+python = ["dep:pyo3", "dep:numpy", "malachite/enable_pyo3"]
 
 [dependencies]
 clap = { version = "4.5.16", features = ["derive"], optional = true }
-ctrlc = { version = "3.4.4", optional = true }
+log = "0.4"
+# The big integers and rationals: the reference pipeline's coefficients, and the CRT lift
+# and GW invariants of the modular one. Pure Rust, so no C library has to be built.
+# Only integers and rationals are needed, so the floats are left out.
+malachite = { version = "0.13", default-features = false, features = ["rationals", "std"] }
 nalgebra = "0.35.0"
+numpy = { version = "0.29", optional = true }
 rayon = "1.12.0"
-rug = "1.25.0"
 rustc-hash = "2"
 yaml-rust2 = { version = "0.13", optional = true }
 
@@ -48,16 +56,6 @@ optional = true
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
-# Only used by the memory benchmark, to route GMP/MPFR allocations through a
-# counting allocator. Must stay compatible with the version `rug` links against.
-# The feature list must match `rug`'s exactly (it depends on this crate with
-# `default-features = false`): cargo fingerprints feature *names*, so enabling
-# `default` here — even though it expands to the same set — would create a second
-# build unit and rebuild GMP and MPFR from source a second time.
-gmp-mpfr-sys = { version = "1.7", default-features = false, features = [
-  "mpc",
-  "mpfr",
-] }
 
 # Both benchmarks load their larger models from `benches/data` through the `io`
 # module, which is part of the `cli` feature.
