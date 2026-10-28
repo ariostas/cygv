@@ -124,7 +124,7 @@ negative): a face of the Mori cone at $h^{1,1} = 491$ goes from minutes to under
 User-supplied Hilbert bases must still have every $T$. Errors are `ConeError`.
 Enumerating the lattice points of each $K_T$ directly was tried too; both matched
 Normaliz, and the Hilbert bases won because they feed the existing cone path unchanged.
-`src/phase.rs` (a port of `cgv_phase.py` of the C program of PR #94): `phase::Fan`
+`src/phase.rs` (a port of `cgv_phase.py` of cgv): `phase::Fan`
 takes the maximal cones of the fan of the ambient toric fourfold and the charges, with the
 rays as the integer Gale dual of the charges (`kernel_basis` of `src/cone/hilbert.rs`), and
 checks the paper's assumptions as far as the fan shows them (simplicial, complete, a reflexive polytope of rays
@@ -169,7 +169,7 @@ vector and the geometry into it (`Reduced`, `Geometry::in_lattice`), `pass` rest
 $\alpha$ to it after the instanton (`restrict_series`) unless the extraction goes along the
 rows, and the output goes back; `Tuning::lattice` turns it off), `table` (open-addressing tables and sparse series over those keys, each entry
 holding a run-time number of values; the index of a `SlotMap` has 8-byte buckets of a tag
-and a slot, at most three quarters full) and `level` (the extraction's level tables, after the C of
+and a slot, at most three quarters full) and `level` (the extraction's level tables, after cgv's of
 PR #102: they key the offsets of an exponential by the linear hash $H = \varphi(m) M$, with
 $\varphi$ packing a box of the offsets, less the coordinate the degree fixes, into a `u64`
 when it fits, a `u128` otherwise, and for wide keys into a word as wide as theirs
@@ -181,7 +181,7 @@ the memory of a `LevelTable` and are as fast; both store a `u128` hash as two `u
 `extraction`'s `with_level!` picks the word for both kinds of extraction). A *pass* (`pass`, generic over the `Ring`) runs the
 stages modulo `NL` primes: `candidates` (from a `CandidateSource`: either
 the sums of the Hilbert basis elements of each $K_T$ of the cone data, skipping cones contained
-in another and two-divisor cones whose form $Q_s K^{(k)} Q_u$ vanishes, as the C does, or the
+in another and two-divisor cones whose form $Q_s K^{(k)} Q_u$ vanishes, as cgv does, or the
 whole semigroup of the generators up to `max_deg`, enumerated in order of degree and filtered
 to the classes with at most two negative intersections; the cones are much faster and give
 every lattice point of the Mori cone, the enumeration only those the generators generate, so
@@ -233,7 +233,7 @@ five times slower, so the Python module then sets it and the trim threshold to t
 move to, `keep_freed_memory`. Both also call `trim_freed_memory` (`malloc_trim`) after each
 computation, or document, which gives back about half of what the exited threads' arenas
 keep: 578 MB to 274 MB after h11_10 at degree 20); big integers (`malachite::Integer`) are only built by `crt`, for the final values.
-With `certify` (the certifier, after the C's `cgv_maj` and `certify.py`),
+With `certify` (the certifier, after cgv's `cgv_maj` and `certify.py`),
 `lifted` runs the majorant pass on the lift and `primes_needed` compares the largest bound
 with half the product of the primes, adding passes until it is below (when the new primes
 leave the lift unchanged, `Residues::is_stable` over them, its bounds are not taken again);
@@ -245,7 +245,7 @@ $\deg(C) \sum_{n \mid C} \lvert\mathrm{GV}_{C/n}\rvert / n^3$ ($n^2$ and no degr
 its own bound, and whose exponentials go along the rows of the charges ($c_1$ along the rows
 from `period`, $\beta$ from `instanton`, `rows` in `extract`), so a term vanishes with
 $Q_r \cdot C$; the result matches `cgv_maj`'s curve set and is at or below its bounds. Vex
-phases are refused (`Error::CertifyStrata`), as by the C. `bound_gv` exposes the bounds.
+phases are refused (`Error::CertifyStrata`), as by cgv. `bound_gv` exposes the bounds.
 `compute_gw` derives the GW invariants from the lifted GV invariants
 (`multicover::gw_from_gv`, in `malachite::Rational`), since they are not integers: every
 multiple is a term of three integers, sorted in parallel by the class it gives (computed in
@@ -254,7 +254,7 @@ the classes took 2. Both truncate by
 `max_deg` and optionally by target points: `lightcone` holds the union of their backward
 lightcones (the $C$ with $P - C$ in the Mori cone), tested by the Mori cone's hyperplanes with
 cone data and by membership in the generated semigroup otherwise (which is then enumerated up
-to the targets' degree, matching the reference), and applied at the C's three points: the
+to the targets' degree, matching the reference), and applied at cgv's three points: the
 candidates, the curves the extraction subtracts, and each pass's output (GW too, since the
 multiples of a curve leave the lightcones). `Geometry` in `src/modular.rs` holds the integer data
 the stages read: the CY kind, the charges, one anticanonical row per part of the nef
@@ -290,7 +290,7 @@ The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
    (`Stratum` in `src/lib.rs`, the `strata` input; threefold hypersurfaces only) one that meets
    exactly the three divisors of a stratum negatively gets the stratum term of `compute_c_vex`
    in `vex[t]`, every other one contributes nothing, and $m < 0$ with fewer than two negative
-   intersections is an error. The formula comes from the C program of PR #94.
+   intersections is an error. The formula comes from cgv.
 3. **`instanton`** — derives the alpha, beta, F, instanton, and exp(alpha) polynomials from the
    fundamental period, returning `InstantonData { inst, expalpha }`. The stratum terms enter
    instanton correction $t$ as $c_0^{-1}$ `vex[t]`.
@@ -475,7 +475,7 @@ Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
 `benches/data/h11_9.yaml` (the whole Mori cone, and a facet with its generators), which
 `tests/cones.rs` and the modular pipeline's comparison tests append to that file in place of
 its generators. `tests/data/refs.yaml` and `refs_vex.yaml` are the frozen fixtures: CLI inputs whose GV invariants neither pipeline computed (cygv 0.2.3 for
-threefolds up to $h^{1,1} = 10$, the C program of PR #94 for vex phases and FRSTs, with the
+threefolds up to $h^{1,1} = 10$, cgv for vex phases and FRSTs, with the
 FRST side of each pair mapped from its vex phase), with the expected results in the output
 format in the matching `*_gv.yaml`, compared by `tests/fixtures.rs` (the reference method too,
 on the cheap ones). The files say where each geometry comes from, and adding a fixture is a

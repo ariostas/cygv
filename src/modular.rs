@@ -2,7 +2,9 @@
 //!
 //! It computes the invariants modulo a few word-sized primes and recovers them by the Chinese
 //! remainder theorem, stores curve classes as packed integer keys, and never enumerates the
-//! whole semigroup. The design follows the C program of PR #94.
+//! whole semigroup. The design follows cgv, a C program by Nate MacFadden that this pipeline
+//! reimplements: the first version of PR #94 proposed it for this crate, PRs #95, #97, #100
+//! and #102 extended it, and it served as the oracle while this pipeline was written.
 //!
 //! The primitives the stages are built from are the arithmetic ([`field`]), the curve-class
 //! keys ([`key`]) and the tables keyed by them ([`table`]). A pass, i.e. the computation
@@ -85,7 +87,7 @@ pub enum Error {
     /// The certifier's bounds need more primes than [`Tuning::max_primes`].
     CertifyPrimes { needed: usize, allowed: usize },
     /// Certification was asked for in a vex phase, which the bounds do not cover yet (nor
-    /// those of the C program).
+    /// those of cgv).
     CertifyStrata,
     /// A basis of the lattice the curve classes span, or the coordinates in it, overflow
     /// their integers.
@@ -573,7 +575,7 @@ pub struct Tuning {
     pub check_primes: usize,
     /// The number of primes per pass, from 1 to 4, or `None` to choose it from the size of the
     /// invariants: up to degree 12 two, and above that as many as the largest invariant needs,
-    /// predicted from a run at 3/4 of the degree, plus the check primes, as the C program's
+    /// predicted from a run at 3/4 of the degree, plus the check primes, as cgv's
     /// driver does, but at most four (passes are added if they are not enough), or one with
     /// [`Options::low_memory`]. Keys wider than 128 bits always take four, or one with
     /// [`Options::low_memory`].
@@ -684,7 +686,7 @@ pub fn compute_gw(
 /// The stages run once more, over [`BoundRing`], and every curve passes on to those of higher
 /// degree the values its `candidates` imply ($n_C = \deg(C) \sum_{n \mid C}
 /// \mathrm{GV}_{C/n} / n^3$ for a threefold, without the degree and with $n^2$ for an n-fold)
-/// rather than its own bounds, as the C program's majorant build does, so that the bounds do
+/// rather than its own bounds, as cgv's majorant build does, so that the bounds do
 /// not compound. A curve's bound therefore holds if the candidates of lower degree are right.
 /// Taking the candidates from a lift modulo $M$, every one of them is then right, by induction
 /// on degree, if every bound is below $M / 2$.
@@ -1503,8 +1505,8 @@ impl Setup {
     }
 }
 
-/// The number of primes per pass for a run whose options leave it open, chosen the way the C
-/// program's driver does: enough for the largest invariant, plus the check primes.
+/// The number of primes per pass for a run whose options leave it open, chosen the way cgv's
+/// driver does: enough for the largest invariant, plus the check primes.
 ///
 /// Up to degree 12 that is taken to be two. Above, a probe computes the invariants up to 3/4 of
 /// the maximum degree, with two primes per pass, and the largest number of bits per degree

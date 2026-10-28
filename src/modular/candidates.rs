@@ -67,7 +67,7 @@ pub fn lowest_elements<'a, L: KeyLayout>(
         }
         gens.push((deg as u32, layout.try_pack(g)?));
     }
-    // A stable sort, so that equal degrees keep the input order, as in the C.
+    // A stable sort, so that equal degrees keep the input order, as in cgv.
     gens.sort_by_key(|&(deg, _)| deg);
 
     let mut map: SlotMap<L::Key, ()> = SlotMap::new(1, 1024);
@@ -338,7 +338,7 @@ fn fits(m: &nalgebra::DMatrix<i32>, dim: usize) -> bool {
 /// increasing order of degree and then key: the sums of the elements of each cone, over the
 /// cones that can add candidates with nonzero period data.
 ///
-/// Two kinds of cones are skipped, as in the C program of PR #94:
+/// Two kinds of cones are skipped, as in cgv:
 /// - A cone contained in another. Every negative intersection of a point is one of the
 ///   elements it is a sum of, so if the divisors that the elements of $K_T$ (of degree at
 ///   most `max_deg`) meet negatively are among those of $K_{T'}$, the points of $K_T$ lie in

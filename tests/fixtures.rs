@@ -1,8 +1,9 @@
 //! Frozen fixtures: GV invariants that neither pipeline computed, so that they also catch a
 //! bug the two share. The inputs are CLI documents in `tests/data/refs.yaml` (computed by
-//! cygv 0.2.3) and `tests/data/refs_vex.yaml` (vex phases and FRSTs, computed by the C program
-//! of PR #94), and the expected results are in the matching `*_gv.yaml`, in the output format
-//! of the CLI. The files say where each geometry comes from.
+//! cygv 0.2.3) and `tests/data/refs_vex.yaml` (vex phases and FRSTs, computed by cgv, the C
+//! program the modular pipeline reimplements), and the expected results are in the matching
+//! `*_gv.yaml`, in the output format of the CLI. The files say where each geometry comes
+//! from.
 #![cfg(feature = "cli")]
 
 use cygv::io::Input;

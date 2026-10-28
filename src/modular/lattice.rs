@@ -6,7 +6,7 @@
 //! of $\Lambda$ needs few and small ones: a face of rank 24 at $h^{1,1} = 491$ needs about
 //! 300 bits in the input coordinates at degree 20, and 120 in an LLL-reduced basis of
 //! $\Lambda$. So when the rank is lower, the run keys the curves by their coordinates in such
-//! a basis, as the C program of PR #102 does (`setup_lattice`): the curve side of the
+//! a basis, as cgv does since PR #102 (`setup_lattice`): the curve side of the
 //! charges and the grading vector become their values on the basis, the lightcones'
 //! inequalities too, and the output goes back to the input coordinates. Unlike a
 //! projection this is exact: a class and its coordinates determine each other, and since a
@@ -22,8 +22,8 @@
 //! unimodular $U$ taking $a$ to $(g, 0, \dots, 0)$, the lattice and the vector $v$ span the
 //! lattice of basis $v / g$ and the rows $2, \dots, k$ of $U^{-1} B$. After each, the basis is
 //! reduced again by the integral LLL algorithm (Cohen, *A Course in Computational Algebraic
-//! Number Theory*, algorithm 2.6.7) with $\delta = 0.99$, the C's, exactly, so the basis does
-//! not depend on the platform. Where the C takes an echelon form of all the vectors, in `i64`,
+//! Number Theory*, algorithm 2.6.7) with $\delta = 0.99$, cgv's, exactly, so the basis does
+//! not depend on the platform. Where cgv takes an echelon form of all the vectors, in `i64`,
 //! this only ever handles the basis and one more vector, since echelon forms can grow far
 //! beyond their input.
 

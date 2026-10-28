@@ -4,9 +4,9 @@
 #
 # It computes the GV invariants of a CY threefold hypersurface with h^{1,1} = 2 in a vex
 # phase of its ambient toric variety, a flop of the resolved P(1,1,2,2,2)[8] (liam_h2_fan1
-# of the references of PR #94). Its curves of negative anticanonical degree that meet the
-# divisors of the stratum negatively carry the stratum's term. The cone data, computed with
-# Normaliz, includes the cone K_S of that stratum.
+# of the references of cgv, the C program the modular pipeline reimplements). Its curves of
+# negative anticanonical degree that meet the divisors of the stratum negatively carry the
+# stratum's term. The cone data, computed with Normaliz, includes the cone K_S of that stratum.
 ---
 name: vex phase of P(1,1,2,2,2)[8]
 grading_vector: [2, 1]

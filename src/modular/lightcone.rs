@@ -3,7 +3,7 @@
 //! The backward lightcone of a target $P$ is the set of curve classes $C$ with $P - C$ in the
 //! Mori cone. A summand of such a class is again in it, so the invariants on the union of the
 //! lightcones of a few targets only depend on the candidates in it, exactly as with the
-//! truncation by degree. The pipeline filters at three points, as the C program of PR #94
+//! truncation by degree. The pipeline filters at three points, as cgv
 //! does: the candidates, the curves whose $q^C$ the extraction subtracts (a curve outside
 //! only changes curves outside), and the output of each pass, since products of curves inside
 //! reach curves outside, whose values miss the curves dropped.

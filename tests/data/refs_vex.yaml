@@ -1,17 +1,17 @@
-# Frozen GV invariants of vex phases of the ambient toric variety, and of FRSTs, computed by the
-# C program of PR #94 (cgv/tests/refs_vex, since removed), which its author
-# checked against an independent exact-rational implementation of the HKTY procedure and across
-# flops. The expected values are in refs_vex_gv.yaml, which tests/fixtures.rs compares with
-# what this crate computes.
+# Frozen GV invariants of vex phases of the ambient toric variety, and of FRSTs, computed by
+# cgv, the C program the modular pipeline reimplements (its tests/refs_vex), which its
+# author checked against an independent exact-rational implementation of the HKTY procedure
+# and across flops. The expected values are in refs_vex_gv.yaml, which tests/fixtures.rs
+# compares with what this crate computes.
 #
 # liam_h2_fan* and liam_h3_fan* are every fine regular fan, FRST or vex, of two small
 # polytopes with vex phases (h^{1,1} = 2 and 3). pair_* are pairs of a vex phase and an FRST
 # of a different polytope that give the same CY, related by a matrix T (curve classes
 # n_frst = T^T n_vex, grading vectors w_frst = T^{-1} w_vex): the expected values of the
-# _frst side are those the C program computed on the _vex side, mapped by T, so they check
+# _frst side are those cgv computed on the _vex side, mapped by T, so they check
 # one phase against the other. Every Mori cone, stratum and grading vector comes from the
 # fan (tests/phase.rs checks those derivations on the same fans); the grading vectors are
-# given anyway, those the C program used.
+# given anyway, those cgv used.
 ---
 name: liam_h2_fan0
 q:

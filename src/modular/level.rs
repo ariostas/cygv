@@ -13,8 +13,8 @@
 //! for the terms the extraction emits.
 //!
 //! $\varphi$ packs a box that holds every offset, and leaves out a coordinate that the degree
-//! determines, which usually makes it fit 64 bits. The layout and the tables follow the C
-//! program of PR #102.
+//! determines, which usually makes it fit 64 bits. The layout and the tables follow
+//! cgv's, from PR #102.
 
 use super::key::{Key, Wide};
 use super::table::prefetch;

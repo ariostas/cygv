@@ -239,13 +239,13 @@ impl Word for u128 {
 
     #[inline]
     fn hash64(self) -> u64 {
-        // The same mix as hash128 in the C program.
+        // The same mix as hash128 in cgv.
         mix((self as u64) ^ ((self >> 64) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
     }
 }
 
 /// An integer of `64 * N` bits, as `N` words from the least significant one, for the keys
-/// that `u128` cannot hold (256 and 512 bits, as in the C program of PR #102).
+/// that `u128` cannot hold (256 and 512 bits, as in cgv since PR #102).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Wide<const N: usize>(pub [u64; N]);
@@ -419,7 +419,7 @@ pub fn field_widths(bounds: &[u32]) -> Vec<u32> {
 /// and a coordinate that is always zero needs no bits at all.
 ///
 /// The widths are sized from bounds on the coordinates ([`coordinate_bounds`],
-/// [`field_widths`]) rather than split evenly as in the C program, which lets more
+/// [`field_widths`]) rather than split evenly as in cgv, which lets more
 /// coordinates fit. They may total at most [`PackedLayout::MAX_BITS`], $n - 2$: then every
 /// key lies strictly between $-2^{n-2}$ and $2^{n-2}$ as a signed integer, and $-2^{n-1}$ is
 /// free to serve as the sentinel.
@@ -554,7 +554,7 @@ mod tests {
         assert_eq!(layout.widths(), [0, 2, 3, 3, 4, 4, 5, 7, 32]);
         assert_eq!(layout.bits(), 60);
         // The bounds of 11 coordinates of 60, as at h11 = 11 and high degree, fit easily
-        // where the C's even split of 11 bits each would not.
+        // where cgv's even split of 11 bits each would not.
         assert_eq!(PackedLayout::<u128>::new(&[60; 11]).unwrap().bits(), 77);
         assert_eq!(PackedLayout::<u128>::new(&[1; 63]).unwrap().bits(), 126);
         assert_eq!(

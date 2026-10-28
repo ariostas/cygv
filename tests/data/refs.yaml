@@ -1,7 +1,7 @@
 # Frozen GV invariants of threefold hypersurfaces, computed by cygv 0.2.3: a selection of the
-# regression references of the C program of PR #94 (cgv/tests/refs, since removed), which
-# neither of today's pipelines produced. The expected values are in refs_gv.yaml, which
-# tests/fixtures.rs compares with what this crate computes.
+# regression references of cgv, the C program the modular pipeline reimplements (its
+# tests/refs), which neither of today's pipelines produced. The expected values are in
+# refs_gv.yaml, which tests/fixtures.rs compares with what this crate computes.
 #
 # quintic_D10 is the quintic; 2d7b127a is the h^{1,1} = 9 geometry of benches/data/h11_9.yaml;
 # the h10_* ones are threefolds with h^{1,1} = 10 (h10_88_1043_0 is benches/data/h11_10.yaml),
@@ -9,7 +9,7 @@
 # vector with large entries, which spreads the curves over hundreds of degree levels. cygv
 # 0.2.3 was given generators of the Mori cone, lattice points in it as CYTools produces them,
 # whose sums give every lattice point; each cone is given here by its inequalities, computed
-# from those generators. Before the C program was removed, all 38 of its references (up to
+# from those generators. Before cgv was removed, all 38 of its references (up to
 # degree 22 for 2d7b127a) matched this crate, and the reference method matched on several.
 ---
 name: 2d7b127a_D10

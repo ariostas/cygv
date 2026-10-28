@@ -5,7 +5,7 @@
 //! $c_0 = \prod_j d_{0,j}! / \prod_r d_r!$, which vanishes as soon as some $d_r < 0$, and the
 //! derivatives with respect to the $h^{1,1}$ deformation parameters give $c_{1,a}$ and
 //! $c_{2,ab}$. The formulas are those of the reference pipeline's `compute_c_*neg`
-//! (`reference::fundamental_period`), with three differences, following the C program:
+//! (`reference::fundamental_period`), with three differences, following cgv:
 //!
 //! - factorials and harmonic numbers come from tables ([`Tables`]) instead of being computed
 //!   per curve;
@@ -19,7 +19,7 @@
 //!   $S_2$, with
 //!   $U_0 = (-1)^{e} \prod_{i \in S} (k_i - 1)! \,/\, \big(\prod_{i \notin S} b_i!\,
 //!   (\lvert m \rvert - 1)!\big)$, $e = \lvert m \rvert - 1 + \sum_{i \in S} (k_i - 1)$ and $b_i$
-//!   the other intersections, as in the C program and the reference's `compute_c_vex`. (The
+//!   the other intersections, as in cgv and the reference's `compute_c_vex`. (The
 //!   reference adds $c_0^{-1} U_0\, d_{S,t}$ to each instanton correction $t$, which is the
 //!   same once contracted with the grading vector.)
 

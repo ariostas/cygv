@@ -616,7 +616,7 @@ pub fn hilbert_basis(
 ///
 /// The cones are nested, $K_T \subset K_{T'}$ for $T \subset T'$, so they are computed down a
 /// tree: from the Mori cone's basis, cut by each row $Q_r$ in turn or not, with at most two
-/// rows left out (three for a stratum). As in the C program of PR #102 (`ed93fb4`), only the
+/// rows left out (three for a stratum). As in cgv since PR #102 (`ed93fb4`), only the
 /// divisors $N$ negative on some element of that basis go into $T$: the others are
 /// nonnegative on every class of the cone up to `max_deg`, which cutting by them leaves as it
 /// is, so $K_T = K_{T \cap N}$. And $K_T = K_M$ for $M$ the divisors of $T$ negative on its

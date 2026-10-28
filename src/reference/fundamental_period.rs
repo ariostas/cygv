@@ -352,7 +352,7 @@ fn compute_c_2neg<T>(
 /// for each $t$, with
 /// $U_0 = (-1)^{e} \prod_{i \in S} (k_i - 1)! \,/\, \big(\prod_{i \notin S} b_i!\,
 /// (\lvert m \rvert - 1)!\big)$, $e = \lvert m \rvert - 1 + \sum_{i \in S} (k_i - 1)$ and $b_i$ the
-/// other intersections. The formula is the one of the C program of PR #94.
+/// other intersections. The formula is the one of cgv.
 fn compute_c_vex<T>(
     t: usize,
     stratum: &Stratum,

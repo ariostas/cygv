@@ -1,5 +1,5 @@
-//! Tests of the phases derived from fans, against `cgv/tools/cgv_phase.py` of the C program of
-//! PR #94.
+//! Tests of the phases derived from fans, against `cgv/tools/cgv_phase.py` of cgv, the C
+//! program the modular pipeline reimplements.
 //!
 //! The fans are those of its vex references (`tests/data/refs_vex.yaml`, whose invariants
 //! `tests/fixtures.rs` checks): every fine regular fan of two small polytopes, and both sides
