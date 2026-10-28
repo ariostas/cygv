@@ -14,6 +14,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Full debug info makes the build and test binaries 9.8 GB, more than the disk of an arm
+  # runner holds; line tables (4.2 GB) still give the file and line of a panic.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   build-and-test:
