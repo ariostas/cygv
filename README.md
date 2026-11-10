@@ -13,7 +13,8 @@ Every computation needs three things, with the same names in all three:
   intersection its nef partition `nefpart`, and for a vex phase of the ambient toric variety its
   `fan` or its `strata`;
 - **its Mori cone**: vectors that span it (`generators`), the inequalities that cut it out
-  (`mori_hyperplanes`, with `mori_equations` for a face), or nothing when the `fan` gives it;
+  (`mori_hyperplanes`, with `mori_equations` for a face), or nothing when the `fan` gives it,
+  and optionally the Hilbert bases of its cones $K_T$ (`hilbert_bases`);
 - **the curve classes**: those up to a degree (`max_deg`), those below some classes
   (`target_points`), the lowest degrees holding a number of them (`min_points`), or exactly the
   listed ones (`curve_classes`).
@@ -95,6 +96,12 @@ Problem(q, {(0, 1, 1): 4, (1, 1, 1): 2}, fan=fan).gv(max_deg=3)
 # Invariants(gv, [((0, 1), 640), ((1, -1), 1), ((0, 2), 10032), ((1, 0), 20), ((0, 3), 288384), ... (6 in all)])
 ```
 
+**Hilbert bases.** The modular method takes its curve classes from the Hilbert bases of the
+cones $K_T$ of the Mori cone, which cygv computes. They can be computed elsewhere instead (by
+[Normaliz](https://www.normaliz.uni-osnabrueck.de/), say) and given as `hilbert_bases`:
+`(divisors, basis)` pairs for every set of one or two divisors (and the three of each stratum).
+They are trusted, so a missing element silently drops classes.
+
 **Options.**
 
 | Keyword | Effect |
@@ -104,7 +111,6 @@ Problem(q, {(0, 1, 1): 4, (1, 1, 1): 2}, fan=fan).gv(max_deg=3)
 | `low_memory` | About a third of the memory, for about two and a half times the time. |
 | `n_threads` | The number of threads, one per logical CPU by default. |
 | `verbose` | Writes the progress to `sys.stderr`; `2` also writes each degree. |
-| `hilbert_bases` | The Hilbert bases of the cones the modular method takes its curve classes from, computed elsewhere (by [Normaliz](https://www.normaliz.uni-osnabrueck.de/), say) instead of by cygv: `(divisors, basis)` pairs for every set of one or two divisors (and the three of each stratum). They are trusted, so a missing element silently drops classes. |
 
 The modular method takes curve classes of up to 512 bits; on a face of the Mori cone it uses a
 reduced basis of the lattice they span, so faces of rank up to a few dozen fit even when
@@ -148,6 +154,7 @@ let problem = Problem {
     },
     // One generator per column.
     cone: MoriCone::Generators(dmatrix![1, 0; 0, 1]),
+    hilbert_bases: None,
     selection: Selection::MaxDeg(3),
     grading_vector: None,
 };

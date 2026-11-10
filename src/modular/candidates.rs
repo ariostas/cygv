@@ -138,6 +138,7 @@ pub fn lowest_elements<'a, L: KeyLayout>(
 /// by `generators`: those with at most two negative intersections with the toric divisors,
 /// and in a vex phase those on its strata, in increasing order of degree and then key. See [`generated_semigroup`] for the
 /// requirements on the input.
+#[cfg(test)]
 pub fn candidates_by_enumeration<'a, L: KeyLayout>(
     layout: &L,
     generators: impl IntoIterator<Item = &'a [i32]>,
@@ -200,7 +201,7 @@ impl<'a> CandidateSource<'a> {
     /// The vectors whose sums are the candidates of degree at most `max_deg` and whatever
     /// else [`CandidateSource::candidates`] packs for the lightcones of `targets`: the
     /// generators, or the elements of the Hilbert bases.
-    pub fn vectors(
+    pub(crate) fn vectors(
         &self,
         grading_vector: &[i32],
         max_deg: u32,
@@ -230,7 +231,7 @@ impl<'a> CandidateSource<'a> {
     /// Bounds on the absolute values of the coordinates of the candidates of degree at most
     /// `max_deg`, and of whatever else [`CandidateSource::candidates`] packs for the
     /// lightcones of `targets`, which size the keys (see [`coordinate_bounds`]).
-    pub fn coordinate_bounds(
+    pub(crate) fn coordinate_bounds(
         &self,
         grading_vector: &[i32],
         max_deg: u32,
@@ -264,7 +265,7 @@ impl<'a> CandidateSource<'a> {
     /// and the backward lightcones of `targets`, to which the candidates are restricted if
     /// there are any (see [`Lightcone`]). The keys must have been sized by
     /// [`CandidateSource::coordinate_bounds`] with the same arguments.
-    pub fn candidates<L: KeyLayout>(
+    pub(crate) fn candidates<L: KeyLayout>(
         &self,
         layout: &L,
         grading_vector: &[i32],

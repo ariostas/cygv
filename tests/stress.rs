@@ -11,8 +11,9 @@
 
 use cygv::cone::ConeData;
 use cygv::io::Input;
-use cygv::modular::extraction::Tuning;
-use cygv::modular::{compute_gv, CandidateSource, CurveInvariants, Geometry, Options};
+use cygv::modular::{
+    compute_gv, CandidateSource, CurveInvariants, ExtractionTuning as Tuning, Geometry, Options,
+};
 use cygv::MoriCone;
 use nalgebra::{DMatrix, DVector};
 
@@ -60,7 +61,7 @@ fn case(yaml: &str, cones: Option<&str>) -> Case {
         ConeData {
             hyperplanes,
             equations,
-            cones: input.options.hilbert_bases.unwrap(),
+            cones: input.problem.hilbert_bases.unwrap(),
         }
     });
     Case {

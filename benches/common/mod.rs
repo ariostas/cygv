@@ -116,7 +116,7 @@ fn fixture(name: &'static str, data: &str, cones: &str) -> Model {
         cone_data: Some(ConeData {
             hyperplanes,
             equations,
-            cones: with_cones.options.hilbert_bases.unwrap(),
+            cones: with_cones.problem.hilbert_bases.unwrap(),
         }),
     }
 }
@@ -435,6 +435,7 @@ impl Scenario {
                 ..Geometry::default()
             },
             cone: cone.unwrap_or_else(|| MoriCone::Generators(m.generators.clone())),
+            hilbert_bases,
             selection: Selection::MaxDeg(self.max_deg),
             grading_vector: Some(m.grading_vector.iter().copied().collect()),
         };
@@ -442,7 +443,6 @@ impl Scenario {
             method,
             n_threads: n_threads().map(|n| n.max(1) as usize),
             low_memory: self.pipeline == Pipeline::ModularLowMemory,
-            hilbert_bases,
             ..Options::default()
         };
         match self.variant {

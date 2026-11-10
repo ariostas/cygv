@@ -7,6 +7,9 @@ use core::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SeriesInversionError {
     NonIntegerGVError,
+    /// The instanton corrections of a threefold do not give the same invariant for a curve
+    /// class, which only an inconsistent geometry does.
+    Inconsistent,
     PolynomialError(PolynomialError),
     /// The computation was interrupted ([`crate::Interrupt`]).
     Interrupted,
@@ -20,6 +23,13 @@ impl fmt::Display for SeriesInversionError {
                 write!(
                     f,
                     "a GV invariant is not an integer; {}",
+                    crate::NON_INTEGER_CAUSES
+                )
+            }
+            SeriesInversionError::Inconsistent => {
+                write!(
+                    f,
+                    "the instanton corrections do not agree on an invariant; {}",
                     crate::NON_INTEGER_CAUSES
                 )
             }

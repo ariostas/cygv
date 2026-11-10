@@ -408,6 +408,8 @@ where
 /// contracted with the intersection numbers, so they enter instanton correction $t$ as
 /// $c_0^{-1}$ times `vex[t]`. Without strata the polynomials are empty.
 pub struct FundamentalPeriod<T> {
+    // Only compared with the modular pipeline's by the tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub c0: Polynomial<T>,
     pub c1: Vec<Polynomial<T>>,
     pub c2: HashMap<(usize, usize), Polynomial<T>>,

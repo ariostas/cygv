@@ -89,7 +89,7 @@ fn cone_data(input: &Input) -> ConeData {
     ConeData {
         hyperplanes,
         equations,
-        cones: input.options.hilbert_bases.clone().unwrap(),
+        cones: input.problem.hilbert_bases.clone().unwrap(),
     }
 }
 
@@ -122,7 +122,7 @@ fn results(input: &Input, method: Method) -> Result<Results, Error> {
 /// The same input without the Hilbert bases.
 fn without_bases(input: &Input) -> Input {
     let mut input = input.clone();
-    input.options.hilbert_bases = None;
+    input.problem.hilbert_bases = None;
     input
 }
 
@@ -531,14 +531,12 @@ fn p11222(
                 ..Geometry::default()
             },
             cone,
+            hilbert_bases,
             selection: min_points.map_or(Selection::MaxDeg(6), Selection::MinPoints),
             grading_vector: Some(vec![1, 1]),
         },
         kind: InvariantKind::GV,
-        options: Options {
-            hilbert_bases,
-            ..Options::default()
-        },
+        options: Options::default(),
     };
     results(&input, method)
 }

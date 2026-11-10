@@ -4,6 +4,7 @@ import _thread
 import pickle
 import threading
 import time
+from dataclasses import replace
 from fractions import Fraction
 from typing import Any
 
@@ -24,10 +25,7 @@ def test_threefold() -> None:
     generators = [[0, -1], [1, 2]]
     grading_vector = [3, -1]
     q = [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]
-    intnums = {(0, 0, 0): 2, (0, 0, 1): 1, (0, 1, 1): -1, (1, 1, 1): 5}
-    # For now, these are just smoke tests. This is not a consistent geometry, on which the
-    # modular method finds invariants that are not integers, so the reference method is
-    # requested explicitly where the modular one would run.
+    intnums = {(0, 0, 0): 2, (0, 0, 1): 1, (0, 1, 1): -1, (1, 1, 1): -5}
     problem = Problem(q, intnums, generators=generators, grading_vector=grading_vector)
     gv = problem.gv(min_points=100)
     assert isinstance(gv, Invariants)
@@ -42,8 +40,19 @@ def test_threefold() -> None:
     assert keys == sorted(keys)
     problem.gw(min_points=100)
     for target_points in ([10, 10], [[10, 10], [12, 10]]):
-        problem.gv(target_points=target_points, method="reference")
-        problem.gw(target_points=target_points, method="reference")
+        gv = problem.gv(target_points=target_points, method="reference")
+        assert problem.gv(target_points=target_points) == gv
+        gw = problem.gw(target_points=target_points, method="reference")
+        assert problem.gw(target_points=target_points) == gw
+
+    # With 5 for -5 the geometry is inconsistent: the instanton corrections disagree, which
+    # the reference method finds, and the modular one gives invariants that are not integers.
+    wrong = replace(problem, intnums={**intnums, (1, 1, 1): 5})
+    for kind in (wrong.gv, wrong.gw):
+        with pytest.raises(ComputationError, match="do not agree"):
+            kind(max_deg=10, method="reference")
+    with pytest.raises(ComputationError, match="not an integer"):
+        wrong.gv(max_deg=10)
 
     generators = [
         [-1, 0, 0, 0, 0, 1, -1],
@@ -494,9 +503,9 @@ def test_vex_phase() -> None:
         grading_vector=[2, 1],
     )
     assert dict(by_inequalities.gv(max_deg=4)) == gv
-    assert dict(by_inequalities.gv(max_deg=4, hilbert_bases=bases)) == gv
+    assert dict(replace(by_inequalities, hilbert_bases=bases).gv(max_deg=4)) == gv
     with pytest.raises(ValueError, match="stratum"):
-        by_inequalities.gv(max_deg=4, hilbert_bases=bases[:-1])
+        replace(by_inequalities, hilbert_bases=bases[:-1]).gv(max_deg=4)
 
     # Without the stratum the invariants are not integers.
     with pytest.raises(ComputationError, match="not an integer"):
@@ -538,9 +547,10 @@ def test_inequalities() -> None:
     assert ((0, 1), 4) in expected
     problem = Problem(q, intnums, mori_hyperplanes=[[1, 0], [0, 1]])
     assert problem.gv(max_deg=6) == expected
-    assert problem.gv(max_deg=6, hilbert_bases=bases) == expected
+    with_bases = replace(problem, hilbert_bases=bases)
+    assert with_bases.gv(max_deg=6) == expected
     assert problem.gv(max_deg=6, method="reference") == expected
-    res = problem.gw(max_deg=6, hilbert_bases=dict(bases).items())
+    res = replace(problem, hilbert_bases=dict(bases).items()).gw(max_deg=6)
     assert ((0, 2), Fraction(1, 2)) in res
 
     # On the face spanned by (1, 0), which meets no divisor negatively, so it is every K_T.
@@ -549,16 +559,14 @@ def test_inequalities() -> None:
         intnums,
         mori_hyperplanes=[[1, 0]],
         mori_equations=[[0, 1]],
+        hilbert_bases=[(T, [[1, 0]]) for T in sets],
         grading_vector=[1, 1],
     )
-    face_bases = [(T, [[1, 0]]) for T in sets]
-    assert face.gv(max_deg=6, hilbert_bases=face_bases) == [
-        (c, gv) for (c, gv) in expected if c[1] == 0
-    ]
+    assert face.gv(max_deg=6) == [(c, gv) for (c, gv) in expected if c[1] == 0]
 
     # Below the targets (2, 2) and (4, 0), i.e. the classes (x, y) with x, y <= 2, or
     # with x <= 4 and y = 0.
-    res = problem.gv(target_points=[[2, 2], [4, 0]], hilbert_bases=bases)
+    res = with_bases.gv(target_points=[[2, 2], [4, 0]])
     assert res == [
         (c, gv)
         for (c, gv) in expected
@@ -567,6 +575,6 @@ def test_inequalities() -> None:
 
     # The Hilbert bases are checked.
     with pytest.raises(ValueError, match="every set"):
-        problem.gv(max_deg=6, hilbert_bases=bases[1:])
+        replace(problem, hilbert_bases=bases[1:]).gv(max_deg=6)
     with pytest.raises(ValueError, match="needs mori_hyperplanes"):
         Problem(q, intnums, mori_equations=[[0, 1]]).gv(max_deg=6)

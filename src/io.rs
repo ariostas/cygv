@@ -16,7 +16,7 @@
 //!   - [0, 0, 0, 2]
 //!   - [0, 0, 1, 1]
 //!   - [0, 1, 1, -1]
-//!   - [1, 1, 1, 5]
+//!   - [1, 1, 1, -5]
 //! # The Mori cone: vectors that span it (or mori_hyperplanes, or nothing with a fan).
 //! generators: [[0, -1], [1, 2]]
 //! # The degree is the inner product with this vector, positive on the Mori cone. It
@@ -83,8 +83,10 @@
 //! grading_vector: [3, -1]
 //! report: {method: modular, certified: false, grading_vector_derived: false}
 //! results:
-//!   - {curve_class: [0, -1], degree: 1, gv: -4}
-//!   - {curve_class: [1, 0], degree: 3, gv: 7524}
+//!   - {curve_class: [0, -1], degree: 1, gv: 6}
+//!   - {curve_class: [1, 2], degree: 1, gv: 252}
+//!   - {curve_class: [1, 1], degree: 2, gv: 7524}
+//!   # ...
 //! ```
 //!
 //! See [`Input`] for the full list of fields.
@@ -118,6 +120,7 @@ const INPUT_FIELDS: [&str; 20] = [
     "generators",
     "mori_hyperplanes",
     "mori_equations",
+    "hilbert_bases",
     "grading_vector",
     "max_deg",
     "target_points",
@@ -128,7 +131,6 @@ const INPUT_FIELDS: [&str; 20] = [
     "n_threads",
     "certify",
     "low_memory",
-    "hilbert_bases",
 ];
 
 /// The specification of a single computation of GV or GW invariants.
@@ -281,6 +283,9 @@ impl Input {
                 ]))
             }
         };
+        let hilbert_bases = get_field(hash, "hilbert_bases")
+            .map(|y| as_hilbert_bases(y, h11))
+            .transpose()?;
         let grading_vector = get_field(hash, "grading_vector")
             .map(|y| as_int_vec(y, "grading_vector"))
             .transpose()?;
@@ -363,10 +368,6 @@ impl Input {
                 )
             })?,
         };
-        let hilbert_bases = get_field(hash, "hilbert_bases")
-            .map(|y| as_hilbert_bases(y, h11))
-            .transpose()?;
-
         Ok(Input {
             name,
             problem: Problem {
@@ -377,6 +378,7 @@ impl Input {
                     ambient,
                 },
                 cone,
+                hilbert_bases,
                 selection,
                 grading_vector,
             },
@@ -386,7 +388,6 @@ impl Input {
                 n_threads,
                 certify,
                 low_memory,
-                hilbert_bases,
                 ..Options::default()
             },
         })
@@ -920,7 +921,7 @@ name: test
 generators: [[0, -1], [1, 2]]
 grading_vector: [3, -1]
 q: [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]
-intnums: [[0, 0, 0, 2], [0, 0, 1, 1], [0, 1, 1, -1], [1, 1, 1, 5]]
+intnums: [[0, 0, 0, 2], [0, 0, 1, 1], [0, 1, 1, -1], [1, 1, 1, -5]]
 min_points: 20
 ";
 
@@ -1196,7 +1197,7 @@ hilbert_bases:
                 equations: DMatrix::zeros(2, 0)
             }
         );
-        let bases = input.options.hilbert_bases.unwrap();
+        let bases = input.problem.hilbert_bases.unwrap();
         assert_eq!(bases.len(), 21);
         assert_eq!(bases[1].divisors, [0, 1]);
         assert_eq!(bases[1].hilbert_basis, dmatrix![1, 2; 0, 1]);
@@ -1217,12 +1218,12 @@ hilbert_bases:
         ));
         // An empty Hilbert basis is read too (a K_T can be just the origin).
         let empty = data.replacen("[[1, 0], [2, 1]]}", "[]}", 1);
-        let bases = load_one(&empty).unwrap().options.hilbert_bases.unwrap();
+        let bases = load_one(&empty).unwrap().problem.hilbert_bases.unwrap();
         assert_eq!(bases[0].hilbert_basis.shape(), (2, 0));
 
         // The inequalities alone describe the Mori cone; the Hilbert bases are optional.
         let head = &data[..data.find("hilbert_bases:").unwrap()];
-        assert!(load_one(head).unwrap().options.hilbert_bases.is_none());
+        assert!(load_one(head).unwrap().problem.hilbert_bases.is_none());
         let no_hyperplanes = head.replace("mori_hyperplanes: [[1, 0], [0, 1]]\n", "");
         assert_eq!(
             load_one(&format!("{no_hyperplanes}mori_equations: [[0, 1]]\n")),
@@ -1328,8 +1329,8 @@ hilbert_bases:
     #[test]
     fn test_parse_intnums_mapping() {
         let data = THREEFOLD.replace(
-            "intnums: [[0, 0, 0, 2], [0, 0, 1, 1], [0, 1, 1, -1], [1, 1, 1, 5]]",
-            "intnums: {\"0,0,0\": 2, \"0 0 1\": 1, \"0,1,1\": -1, \"1,1,1\": 5}",
+            "intnums: [[0, 0, 0, 2], [0, 0, 1, 1], [0, 1, 1, -1], [1, 1, 1, -5]]",
+            "intnums: {\"0,0,0\": 2, \"0 0 1\": 1, \"0,1,1\": -1, \"1,1,1\": -5}",
         );
         let input = load_one(&data).unwrap();
         assert_eq!(input.problem, load_one(THREEFOLD).unwrap().problem);
@@ -1446,13 +1447,13 @@ hilbert_bases:
         );
         // So must indices that are not those of the divisors.
         assert_eq!(
-            field_of(&THREEFOLD.replace("[1, 1, 1, 5]", "[1, 1, 2, 5]")),
+            field_of(&THREEFOLD.replace("[1, 1, 1, -5]", "[1, 1, 2, -5]")),
             "intnums"
         );
         // Intersection numbers that are all zero must be rejected, not panic.
         assert_eq!(
             field_of(&THREEFOLD.replace(
-                "intnums: [[0, 0, 0, 2], [0, 0, 1, 1], [0, 1, 1, -1], [1, 1, 1, 5]]",
+                "intnums: [[0, 0, 0, 2], [0, 0, 1, 1], [0, 1, 1, -1], [1, 1, 1, -5]]",
                 "intnums: [[0, 0, 0, 0], [0, 0, 1, 0]]",
             )),
             "intnums"

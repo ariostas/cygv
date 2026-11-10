@@ -1152,6 +1152,7 @@ fn from_fan(case: &Case, max_deg: u32) -> Problem {
             ambient: Ambient::Fan(case.cones.iter().map(|c| c.to_vec()).collect()),
         },
         cone: MoriCone::FromFan,
+        hilbert_bases: None,
         selection: Selection::MaxDeg(max_deg),
         grading_vector: None,
     }

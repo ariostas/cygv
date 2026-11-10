@@ -129,6 +129,7 @@ where
         10
     };
     let mut tmp_gv = poly_props.zero.clone();
+    let mut tmp_diff = poly_props.zero.clone();
     let mut previous_qn: VecDeque<_> = (1..=n_previous_levels).map(|_| HashMap::new()).collect();
     let mut previous_qn_ind: VecDeque<_> = (1..=n_previous_levels).map(|_| Vec::new()).collect();
 
@@ -175,11 +176,29 @@ where
                         .enumerate()
                         .find(|(_, c)| *c != 0)
                         .unwrap();
-                    let Some(gv_ref) = inst[kk.0].coeffs.get(&(j)) else {
-                        continue;
-                    };
-                    tmp_gv.assign(gv_ref);
-                    tmp_gv /= kk.1;
+                    match inst[kk.0].coeffs.get(&j) {
+                        Some(gv_ref) => {
+                            tmp_gv.assign(gv_ref);
+                            tmp_gv /= kk.1;
+                        }
+                        None => tmp_gv.assign(0),
+                    }
+                    // Each correction holds C_t times the invariant, which a consistent
+                    // geometry gives the same for every t; the invariant is read from the
+                    // first t with C_t nonzero.
+                    for (t, &c_t) in poly_props.semigroup.elements.column(j).iter().enumerate() {
+                        if t == kk.0 {
+                            continue;
+                        }
+                        tmp_diff.assign(&tmp_gv);
+                        tmp_diff *= c_t;
+                        if let Some(inst_t) = inst[t].coeffs.get(&j) {
+                            tmp_diff -= inst_t;
+                        }
+                        if tmp_diff != 0 {
+                            return Err(SeriesInversionError::Inconsistent);
+                        }
+                    }
                     if tmp_gv == 0 {
                         continue;
                     }

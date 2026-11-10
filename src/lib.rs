@@ -224,8 +224,8 @@ pub(crate) fn check_intnums(
     Ok(())
 }
 
-/// The likely causes of GV invariants that are not integers, for the error messages of both
-/// pipelines.
+/// The likely causes of GV invariants that are not integers (or, in the reference, of
+/// instanton corrections that disagree), for the error messages of both pipelines.
 pub(crate) const NON_INTEGER_CAUSES: &str = "this usually means that the input is \
     inconsistent (e.g. charges and intersection numbers of different geometries, or a nef \
     partition that is missing or wrong), or that the generators do not span the Mori cone or \

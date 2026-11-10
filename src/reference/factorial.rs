@@ -2,7 +2,7 @@
 
 use crate::reference::polynomial::coefficient::Assign;
 use core::cmp::Ordering;
-use core::ops::{AddAssign, DivAssign, MulAssign};
+use core::ops::{DivAssign, MulAssign};
 use std::collections::HashMap;
 
 /// Sets the value of a number to its reciprocal.
@@ -11,24 +11,10 @@ pub trait RecipMut {
 }
 
 /// Computes the generalized harmonic number $H_{n,m}$.
-///
-/// # Examples
-///
-/// We compute $H_{10,2}=\frac{1968329}{1270080}$.
-/// ```
-/// use cygv::reference::Rational;
-/// use cygv::reference::factorial;
-///
-/// let mut h_10_2 = Rational::new();
-/// let mut tmp_var = Rational::new();
-///
-/// factorial::harmonic(10, 2, &mut h_10_2, &mut tmp_var);
-///
-/// assert_eq!(h_10_2, Rational::from((1_968_329, 1_270_080)));
-/// ```
+#[cfg(test)]
 pub fn harmonic<T>(n: u32, m: u32, res: &mut T, tmp_var: &mut T)
 where
-    T: RecipMut + Assign<u64> + for<'a> AddAssign<&'a T>,
+    T: RecipMut + Assign<u64> + for<'a> core::ops::AddAssign<&'a T>,
 {
     res.assign(0);
     for i in 1..=n {
@@ -38,25 +24,8 @@ where
     }
 }
 
-/// Efficiently computes products and fractions of factorials.
-///
-/// # Examples
-///
-/// We perform the following computation.
-/// $$\frac{0!2!4!6!8!10!}{1!3!5!7!9!}=3840$$
-/// ```
-/// use cygv::reference::Rational;
-/// use cygv::reference::factorial;
-///
-/// let mut res = Rational::new();
-///
-/// let num = vec![0,2,4,6,8,10];
-/// let den = vec![1,3,5,7,9];
-///
-/// factorial::factorial_prod(&num, &den, &mut res);
-///
-/// assert_eq!(res, Rational::from((3_840, 1)));
-/// ```
+/// Efficiently computes products and fractions of factorials, such as
+/// $\frac{0!2!4!6!8!10!}{1!3!5!7!9!}=3840$.
 pub fn factorial_prod<T>(n: &[u32], d: &[u32], res: &mut T)
 where
     T: Assign<u64> + MulAssign<u64> + DivAssign<u64>,

@@ -18,7 +18,7 @@ document, sorted by the degree of the curve classes under the grading vector.
 A minimal input document looks as follows.
 
   q: [[1, 1, 1, 0, 1, 2], [0, 0, -1, 1, 1, -1]]
-  intnums: [[0, 0, 0, 2], [0, 0, 1, 1], [0, 1, 1, -1], [1, 1, 1, 5]]
+  intnums: [[0, 0, 0, 2], [0, 0, 1, 1], [0, 1, 1, -1], [1, 1, 1, -5]]
   generators: [[0, -1], [1, 2]]
   max_deg: 10
 
@@ -46,6 +46,13 @@ The Mori cone, one of (or neither, with a fan):
                     span is used.
   mori_hyperplanes  The inequalities h . C >= 0 that cut it out, with
   mori_equations    the equations e . C = 0 of its span if it is a face.
+  hilbert_bases     Optionally, for every set T of one or two divisors, the
+                    Hilbert basis of the cone K_T of the curve classes in the
+                    Mori cone that only meet the divisors in T negatively, as
+                    computed by programs such as Normaliz, e.g. {divisors: [0,
+                    5], hilbert_basis: [[1, 0], [0, 1]]}, and in a vex phase
+                    also for the three divisors of every stratum. The modular
+                    pipeline computes them otherwise (see examples/cones.yaml).
 
   grading_vector    The degree is the inner product with it, which must be
                     positive on the Mori cone. It defaults to the primitive sum
@@ -75,13 +82,6 @@ Options:
                  false.
   n_threads      The number of threads to use. It defaults to one per logical
                  CPU.
-  hilbert_bases  For every set T of one or two divisors, the Hilbert basis of
-                 the cone K_T of the curve classes in the Mori cone that only
-                 meet the divisors in T negatively, as computed by programs such
-                 as Normaliz, e.g. {divisors: [0, 5], hilbert_basis: [[1, 0],
-                 [0, 1]]}, and in a vex phase also for the three divisors of
-                 every stratum. The modular pipeline computes them otherwise
-                 (see examples/cones.yaml).
 
 The output gives the dimension of the CY, the grading vector, and a report of
 the pipeline that ran and whether the results are certified.";

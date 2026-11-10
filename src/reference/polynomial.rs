@@ -2,7 +2,6 @@
 
 pub mod coefficient;
 pub mod error;
-pub mod prettyprint;
 pub mod properties;
 
 use coefficient::PolynomialCoeff;

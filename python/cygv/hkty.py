@@ -432,6 +432,10 @@ class Problem:
       cone they span is used); ``mori_hyperplanes``, the inequalities ``h . C >= 0`` that cut
       it out, with ``mori_equations``, the equations of its span if it is a face; or neither,
       with a fan.
+    - ``hilbert_bases``: optionally, the Hilbert bases of the cones ``K_T`` of the Mori cone
+      from a program such as Normaliz, as ``(divisors, basis)`` pairs, which the modular
+      pipeline then uses instead of computing them. They are trusted, so a missing element
+      silently drops classes.
     - ``grading_vector``: the degree is the inner product with it, which must be positive on
       the Mori cone. By default, the primitive sum of the inequalities of the Mori cone.
     """
@@ -444,6 +448,7 @@ class Problem:
     generators: ArrayLike | None = None
     mori_hyperplanes: ArrayLike | None = None
     mori_equations: ArrayLike | None = None
+    hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None = None
     grading_vector: ArrayLike | None = None
 
     def gv(
@@ -457,7 +462,6 @@ class Problem:
         n_threads: int | None = None,
         certify: bool = False,
         low_memory: bool = False,
-        hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
         verbose: bool | int = False,
     ) -> Invariants:
         """The GV invariants, as integers, of the curve classes selected by one of:
@@ -475,9 +479,7 @@ class Problem:
         for that. ``certify`` proves the results exact. ``low_memory`` prefers memory to
         speed, for the runs that do not fit otherwise: the modular pipeline then takes about a
         third of the memory, for about two and a half times the time. ``n_threads`` defaults
-        to one per logical CPU. ``hilbert_bases`` are the Hilbert bases of the cones ``K_T``
-        from a program such as Normaliz, as ``(divisors, basis)`` pairs, which the modular
-        pipeline then uses instead of computing them. ``verbose`` writes the progress of the computation to
+        to one per logical CPU. ``verbose`` writes the progress of the computation to
         ``sys.stderr``: with ``True`` (or 1) its stages and passes, with 2 also the degrees of
         each pass.
 
@@ -494,7 +496,6 @@ class Problem:
             n_threads=n_threads,
             certify=certify,
             low_memory=low_memory,
-            hilbert_bases=hilbert_bases,
             verbose=verbose,
         )
 
@@ -509,7 +510,6 @@ class Problem:
         n_threads: int | None = None,
         certify: bool = False,
         low_memory: bool = False,
-        hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
         verbose: bool | int = False,
     ) -> Invariants:
         """The GW invariants, as fractions, of the curve classes selected as for :meth:`gv`,
@@ -524,7 +524,6 @@ class Problem:
             n_threads=n_threads,
             certify=certify,
             low_memory=low_memory,
-            hilbert_bases=hilbert_bases,
             verbose=verbose,
         )
 
@@ -540,7 +539,6 @@ class Problem:
         n_threads: int | None,
         certify: bool,
         low_memory: bool,
-        hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None,
         verbose: bool | int,
     ) -> Invariants:
         q = _vectors(self.q, "q")
@@ -557,6 +555,7 @@ class Problem:
             "mori_hyperplanes": _vectors(self.mori_hyperplanes, "mori_hyperplanes"),
             # No equations is the same as none given.
             "mori_equations": _vectors(self.mori_equations, "mori_equations") or None,
+            "hilbert_bases": _hilbert_bases(self.hilbert_bases),
             "grading_vector": _vector(self.grading_vector, "grading_vector"),
             "max_deg": _count(max_deg, "max_deg"),
             "target_points": _points(target_points, "target_points"),
@@ -566,7 +565,6 @@ class Problem:
             "n_threads": _count(n_threads, "n_threads"),
             "certify": _flag(certify, "certify"),
             "low_memory": _flag(low_memory, "low_memory"),
-            "hilbert_bases": _hilbert_bases(hilbert_bases),
             "verbose": _verbosity(verbose),
         }
         (

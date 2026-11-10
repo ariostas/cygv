@@ -105,6 +105,7 @@ impl<K: Key, V: Copy + Default + PartialEq> SlotMap<K, V> {
     }
 
     #[inline]
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
@@ -659,6 +660,7 @@ impl DegreeHeap {
     }
 
     #[inline]
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.heap.is_empty()
     }

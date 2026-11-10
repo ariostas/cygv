@@ -89,13 +89,19 @@ of the HKTY procedure in exact rationals (named *reference* because the faster, 
 structured `modular` pipeline sits beside it). `src/problem.rs` holds the public
 input (`Problem`, `Options`) and `src/dispatch.rs` the public entry points, which pick a
 pipeline by the `Method` enum of `src/lib.rs`, and `src/io.rs`, the CLI and `src/python.rs` sit
-on top of those (see "One problem, one dispatch" below). `src/cone.rs` holds the *cone data*
+on top of those (see "One problem, one dispatch" below). The public surface is the root
+(`Problem`, `Options`, the entry points and their results), `cone` and `phase` (the cone
+computations and the fan), `io` (behind the `cli` feature), `modular`'s low-level entry
+points (`compute_gv`, `compute_gw`, `bound_gv`, and their `Geometry`, `Options`, `Tuning`,
+`ExtractionTuning`, `CandidateSource`, `CurveInvariants`, `Error`) and `reference`'s errors;
+the stage submodules of both pipelines, and `reference::run_hkty`, are `pub(crate)`, so
+items only the tests use are `#[cfg(test)]`. `src/cone.rs` holds the *cone data*
 (`ConeData`: the Mori cone's inequalities and equations, and the Hilbert basis of each cone
 $K_T$, the curve classes in the Mori cone that only meet the divisors in $T$ negatively, for
 every $T$ of one or two divisors and, in a vex phase, the three divisors of every stratum) and
 its validation (`check_cone_data`), and the native cone computations,
 shared by both pipelines. Callers may still supply the Hilbert bases, computed with an
-external program such as Normaliz (`Options::hilbert_bases`, with the cone given by
+external program such as Normaliz (`Problem::hilbert_bases`, with the cone given by
 `MoriCone::Inequalities` or generators), and they are used as given. `src/cone/hull.rs`:
 `cone::facets` and `cone::rays` convert between generators and inequalities by the double
 description method, in `i128` with overflow checks (`TooLarge`), with a canonical output
@@ -267,7 +273,10 @@ keep. `src/modular/reference_tests.rs`
 compares $c_0$, $c_1$, $S_2$ and $I$ with the reference stages modulo the primes, curve by curve
 (a mismatch there pins a bug to a stage), and the GV invariants of `compute_gv` with those of
 `run_hkty` and the GW invariants of the two methods, which only agree on consistent geometries
-(not the toy threefold of `examples/` and the tests, where the methods give different results).
+(on others the reference's series inversion fails with `SeriesInversionError::Inconsistent`:
+a threefold's instanton corrections $I_t$ hold $C_t$ times the invariant at $C$, which it
+checks is the same for every $t$, while the modular pipeline only has their grading-weighted
+sum).
 
 The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
 (`src/reference.rs`), whose stages are submodules of `reference`:
@@ -296,7 +305,9 @@ The computation is a four-stage pipeline, orchestrated by `reference::run_hkty`
    instanton correction $t$ as $c_0^{-1}$ `vex[t]`.
 4. **`series_inversion`** — `invert_series` walks degrees in increasing order, extracting GV/GW
    invariants level by level; it keeps a sliding window of `previous_qn` levels whose size scales
-   with $h^{1,1}$.
+   with $h^{1,1}$. For a threefold it reads each invariant off the first $t$ with $C_t \ne 0$
+   and checks that every correction $I_t$ holds $C_t$ times it (`Inconsistent` otherwise),
+   which only an inconsistent geometry breaks.
 
 `misc::process_int_nums` preprocesses the intersection-number dict into the canonicalized dict, the
 set of relevant index pairs, and the index count. Threefolds and higher-dimensional CYs canonicalize
@@ -332,9 +343,10 @@ indices differently (the first index is a reference surface in the n-fold case).
   `Geometry` (`q` with one row per divisor,
   `intnums`, `nefpart` as divisor indices, and `ambient`: `Plain`, `Fan(cones)` or
   `Strata(list)`), a `MoriCone` (`Generators`, `Inequalities { hyperplanes, equations }` or
-  `FromFan`), a `Selection` (`MaxDeg`, `TargetPoints { points, max_deg }`, `MinPoints`,
-  `CurveClasses`) and an optional `grading_vector`, plus `Options` (`method`, `n_threads`,
-  `certify`, `low_memory`, `hilbert_bases`, and `tuning: modular::Tuning`). Every field has the name of the
+  `FromFan`) with the optional `hilbert_bases` of its cones $K_T$, a `Selection` (`MaxDeg`,
+  `TargetPoints { points, max_deg }`, `MinPoints`, `CurveClasses`) and an optional
+  `grading_vector`, plus `Options` (`method`, `n_threads`, `certify`, `low_memory`, and
+  `tuning: modular::Tuning`), none of which change the results. Every field has the name of the
   Python keyword and YAML key that set it, and every choice is an enum, so conflicting input
   cannot be built. `compute_gv`, `compute_gw` and the runtime-kind `compute` (returning
   `Computed::Gv` or `Computed::Gw`, for Python and the CLI) in `src/dispatch.rs` (a private
@@ -359,7 +371,7 @@ indices differently (the first index is a reference surface in the n-fold case).
   silently) and keeps only theirs, and picks the pipeline: `Auto` runs `modular` for
   everything but `MinPoints` and the reference for that; curve classes too wide for the modular keys are `Error::Unsupported`
   naming `method: reference`, never a silent fallback. `modular` takes its candidates from
-  `Options::hilbert_bases` (checked by `check_cone_data`) or from `cone::cone_data` of the
+  `Problem::hilbert_bases` (checked by `check_cone_data`) or from `cone::cone_data` of the
   inequalities, truncated at the maximum degree lowered to the targets'; the reference runs on
   `cone::hilbert_basis` of the inequalities, and checks the Hilbert bases but does not use them. Errors of the cone computations that come
   from the input (`NotPointed`, `NonpositiveDegree`) name the Mori cone's field or the grading
@@ -508,8 +520,8 @@ Python ints otherwise (malachite's `enable_pyo3`).
 
 `python/cygv/hkty.py` wraps it: `Problem` is a dataclass of the geometry and the Mori cone (`q`,
 `intnums` as a dict or `[i, j, k, value]` entries, `nefpart`, `fan`, `strata`, `generators`,
-`mori_hyperplanes`, `mori_equations`, `grading_vector`) whose `gv` and `gw` methods take the
-selection and the options as keywords; `compute_gv(q, intnums, **kwargs)` and `compute_gw` split
+`mori_hyperplanes`, `mori_equations`, `hilbert_bases`, `grading_vector`) whose `gv` and `gw`
+methods take the selection and the options as keywords; `compute_gv(q, intnums, **kwargs)` and `compute_gw` split
 their keywords between the two. The result, `Invariants`, is a `Sequence` of `(key, value)`
 pairs (the key a curve tuple, or `(curve, surface)` for an n-fold), built lazily from the
 read-only arrays `curves`, `surfaces`, `degrees` and `values`, with `kind`, `dimension`,
@@ -532,7 +544,7 @@ and is kept so that saved criterion baselines still match), and any argument aft
 not a flag filters on it. Adding a model or a degree means adding a row to `scenarios()`; nothing else has to
 change. Each row also names a `Pipeline`: the reference (`Method::Reference`, explicitly, since
 the default is `Auto`), or the modular one without or with the supplied cone data (the
-inequalities as the cone, and the Hilbert bases as `Options::hilbert_bases`), or in its
+inequalities as the cone, and the Hilbert bases as `Problem::hilbert_bases`), or in its
 low-memory mode without it. The modular
 ids end in `/modular`, `/modular-cones` or `/modular-lowmem` (the reference ones have no suffix, so that older
 baselines still match), so `cargo bench -- modular` runs only those. The modular scenarios go

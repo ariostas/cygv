@@ -6,37 +6,40 @@
 //! reimplements: the first version of PR #94 proposed it for this crate, PRs #95, #97, #100
 //! and #102 extended it, and it served as the oracle while this pipeline was written.
 //!
-//! The primitives the stages are built from are the arithmetic ([`field`]), the curve-class
-//! keys ([`key`]) and the tables keyed by them ([`table`]). A pass, i.e. the computation
-//! modulo a few primes, runs the stages in turn: the curve classes that carry period data
-//! ([`candidates`]), the fundamental period at each of them ([`period`]), the series that the
-//! invariants are extracted from ([`instanton`]), its coefficients in the basis of curves
-//! ([`extraction`]) and the invariants from those ([`multicover`]). [`compute_gv`] repeats
-//! passes with new primes until the lift of the residues ([`crt`]) is stable, and
-//! [`compute_gw`] derives the GW invariants from the result.
+//! The primitives the stages are built from are the arithmetic (`field`), the curve-class
+//! keys (`key`) and the tables keyed by them (`table`). A pass, i.e. the computation modulo a
+//! few primes, runs the stages in turn: the curve classes that carry period data
+//! (`candidates`), the fundamental period at each of them (`period`), the series that the
+//! invariants are extracted from (`instanton`), its coefficients in the basis of curves
+//! (`extraction`) and the invariants from those (`multicover`). [`compute_gv`] repeats
+//! passes with new primes until the lift of the residues (`crt`) is stable, and
+//! [`compute_gw`] derives the GW invariants from the result. The stages are private; this
+//! module's public items are the low-level entry points and their inputs, which take the
+//! cone data and the geometry as the pipeline reads them, for callers that want to skip the
+//! checks and conversions of [`crate::compute`].
 //!
 //! The entry points ([`crate::compute`] and the others) reach it through
 //! [`Method`](crate::Method). The candidates come either from the Hilbert bases of the cones
 //! of [`crate::cone`] (always, through the entry points) or from the enumeration of the
 //! semigroup of the generators. With [`Options::certify`] the results are proven by bounds
-//! computed over [`bound::BoundRing`]. The stages
+//! computed over upward-rounded bounds (`bound`). The stages
 //! run on the threads of a rayon pool that each run builds for itself (see
 //! [`Options::threads`]); the extraction, which dominates, applies the curves of each degree
-//! in parallel (see [`extraction::extract`]).
+//! in parallel.
 
-pub mod bound;
-pub mod candidates;
-pub mod crt;
-pub mod extraction;
-pub mod field;
-pub mod instanton;
-pub mod key;
-pub mod lattice;
-pub mod level;
-pub mod lightcone;
-pub mod multicover;
-pub mod period;
-pub mod table;
+pub(crate) mod bound;
+pub(crate) mod candidates;
+pub(crate) mod crt;
+pub(crate) mod extraction;
+pub(crate) mod field;
+pub(crate) mod instanton;
+pub(crate) mod key;
+pub(crate) mod lattice;
+pub(crate) mod level;
+pub(crate) mod lightcone;
+pub(crate) mod multicover;
+pub(crate) mod period;
+pub(crate) mod table;
 
 #[cfg(test)]
 mod reference_tests;
@@ -47,6 +50,7 @@ use bound::{Bound, BoundRing};
 pub use candidates::CandidateSource;
 use core::fmt;
 use crt::Residues;
+pub use extraction::Tuning as ExtractionTuning;
 use field::{LaneField, Ring};
 use key::{field_widths, Key, KeyError, KeyLayout, PackedKey, PackedLayout, Wide, Word};
 use lightcone::Lightcone;
@@ -82,7 +86,7 @@ pub enum Error {
     /// primes can hold.
     NotStable { primes: usize },
     /// A GV invariant of the degree given is the fraction given rather than an integer, as
-    /// the lift showed before it could be stable (see [`crt::Residues::fraction`]).
+    /// the lift showed before it could be stable (see `crt::Residues::fraction`).
     NotInteger { degree: u32, value: Rational },
     /// The certifier's bounds need more primes than [`Tuning::max_primes`].
     CertifyPrimes { needed: usize, allowed: usize },
@@ -167,13 +171,13 @@ impl From<KeyError> for Error {
 /// - In a vex phase of a threefold hypersurface, the strata (see [`Stratum`]): each one's three
 ///   divisors and its class contracted with the grading vector, $w \cdot d_S$, which is what
 ///   the curves of negative anticanonical degree that meet exactly those divisors negatively
-///   add to $S_2$ (see [`period`]).
+///   add to $S_2$ (see `period`).
 ///
 /// The kind of the Calabi-Yau also decides how the invariants are read off the instanton
-/// series (see [`multicover`]).
+/// series (see `multicover`).
 ///
 /// The curve classes may be in the coordinates of a basis of a sublattice of rank below
-/// $h^{1,1}$ instead (see [`lattice`] and [`Geometry::in_lattice`]). The charges then have two
+/// $h^{1,1}$ instead (see `lattice` and `Geometry::in_lattice`). The charges then have two
 /// sides: as functions on the curve classes, [`Geometry::q`] and [`Geometry::q0`], in those
 /// coordinates, and as divisor classes, [`Geometry::divisor_q`] and
 /// [`Geometry::divisor_q0`], in the $h^{1,1}$ coordinates of the forms and of the derivatives
@@ -250,7 +254,7 @@ impl Geometry {
 
     /// The same geometry with the curve classes in the coordinates of the reduced basis of
     /// `lattice`.
-    pub fn in_lattice(&self, lattice: &lattice::Lattice) -> Result<Self, Error> {
+    pub(crate) fn in_lattice(&self, lattice: &lattice::Lattice) -> Result<Self, Error> {
         if lattice.h11() != self.h11 || self.curves.is_some() {
             return Err(Error::DimensionMismatch);
         }
@@ -592,11 +596,11 @@ pub struct Tuning {
     /// wider keys.
     pub min_key_bits: u32,
     /// Whether to key the curve classes by their coordinates in a reduced basis of the
-    /// lattice they span, when it has a lower rank than $h^{1,1}$ (see [`lattice`]), which
+    /// lattice they span, when it has a lower rank than $h^{1,1}$ (see `lattice`), which
     /// takes far fewer bits on a face of the Mori cone.
     pub lattice: bool,
     /// How the extraction parallelizes.
-    pub extraction: extraction::Tuning,
+    pub extraction: ExtractionTuning,
 }
 
 impl Default for Tuning {
@@ -608,7 +612,7 @@ impl Default for Tuning {
             max_primes: 32,
             min_key_bits: 0,
             lattice: true,
-            extraction: extraction::Tuning::default(),
+            extraction: ExtractionTuning::default(),
         }
     }
 }
@@ -628,7 +632,7 @@ pub struct CurveInvariants<T = Integer> {
 /// out those where all of them vanish.
 ///
 /// With `targets`, only the curve classes in their backward lightcones are computed, i.e.
-/// those that some target minus the class leaves in the Mori cone (see [`lightcone`]), and
+/// those that some target minus the class leaves in the Mori cone (see `lightcone`), and
 /// `max_deg` is lowered to the largest degree of the targets.
 pub fn compute_gv(
     source: CandidateSource<'_>,
@@ -653,7 +657,7 @@ pub fn compute_gv(
 /// candidates of `source` give, in increasing order of degree and then curve class, leaving
 /// out those where all of them vanish, and restricted to the backward lightcones of `targets`
 /// as in [`compute_gv`]. They come from the GV invariants of [`compute_gv`], by
-/// [`multicover::gw_from_gv`].
+/// `multicover::gw_from_gv`.
 pub fn compute_gw(
     source: CandidateSource<'_>,
     grading_vector: &[i32],
@@ -683,7 +687,7 @@ pub fn compute_gw(
 /// certifier, in increasing order of degree and then key, leaving out the
 /// curves where they all vanish.
 ///
-/// The stages run once more, over [`BoundRing`], and every curve passes on to those of higher
+/// The stages run once more, over `BoundRing`, and every curve passes on to those of higher
 /// degree the values its `candidates` imply ($n_C = \deg(C) \sum_{n \mid C}
 /// \mathrm{GV}_{C/n} / n^3$ for a threefold, without the degree and with $n^2$ for an n-fold)
 /// rather than its own bounds, as cgv's majorant build does, so that the bounds do

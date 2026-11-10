@@ -145,6 +145,22 @@ fn parse(args: &Bound<'_, PyDict>) -> PyResult<(Problem, Options)> {
             ))
         }
     };
+    // Each cone as its divisors and the columns of its Hilbert basis.
+    type Bases = Vec<(Vec<usize>, Vec<Vec<i32>>)>;
+    let hilbert_bases: Option<Bases> = get(args, "hilbert_bases")?;
+    let hilbert_bases = hilbert_bases
+        .map(|bases| {
+            bases
+                .into_iter()
+                .map(|(divisors, basis)| {
+                    Ok(CandidateCone {
+                        divisors,
+                        hilbert_basis: to_matrix(basis, "hilbert_bases", h11)?,
+                    })
+                })
+                .collect::<PyResult<_>>()
+        })
+        .transpose()?;
     let max_deg: Option<u32> = get(args, "max_deg")?;
     let selection =
         match (
@@ -173,22 +189,6 @@ fn parse(args: &Bound<'_, PyDict>) -> PyResult<(Problem, Options)> {
             ))
         })?,
     };
-    // Each cone as its divisors and the columns of its Hilbert basis.
-    type Bases = Vec<(Vec<usize>, Vec<Vec<i32>>)>;
-    let hilbert_bases: Option<Bases> = get(args, "hilbert_bases")?;
-    let hilbert_bases = hilbert_bases
-        .map(|bases| {
-            bases
-                .into_iter()
-                .map(|(divisors, basis)| {
-                    Ok(CandidateCone {
-                        divisors,
-                        hilbert_basis: to_matrix(basis, "hilbert_bases", h11)?,
-                    })
-                })
-                .collect::<PyResult<_>>()
-        })
-        .transpose()?;
     let problem = Problem {
         geometry: Geometry {
             q,
@@ -197,6 +197,7 @@ fn parse(args: &Bound<'_, PyDict>) -> PyResult<(Problem, Options)> {
             ambient,
         },
         cone,
+        hilbert_bases,
         selection,
         grading_vector: get(args, "grading_vector")?,
     };
@@ -205,7 +206,6 @@ fn parse(args: &Bound<'_, PyDict>) -> PyResult<(Problem, Options)> {
         n_threads: get(args, "n_threads")?,
         certify: get(args, "certify")?.unwrap_or(false),
         low_memory: get(args, "low_memory")?.unwrap_or(false),
-        hilbert_bases,
         ..Options::default()
     };
     Ok((problem, options))
@@ -224,7 +224,7 @@ fn to_py_err(e: Error) -> PyErr {
                     | ModularError::NotInvertible
             )
             | Error::Reference(reference::Error::SeriesInversion(
-                SeriesInversionError::NonIntegerGVError
+                SeriesInversionError::NonIntegerGVError | SeriesInversionError::Inconsistent
             ))
     );
     if computation {

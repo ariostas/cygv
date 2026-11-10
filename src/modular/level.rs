@@ -441,6 +441,7 @@ impl<W: LevelWord> LevelLayout<W> {
 
     /// Writes the coordinates of the offset of degree `deg` whose hash is `h` into `coords`.
     #[inline]
+    #[cfg(test)]
     pub fn decode(&self, h: W, deg: u32, coords: &mut [i32]) {
         let y = h.wmul(W::MUL_INV).wsub(self.base);
         let mut rest = deg as i64;
@@ -570,6 +571,7 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
 
     /// The number of entries in use.
     #[inline]
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.used.len()
     }
@@ -605,6 +607,7 @@ impl<W: LevelWord, V: Copy + Default> LevelTable<W, V> {
 
     /// The value of hash `h`, if it has an entry.
     #[inline]
+    #[cfg(test)]
     pub fn get(&self, h: W) -> Option<&V> {
         if self.entries.is_empty() {
             return None;
@@ -744,11 +747,6 @@ impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -761,30 +759,6 @@ impl<W: LevelWord, V: Copy + Default> CompactTable<W, V> {
     #[inline]
     fn bucket(h: W, capacity: usize) -> usize {
         ((h.top(32) as u64 * capacity as u64) >> 32) as usize
-    }
-
-    /// The value of hash `h`, if it has an entry.
-    #[inline]
-    pub fn get_mut(&mut self, h: W) -> Option<&mut V> {
-        let n = self.entries.len();
-        if n == 0 {
-            return None;
-        }
-        let x = h.xor(self.marker).store();
-        let mut i = Self::bucket(h, n);
-        loop {
-            let k = self.entries[i].0;
-            if k == x {
-                return Some(&mut self.entries[i].1);
-            }
-            if k == W::Stored::default() {
-                return None;
-            }
-            i += 1;
-            if i == n {
-                i = 0;
-            }
-        }
     }
 
     /// The value of hash `h`, inserted as zero if it has no entry.

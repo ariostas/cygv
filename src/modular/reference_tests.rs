@@ -9,8 +9,9 @@
 //!
 //! End to end: [`compute_gv`] and `run_hkty` must give the same GV invariants, and the two
 //! methods of [`crate::compute`] the same GW invariants. This only holds for consistent
-//! geometries: on others the reference reads each invariant off the first nonzero coordinate
-//! of the curve, and the modular pipeline off the grading-weighted sum, which disagree.
+//! geometries: on others the reference finds that the instanton corrections disagree, which
+//! is an error, while the modular pipeline reads each invariant off their grading-weighted
+//! sum.
 
 use super::candidates::candidates_by_enumeration;
 use super::field::{primes, LaneField, Lanes};
@@ -444,11 +445,12 @@ fn test_p11222() {
     check(&p11222(10));
 }
 
-/// The toy threefold of `examples/threefold.yaml`, which is not a consistent geometry but
-/// has curves with one and two negative intersections.
+/// The toy threefold of `examples/threefold.yaml`, which has curves with one and two
+/// negative intersections, and the same with 5 for $\kappa_{111} = -5$, which is not a
+/// consistent geometry, on the stages only.
 #[test]
 fn test_toy_threefold() {
-    check(&Case {
+    let mut case = Case {
         name: "toy threefold",
         generators: DMatrix::from_column_slice(2, 2, &[0, -1, 1, 2]),
         grading_vector: vec![3, -1],
@@ -458,12 +460,17 @@ fn test_toy_threefold() {
             ((0, 0, 0), 2),
             ((0, 0, 1), 1),
             ((0, 1, 1), -1),
-            ((1, 1, 1), 5),
+            ((1, 1, 1), -5),
         ]),
         cy_kind: CYKind::Threefold,
         max_deg: 12,
         strata: Vec::new(),
-    });
+    };
+    check(&case);
+    check_gv(&case, &Options::default());
+    case.name = "inconsistent toy threefold";
+    case.intnums.insert((1, 1, 1), 5);
+    check(&case);
 }
 
 /// Loads one of the inputs that the command line interface reads.
@@ -771,7 +778,7 @@ fn test_cone_candidates() {
     let cone_data = ConeData {
         hyperplanes,
         equations,
-        cones: input.options.hilbert_bases.unwrap(),
+        cones: input.problem.hilbert_bases.unwrap(),
     };
     let w = &case.grading_vector;
     let geometry = Geometry::from_toric(&case.q, &[], &case.intnums, case.cy_kind, w).unwrap();
@@ -814,12 +821,12 @@ fn computed(
             },
         },
         cone,
+        hilbert_bases,
         selection,
         grading_vector: Some(case.grading_vector.clone()),
     };
     let options = crate::Options {
         method,
-        hilbert_bases,
         ..crate::Options::default()
     };
     let label = |curve: Vec<i32>, surface: Option<usize>| (curve, surface.unwrap_or(0));

@@ -6,7 +6,7 @@
 //! given or else the facets of the generators ([`crate::cone::facets`]) or of the fan's wall
 //! classes. The reference pipeline takes the Hilbert basis of its lattice points as its
 //! generators ([`crate::cone::hilbert_basis`]), and the modular one takes its candidates from
-//! the Hilbert bases of the cones $K_T$: those of [`Options::hilbert_bases`], or else computed
+//! the Hilbert bases of the cones $K_T$: those of [`Problem::hilbert_bases`], or else computed
 //! ([`crate::cone::cone_data`]).
 //!
 //! [`Method::Auto`] runs the modular pipeline for every selection but
@@ -299,7 +299,7 @@ fn compute_in(
                 _ => DMatrix::zeros(q.ncols(), 0),
             };
             let computed;
-            let cone_data = match &options.hilbert_bases {
+            let cone_data = match &problem.hilbert_bases {
                 Some(cones) => {
                     computed = check_hilbert_bases(
                         cones,
@@ -331,7 +331,7 @@ fn compute_in(
                     .iter()
                     .map(|c| c.hilbert_basis.ncols())
                     .sum::<usize>(),
-                if options.hilbert_bases.is_some() {
+                if problem.hilbert_bases.is_some() {
                     ", as given"
                 } else {
                     ""
@@ -358,7 +358,7 @@ fn compute_in(
             })?
         } else {
             // The reference does not use the Hilbert bases, but they are checked all the same.
-            if let Some(cones) = &options.hilbert_bases {
+            if let Some(cones) = &problem.hilbert_bases {
                 check_hilbert_bases(cones, &hyperplanes, &equations, q, None, &strata)?;
             }
             run_reference(

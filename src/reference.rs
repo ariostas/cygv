@@ -1,31 +1,32 @@
-//! The reference pipeline, a faithful implementation of the HKTY procedure.
+//! The reference pipeline, a faithful implementation of the HKTY procedure in exact
+//! rationals. It runs through the entry points ([`crate::compute`] and the others) with
+//! [`Method::Reference`](crate::Method::Reference); only its errors are public.
 
-pub mod factorial;
-pub mod fundamental_period;
-pub mod instanton;
-pub mod misc;
-pub mod polynomial;
-pub mod rational;
-pub mod semigroup;
-pub mod series_inversion;
+pub(crate) mod factorial;
+pub(crate) mod fundamental_period;
+pub(crate) mod instanton;
+pub(crate) mod misc;
+pub(crate) mod polynomial;
+pub(crate) mod rational;
+pub(crate) mod semigroup;
+pub(crate) mod series_inversion;
 
 use crate::{CYKind, InvariantKind, Stratum};
 use core::fmt;
-use fundamental_period::error::FundamentalPeriodError;
-use misc::error::MiscError;
 use nalgebra::{DMatrix, DVector, RowDVector};
-use polynomial::error::PolynomialError;
 use polynomial::{coefficient::PolynomialCoeff, properties::PolynomialProperties};
-use semigroup::error::SemigroupError;
 use semigroup::Semigroup;
-use series_inversion::error::SeriesInversionError;
 use std::collections::HashMap;
 use std::thread;
 
-#[doc(inline)]
-pub use rational::Rational;
+pub use fundamental_period::error::FundamentalPeriodError;
+pub use misc::error::MiscError;
+pub use polynomial::error::PolynomialError;
+pub(crate) use rational::Rational;
+pub use semigroup::error::SemigroupError;
+pub use series_inversion::error::SeriesInversionError;
 
-/// The errors of [`run_hkty`], by the stage that failed.
+/// The errors of the reference pipeline, by the stage that failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     Semigroup(SemigroupError),
@@ -53,7 +54,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// The invariants of each curve class and reference surface (0 for a threefold).
-pub type Invariants<T> = Vec<((DVector<i32>, usize), T)>;
+pub(crate) type Invariants<T> = Vec<((DVector<i32>, usize), T)>;
 
 /// Runs the HKTY procedure on the semigroup of `generators`, truncated by the first of
 /// `target_points`, `max_deg` and `min_points` that is given (or not at all, the generators
@@ -63,7 +64,7 @@ pub type Invariants<T> = Vec<((DVector<i32>, usize), T)>;
 /// The public entry points check the input before calling it; an inconsistent geometry is an
 /// error, from the stage that finds it.
 #[allow(clippy::too_many_arguments)]
-pub fn run_hkty<T>(
+pub(crate) fn run_hkty<T>(
     generators: DMatrix<i32>,
     grading_vector: RowDVector<i32>,
     invariant_kind: InvariantKind,

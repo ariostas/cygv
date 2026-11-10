@@ -167,13 +167,9 @@ impl<K: Key> Residues<K> {
 
     /// The number of curves so far.
     #[inline]
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.keys.len()
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
     }
 
     /// Adds the result of a pass, i.e. the invariants modulo the primes of `ring`.

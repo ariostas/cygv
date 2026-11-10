@@ -23,6 +23,7 @@ fn problem(
             ..Geometry::default()
         },
         cone: MoriCone::Generators(generators.clone()),
+        hilbert_bases: None,
         selection,
         grading_vector: Some(grading_vector.to_vec()),
     }
@@ -78,6 +79,28 @@ fn test_threefold() {
     assert_eq!(gv.report.method, Method::Reference);
     assert!(gv.entries.iter().all(|e| e.surface.is_none()));
     compute_gw(&problem, &Options::default()).unwrap();
+
+    // With 5 for -5 the geometry is inconsistent: the instanton corrections disagree, which
+    // the reference finds, for GW invariants too, and the modular pipeline gives invariants
+    // that are not integers.
+    let mut wrong = problem.clone();
+    wrong.geometry.intnums.insert((1, 1, 1), 5);
+    wrong.selection = Selection::MaxDeg(10);
+    let reference = method(Method::Reference);
+    for res in [
+        compute_gv(&wrong, &reference).map(drop),
+        compute_gw(&wrong, &reference).map(drop),
+    ] {
+        assert!(
+            matches!(&res, Err(e @ Error::Reference(_)) if e.to_string().contains("do not agree")),
+            "{res:?}"
+        );
+    }
+    let res = compute_gv(&wrong, &method(Method::Modular));
+    assert!(
+        matches!(&res, Err(e @ Error::Modular(_)) if e.to_string().contains("not an integer")),
+        "{res:?}"
+    );
 }
 
 #[test]

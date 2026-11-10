@@ -109,6 +109,13 @@ impl Selection {
 pub struct Problem {
     pub geometry: Geometry,
     pub cone: MoriCone,
+    /// The Hilbert bases of the cones $K_T$ in the Mori cone (see
+    /// [`crate::cone::ConeData`]), computed by an external program such as Normaliz, which
+    /// the modular pipeline then uses instead of computing them (the reference pipeline only
+    /// checks them). They must list every set $T$ of one or two divisors, and in a vex phase
+    /// the divisors of every stratum, and are trusted: an element missing from them drops
+    /// curve classes.
+    pub hilbert_bases: Option<Vec<CandidateCone>>,
     pub selection: Selection,
     /// The degree of a curve class $C$ is $g \cdot C$, which must be positive on the nonzero
     /// points of the Mori cone. By default, the primitive sum of the inequalities of the cone,
@@ -130,12 +137,6 @@ pub struct Options {
     /// that do not fit otherwise: about a third of the memory for about two and a half times
     /// the time. Only the modular pipeline has such a mode; the reference ignores it.
     pub low_memory: bool,
-    /// The Hilbert bases of the cones $K_T$ (see [`crate::cone::ConeData`]), computed by an
-    /// external program such as Normaliz, which the modular pipeline then uses instead of
-    /// computing them (the reference pipeline only checks them). They must list every set
-    /// $T$ of one or two divisors, and in a vex phase the divisors of every stratum, and are
-    /// trusted: an element missing from them drops curve classes.
-    pub hilbert_bases: Option<Vec<CandidateCone>>,
     /// The tuning of the modular pipeline.
     pub tuning: modular::Tuning,
     /// A handle that interrupts the computation from another thread: it then stops at its
@@ -159,7 +160,7 @@ pub(crate) fn input_err(field: &'static str, reason: impl Into<String>) -> Error
     }
 }
 
-/// Checks the Hilbert bases of [`Options::hilbert_bases`] against the Mori cone, the charges,
+/// Checks the Hilbert bases of [`Problem::hilbert_bases`] against the Mori cone, the charges,
 /// the generators (if the cone is given by them) and the strata.
 pub(crate) fn check_hilbert_bases(
     bases: &[CandidateCone],
@@ -427,7 +428,7 @@ impl Problem {
                     .to_owned(),
             ));
         }
-        if let Some(bases) = &options.hilbert_bases {
+        if let Some(bases) = &self.hilbert_bases {
             if bases
                 .iter()
                 .any(|c| c.hilbert_basis.ncols() > 0 && c.hilbert_basis.nrows() != h11)

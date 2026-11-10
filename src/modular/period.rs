@@ -70,13 +70,9 @@ impl<E: Copy + Default> Tables<E> {
 
     /// The number of entries of each table.
     #[inline]
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.fact.len()
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.fact.is_empty()
     }
 }
 

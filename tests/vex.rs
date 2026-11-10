@@ -53,6 +53,7 @@ impl Phase {
                 },
             },
             cone: MoriCone::Generators(columns(self.generators)),
+            hilbert_bases: None,
             selection: Selection::MaxDeg(max_deg),
             grading_vector: Some(self.grading_vector.to_vec()),
         };

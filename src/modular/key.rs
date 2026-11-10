@@ -65,6 +65,7 @@ pub trait KeyLayout: Send + Sync {
     fn unpack(&self, key: Self::Key, coords: &mut [i32]);
 
     /// A key that no curve class packs to, for marking empty table entries.
+    #[cfg(test)]
     fn sentinel(&self) -> Self::Key;
 }
 
@@ -176,6 +177,7 @@ pub trait Word:
     fn low(self) -> u64;
 
     /// $2^{\text{BITS} - 1}$.
+    #[cfg(test)]
     fn top() -> Self;
 
     /// A hash, for picking a slot in a table.
@@ -233,6 +235,7 @@ impl Word for u128 {
     }
 
     #[inline]
+    #[cfg(test)]
     fn top() -> Self {
         1 << 127
     }
@@ -350,6 +353,7 @@ impl<const N: usize> Word for Wide<N> {
     }
 
     #[inline]
+    #[cfg(test)]
     fn top() -> Self {
         let mut w = [0; N];
         w[N - 1] = 1 << 63;
@@ -450,11 +454,13 @@ impl<W: Word> PackedLayout<W> {
     }
 
     /// The width of each field in bits.
+    #[cfg(test)]
     pub fn widths(&self) -> &[u32] {
         &self.widths
     }
 
     /// The width of all fields together in bits.
+    #[cfg(test)]
     pub fn bits(&self) -> u32 {
         self.widths.iter().sum()
     }
@@ -504,6 +510,7 @@ impl<W: Word> KeyLayout for PackedLayout<W> {
         }
     }
 
+    #[cfg(test)]
     fn sentinel(&self) -> PackedKey<W> {
         PackedKey(W::top())
     }

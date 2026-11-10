@@ -100,8 +100,7 @@ const FOLD_PREFETCH: usize = 8;
 /// and its degree, it writes the values over them.
 pub type Source<'a, E> = &'a (dyn Fn(&[i32], u32, &mut [E]) + Sync);
 
-/// When the extraction applies a layer level-synchronously rather than curve by curve (see
-/// [`extract`]). The defaults were tuned on a machine with four cores and hyperthreading.
+/// When the extraction applies a layer level-synchronously rather than curve by curve. The defaults were tuned on a machine with four cores and hyperthreading.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tuning {
     /// Layers with fewer curves than this per thread are applied level-synchronously when
@@ -115,7 +114,7 @@ pub struct Tuning {
     /// need, since the geometries they can afford fit 64 bits.
     pub wide_levels: bool,
     /// The number of rows of the tree along which an extraction along rows shares the
-    /// exponentials of the curves (see [`extract`]); zero builds every exponential curve by
+    /// exponentials of the curves (see `extract_into`); zero builds every exponential curve by
     /// curve instead. `None` chooses the depth from the terms of the rows for a series with
     /// one value per term, and builds the exponentials curve by curve for one with several,
     /// which the tree extracts one component at a time, more slowly than the curves do.
@@ -627,6 +626,7 @@ fn group_end<K: Key>(layer: &[(K, u32)], start: usize, upto: &[usize], max_deg: 
 }
 
 /// The result of an extraction.
+#[cfg(test)]
 type Extracted<K, E> = Result<SparsePoly<K, E>, Error>;
 
 /// Where an extraction puts its result: the terms as they are final, a series at a time, each
@@ -857,6 +857,7 @@ impl<R: Ring, L: KeyLayout, W: LevelWord> LayerCtx<'_, R, L, W> {
 /// 128 bits otherwise, and for keys wider than 128 bits into a word as wide as theirs if that
 /// is not enough either ([`Key::Level`]; [`Tuning::wide_levels`] forces the widest).
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub fn extract<R: Ring, L: KeyLayout>(
     ring: &R,
     layout: &L,
