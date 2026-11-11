@@ -226,7 +226,12 @@ with $E_r = \exp \beta_r$, and `extraction/tree.rs` shares the powers of
 the rows of the most terms between the curves: a tree of the curves by their exponents on
 those rows, by default at most two of them, whose nodes are multiplied by the power of their
 row once for all of their curves, relaxed in the degree, while each curve builds the
-exponential of the other rows as before; the pass takes $\beta$ along the rows whenever the
+exponential of the other rows, for an exact ring as a chain (`Chain`): the few terms of
+$\beta$ on several of those rows by the Euler recurrence, then a product in place by the
+power of each row of the terms on it alone, computed once per layer for the curves that
+need it and shared by the threads (1.06–1.12x on 8 threads of an M1 Max, 1.2x on one, 1.4–1.7x
+in the low-memory mode, whose leaf windows build the exponentials again; the bound ring keeps
+the recurrence, whose order is fixed); the pass takes $\beta$ along the rows whenever the
 tree is used, which `extraction::Tuning::tree_depth` and `uses_tree` decide: by default for a
 series of one component, while an n-fold's several components go curve by curve, the tree
 taking them one at a time; the shards evict the final terms after every layer, most of them

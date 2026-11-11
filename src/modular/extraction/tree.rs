@@ -13,7 +13,10 @@
 //! is $\sum_m E_{r_{j+1}}^m N_m$ over its children $N_m$, and the root holds the series. Each
 //! curve builds $\exp(L'_C)$ as [`extract`] builds its exponential, but adds $n_C\, z^C$ times
 //! it to its leaf, and every node with $m \ne 0$ is multiplied by the power $E^m$ of its row
-//! once, for all of its curves, instead of once per curve.
+//! once, for all of its curves, instead of once per curve. For an exact ring, the curves build
+//! $\exp(L'_C)$ as a [`Chain`] instead: most terms of $\beta$ along the other rows are on one
+//! of them alone, so the exponential is that of the few others times a power of each row,
+//! which the threads share.
 //!
 //! The products are relaxed. Every term of a power but the first has positive degree, so the
 //! terms of a node of degree $e$ are final once the curves of degree at most $e$ are applied,
@@ -78,11 +81,47 @@ struct Power<W, E> {
     groups: Vec<(u32, usize, usize)>,
 }
 
-/// A power, by the depth of the node whose row it is of, less one, and its exponent.
+/// A power, by the depth of the node whose row it is of, less one, and its exponent; or for
+/// the powers of a [`Chain`], by the index of its row there.
 type PowerKey = (usize, i64);
+
+/// The power $E^m$ of the series `b` of a row, whose terms hash to `h`, up to degree `top`.
+#[allow(clippy::too_many_arguments)]
+fn row_power<R: Ring, K: Key, W: LevelWord>(
+    ring: &R,
+    marker: W,
+    (b, h): &RowSeries<K, W, R::Elem>,
+    m: i64,
+    top: u32,
+    ints: &[R::Elem],
+    inv: &[R::Elem],
+) -> Power<W, R::Elem> {
+    let mut p = Power {
+        hashes: Vec::new(),
+        vals: Vec::new(),
+        groups: Vec::new(),
+    };
+    let mut ws = ExpWorkspace::new(marker, top);
+    ws.exp(ring, &[m as i32], b, h, None, ints, inv, top, |h, e, f| {
+        match p.groups.last_mut() {
+            Some(g) if g.0 == e => g.2 += 1,
+            _ => p.groups.push((e, p.hashes.len(), p.hashes.len() + 1)),
+        }
+        p.hashes.push(h);
+        p.vals.push(f);
+    });
+    p
+}
+
+/// The powers of the rows of a [`Chain`] that the curves applied so far needed, by the index
+/// of the row there and the exponent, each with the degree it goes up to.
+type ChainPowers<W, E> = HashMap<PowerKey, (u32, Power<W, E>)>;
 
 /// The series of a row of the tree, with the hashes of its terms.
 type RowSeries<K, W, E> = (SparsePoly<K, E>, Vec<W>);
+
+/// A row of a [`Chain`], by its index among the rows outside the tree, with its series.
+type ChainRow<K, W, E> = (usize, RowSeries<K, W, E>);
 
 /// A worker thread, behind a lock that only its thread takes, but when the terms it kept are
 /// added to the leaves.
@@ -228,6 +267,8 @@ struct TreeWorker<K, W: LevelWord, E> {
     out: Vec<OutBuf<K, E>>,
     /// One buffer per part of a sink.
     bufs: Vec<Vec<(W, E)>>,
+    /// The terms of the mixed part of the exponential of a curve, for the [`Chain`].
+    mixed: Vec<(W, u32, E)>,
 }
 
 /// The tables of the root for one of the top degrees, which no power reaches beyond, so that
@@ -489,6 +530,27 @@ struct TreeRows<K, W, E> {
     window: Option<u32>,
     /// [`Tuning::sinks`].
     sinks: bool,
+    /// How the curves build their exponentials along the other rows, for an exact ring; by the
+    /// Euler recurrence over `rest_beta` otherwise.
+    chain: Option<Chain<K, W, E>>,
+}
+
+/// The exponential of a curve along the rows outside the tree as a chain of products by powers
+/// of single rows. Each term of $\beta$ along those rows with one negative intersection is on
+/// one row $r$ only, so with $\beta'_r$ those of row $r$ and $\mu$ the others (the terms with
+/// none, a few dozen), $\exp(L'_C) = \exp(C \cdot \mu) \prod_r \exp(\beta'_r)^{m_r(C)}$. A
+/// curve builds the first factor by the Euler recurrence and multiplies it in place by the
+/// powers, computed once per row and exponent for all threads ([`chain_powers`]): on `h11_8`
+/// at degree 24 that takes the 270 M pairs of the recurrence to 30 M and 72 M of products. The
+/// products are regrouped sums, so a ring that is not exact keeps the recurrence, whose order
+/// is fixed.
+struct Chain<K, W, E> {
+    mixed: SparsePoly<K, E>,
+    mixed_hashes: Vec<W>,
+    /// The rows with terms of their own, as indices into the rows outside the tree, with
+    /// those terms, the rows of the fewest terms first.
+    single: Vec<ChainRow<K, W, E>>,
+    marker: W,
 }
 
 /// [`extract_tree`] with the classes hashed by `level`: the series one component at a time.
@@ -548,6 +610,11 @@ fn tree_with<R: Ring, L: KeyLayout, W: LevelWord>(
                 rest_hashes.push(hash);
             }
         }
+        let chain = if R::EXACT {
+            chain(ring, &rest_beta, &rest_hashes, level.marker())
+        } else {
+            None
+        };
         TreeRows {
             tree,
             row_series,
@@ -558,6 +625,7 @@ fn tree_with<R: Ring, L: KeyLayout, W: LevelWord>(
             delta: beta.degs().first().map_or(1, |&d| d.max(1)),
             window: tuning.leaf_window,
             sinks: tuning.sinks,
+            chain,
         }
     };
     // The tree only needs what it took.
@@ -599,6 +667,198 @@ fn tree_with<R: Ring, L: KeyLayout, W: LevelWord>(
     }
     out(map.take());
     Ok(())
+}
+
+/// The [`Chain`] of `beta` along the rows outside the tree, whose terms hash to `hashes`, if
+/// some of its terms are on one row only.
+fn chain<R: Ring, K: Key, W: LevelWord>(
+    ring: &R,
+    beta: &SparsePoly<K, R::Elem>,
+    hashes: &[W],
+    marker: W,
+) -> Option<Chain<K, W, R::Elem>> {
+    let nr = beta.width();
+    let mut mixed = SparsePoly::new(nr);
+    let mut mixed_hashes = Vec::new();
+    let mut single: Vec<ChainRow<K, W, R::Elem>> = (0..nr)
+        .map(|r| (r, (SparsePoly::new(1), Vec::new())))
+        .collect();
+    for (u, &h) in hashes.iter().enumerate() {
+        let vals = beta.values(u);
+        let mut nz = (0..nr).filter(|&r| !ring.is_zero(vals[r]));
+        match (nz.next(), nz.next()) {
+            (Some(r), None) => {
+                single[r]
+                    .1
+                     .0
+                    .push(beta.keys()[u], beta.degs()[u], &[vals[r]]);
+                single[r].1 .1.push(h);
+            }
+            _ => {
+                mixed.push(beta.keys()[u], beta.degs()[u], vals);
+                mixed_hashes.push(h);
+            }
+        }
+    }
+    single.retain(|(_, (b, _))| !b.is_empty());
+    if single.is_empty() {
+        return None;
+    }
+    single.sort_by_key(|(_, (b, _))| b.len());
+    Some(Chain {
+        mixed,
+        mixed_hashes,
+        single,
+        marker,
+    })
+}
+
+/// Adds to `powers` those that the exponentials of `curves` up to degree `hi` need, or
+/// extends those that do not go far enough. A power $E^m$ is only needed by curves of degree
+/// about $|m|$ at least, whose exponentials go that much less far, so that each goes as far
+/// as its curves need, and the threads share one.
+#[allow(clippy::too_many_arguments)]
+fn chain_powers<R: Ring, L: KeyLayout, W: LevelWord>(
+    ring: &R,
+    layout: &L,
+    chain: &Chain<L::Key, W, R::Elem>,
+    rows: &[Vec<i32>],
+    curves: &[TreeCurve<L::Key, R::Elem>],
+    hi: u32,
+    ints: &[R::Elem],
+    inv: &[R::Elem],
+    powers: &mut ChainPowers<W, R::Elem>,
+) {
+    let needed: HashMap<PowerKey, u32> = curves
+        .par_iter()
+        .fold(
+            || (vec![0; layout.dim()], HashMap::new()),
+            |(mut c, mut needed), t| {
+                if t.deg < hi {
+                    layout.unpack(t.key, &mut c);
+                    for (i, (r, (b, _))) in chain.single.iter().enumerate() {
+                        let m = crate::modular::dot(&c, &rows[*r]);
+                        let top = hi - t.deg;
+                        if m != 0 && b.degs()[0] <= top {
+                            let x = needed.entry((i, m)).or_insert(0);
+                            *x = top.max(*x);
+                        }
+                    }
+                }
+                (c, needed)
+            },
+        )
+        .map(|(_, needed)| needed)
+        .reduce(HashMap::new, |mut a, b| {
+            for (k, top) in b {
+                let x = a.entry(k).or_insert(0);
+                *x = top.max(*x);
+            }
+            a
+        });
+    let missing: Vec<(PowerKey, u32)> = needed
+        .into_iter()
+        .filter(|(k, top)| powers.get(k).is_none_or(|p| p.0 < *top))
+        .collect();
+    let computed: Vec<_> = missing
+        .into_par_iter()
+        .with_max_len(1)
+        .map(|((i, m), top)| {
+            let p = row_power(ring, chain.marker, &chain.single[i].1, m, top, ints, inv);
+            ((i, m), (top, p))
+        })
+        .collect();
+    powers.extend(computed);
+}
+
+/// Calls `emit(h, e, f)` for every nonzero term of positive degree `e` up to `top` of the
+/// exponential of `curve` along `rows`, the rows outside the tree, in order of degree, as
+/// [`ExpWorkspace::exp`] does, but by `chain`.
+#[allow(clippy::too_many_arguments)]
+fn chain_exp<R: Ring, K: Key, W: LevelWord>(
+    ring: &R,
+    chain: &Chain<K, W, R::Elem>,
+    rows: &[Vec<i32>],
+    ws: &mut ExpWorkspace<W, R::Elem>,
+    powers: &ChainPowers<W, R::Elem>,
+    mixed: &mut Vec<(W, u32, R::Elem)>,
+    curve: &[i32],
+    ints: &[R::Elem],
+    inv: &[R::Elem],
+    top: u32,
+    mut emit: impl FnMut(W, u32, R::Elem),
+) {
+    mixed.clear();
+    ws.exp(
+        ring,
+        curve,
+        &chain.mixed,
+        &chain.mixed_hashes,
+        Some(rows),
+        ints,
+        inv,
+        top,
+        |h, e, f| mixed.push((h, e, f)),
+    );
+    // The recurrence leaves the levels empty; they take the mixed part, then the products.
+    let levels = &mut ws.levels;
+    *levels[0].get_or_insert(W::default()) = ring.one();
+    for &(h, e, f) in mixed.iter() {
+        *levels[e as usize].get_or_insert(h) = f;
+    }
+    for (i, (r, series)) in chain.single.iter().enumerate() {
+        let m = crate::modular::dot(curve, &rows[*r]);
+        if m == 0 || series.0.degs()[0] > top {
+            continue;
+        }
+        // Computed by `chain_powers` up to at least `top`.
+        let p = &powers[&(i, m)].1;
+        // In place, from the top down: every term of the power but the first, 1, has positive
+        // degree, so each level is read before anything is added to it.
+        for e in (0..top).rev() {
+            let (below, above) = levels.split_at_mut(e as usize + 1);
+            let src = &below[e as usize];
+            if src.is_empty() {
+                continue;
+            }
+            for &(g, j0, j1) in &p.groups {
+                if g > top - e {
+                    break;
+                }
+                let target = &mut above[g as usize - 1];
+                let (hs, vs) = (&p.hashes[j0..j1], &p.vals[j0..j1]);
+                for (h, f) in src.iter() {
+                    if ring.is_zero(f) {
+                        continue;
+                    }
+                    for (j, (&hu, &lu)) in hs.iter().zip(vs).enumerate() {
+                        if let Some(&hp) = hs.get(j + PREFETCH) {
+                            target.prefetch(h.wadd(hp));
+                        }
+                        ring.fma(target.get_or_insert(h.wadd(hu)), lu, f);
+                    }
+                }
+            }
+        }
+    }
+    for e in 0..=top {
+        let level = &mut levels[e as usize];
+        if level.is_empty() {
+            continue;
+        }
+        if e > 0 {
+            for (h, f) in level.iter() {
+                if !ring.is_zero(f) {
+                    emit(h, e, f);
+                }
+            }
+        }
+        if level.capacity() > LEVEL_KEEP {
+            level.release();
+        } else {
+            level.clear();
+        }
+    }
 }
 
 /// The rows of the tree for `beta` along `rows`, those of the most terms up to `max_deg` first:
@@ -670,24 +930,8 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
     let (depth, delta) = (tree.len(), *delta);
 
     // The power $E_j^m$ of the row of depth j + 1, up to degree `top`.
-    let power = |j: usize, m: i64, top: u32| {
-        let mut p = Power {
-            hashes: Vec::new(),
-            vals: Vec::new(),
-            groups: Vec::new(),
-        };
-        let (b, h) = &row_series[j];
-        let mut ws = ExpWorkspace::new(marker, top);
-        ws.exp(ring, &[m as i32], b, h, None, &ints, inv, top, |h, e, f| {
-            match p.groups.last_mut() {
-                Some(g) if g.0 == e => g.2 += 1,
-                _ => p.groups.push((e, p.hashes.len(), p.hashes.len() + 1)),
-            }
-            p.hashes.push(h);
-            p.vals.push(f);
-        });
-        p
-    };
+    let power =
+        |j: usize, m: i64, top: u32| row_power(ring, marker, &row_series[j], m, top, &ints, inv);
     let mut powers: HashMap<PowerKey, Power<W, R::Elem>> = HashMap::new();
 
     let threads = rayon::current_num_threads();
@@ -705,6 +949,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
                 filled: Vec::new(),
                 out: (0..n_shards).map(|_| OutBuf::new(n_shards)).collect(),
                 bufs: Vec::new(),
+                mixed: Vec::new(),
             })
         })
         .collect();
@@ -751,6 +996,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
         })
         .collect();
     let mut stored: Vec<TreeCurve<L::Key, R::Elem>> = Vec::new();
+    let mut chain_powers: ChainPowers<W, R::Elem> = HashMap::new();
     let mut d = 1;
     while d <= max_deg {
         crate::interrupt::check(Error::Interrupted)?;
@@ -774,6 +1020,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
                 (root_from, &sinks),
                 threads,
                 &mut active,
+                &mut chain_powers,
             );
             if win_end > max_deg {
                 stored = Vec::new();
@@ -961,6 +1208,7 @@ fn tree_in<R: Ring, L: KeyLayout, W: LevelWord>(
             (root_from, &sinks),
             threads,
             &mut active,
+            &mut chain_powers,
         );
         if win_end <= max_deg {
             stored.reserve_exact(layer.len());
@@ -1238,11 +1486,26 @@ fn push_exps<R: Ring, L: KeyLayout, W: LevelWord>(
     sinks: (u32, &[Sink<W, R::Elem>]),
     threads: usize,
     active: &mut [Vec<usize>],
+    powers: &mut ChainPowers<W, R::Elem>,
 ) {
+    if let Some(chain) = &tree_rows.chain {
+        chain_powers(
+            ring,
+            layout,
+            chain,
+            &tree_rows.rest_rows,
+            curves,
+            hi,
+            ints,
+            inv,
+            powers,
+        );
+    }
+    let powers = &*powers;
     if R::EXACT {
         push_group(
             ring, layout, tree_rows, ints, inv, nodes, workers, curves, lo, hi, sinks, threads,
-            active,
+            active, powers,
         );
         release_terms(workers);
         return;
@@ -1268,6 +1531,7 @@ fn push_exps<R: Ring, L: KeyLayout, W: LevelWord>(
             sinks,
             threads,
             active,
+            powers,
         );
         let n = end - start;
         size = (KEEP_TERMS * n / kept.max(1))
@@ -1307,6 +1571,7 @@ fn push_group<R: Ring, L: KeyLayout, W: LevelWord>(
     sinks: (u32, &[Sink<W, R::Elem>]),
     threads: usize,
     active: &mut [Vec<usize>],
+    powers: &ChainPowers<W, R::Elem>,
 ) -> usize {
     let apply = |i: usize| {
         let t = &curves[i];
@@ -1322,26 +1587,43 @@ fn push_group<R: Ring, L: KeyLayout, W: LevelWord>(
             curves: kept,
             filled,
             bufs,
+            mixed,
             ..
         } = &mut *worker;
         layout.unpack(t.key, curve);
         let hash = tree_rows.level.hash(curve);
         let start = terms.len();
-        ws.exp(
-            ring,
-            curve,
-            &tree_rows.rest_beta,
-            &tree_rows.rest_hashes,
-            Some(&tree_rows.rest_rows),
-            ints,
-            inv,
-            hi - t.deg,
-            |h, e, f| {
-                if t.deg + e >= lo {
-                    terms.push((hash.wadd(h), t.deg + e, ring.mul(t.val, f)));
-                }
-            },
-        );
+        let emit = |h: W, e: u32, f: R::Elem| {
+            if t.deg + e >= lo {
+                terms.push((hash.wadd(h), t.deg + e, ring.mul(t.val, f)));
+            }
+        };
+        match &tree_rows.chain {
+            Some(chain) => chain_exp(
+                ring,
+                chain,
+                &tree_rows.rest_rows,
+                ws,
+                powers,
+                mixed,
+                curve,
+                ints,
+                inv,
+                hi - t.deg,
+                emit,
+            ),
+            None => ws.exp(
+                ring,
+                curve,
+                &tree_rows.rest_beta,
+                &tree_rows.rest_hashes,
+                Some(&tree_rows.rest_rows),
+                ints,
+                inv,
+                hi - t.deg,
+                emit,
+            ),
+        }
         if R::EXACT {
             add_terms(
                 ring,
