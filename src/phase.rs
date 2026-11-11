@@ -461,28 +461,6 @@ impl Fan {
         }
     }
 
-    /// The first class of a wall, primitive, that is outside the cone of the inequalities
-    /// `hyperplanes` ($h \cdot C \ge 0$) and `equations` ($e \cdot C = 0$), one per column,
-    /// or `None` if the cone contains the Mori cone. The check of a Mori cone given with the
-    /// fan, without computing the fan's: a cone that misses a wall misses curves.
-    pub fn wall_outside(
-        &self,
-        hyperplanes: &DMatrix<i32>,
-        equations: &DMatrix<i32>,
-    ) -> Result<Option<Vec<i32>>, FanError> {
-        let dot = |a: &[i32], b: &[i32]| -> i64 {
-            a.iter().zip(b).map(|(&x, &y)| x as i64 * y as i64).sum()
-        };
-        let classes = self.wall_classes()?;
-        let outside = columns(&classes)
-            .find(|c| {
-                columns(hyperplanes).any(|h| dot(h, c) < 0)
-                    || columns(equations).any(|e| dot(e, c) != 0)
-            })
-            .map(<[i32]>::to_vec);
-        Ok(outside)
-    }
-
     /// The strata of the vex 3-cones, sorted by their divisors; none in a non-vex phase. The
     /// vex faces are checked to be 3-cones.
     pub fn strata(&self) -> Result<Vec<Stratum>, FanError> {

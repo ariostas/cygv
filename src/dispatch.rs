@@ -268,30 +268,12 @@ fn compute_in(
             MoriCone::FromFan => ", from the fan",
         }
     );
-    // A Mori cone given with the fan, used as given, must contain the fan's.
-    if let (Some(fan), MoriCone::Generators(_) | MoriCone::Inequalities { .. }) =
-        (&fan, &problem.cone)
-    {
-        if let Some(c) = fan
-            .wall_outside(&hyperplanes, &equations)
-            .map_err(fan_err("fan"))?
-        {
-            return Err(input_err(
-                cone_field(&problem.cone),
-                format!(
-                    "the Mori cone does not contain the curve class {c:?} of a wall of the \
-                     fan; leave it out to derive it from the fan"
-                ),
-            ));
-        }
-    }
-    // Without a fan, which settles it, the cone must at least contain the classes that meet
-    // every divisor nonnegatively. Only a cone given by generators has the equations of its
-    // span at hand (from its facets): inequalities can imply equations, as h and -h do.
-    if fan.is_none()
-        && geometry.nefpart.is_empty()
-        && matches!(problem.cone, MoriCone::Generators(_))
-    {
+    // A cone given as it is must at least contain the classes that meet every divisor
+    // nonnegatively. With a fan it need not contain the fan's walls: CYTools' cone, shared by
+    // the phases, leaves out those that are not curves of the CY. Only a cone given by
+    // generators has the equations of its span at hand (from its facets): inequalities can
+    // imply equations, as h and -h do.
+    if geometry.nefpart.is_empty() && matches!(problem.cone, MoriCone::Generators(_)) {
         if let Some(c) = outside_class(q, &hyperplanes, &equations)? {
             return Err(input_err(
                 cone_field(&problem.cone),

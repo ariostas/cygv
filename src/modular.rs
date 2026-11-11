@@ -155,8 +155,7 @@ impl fmt::Display for Error {
             Self::Inconsistent { degree, curve } => write!(
                 f,
                 "the instanton corrections do not agree on the invariant of the curve class \
-                 {curve:?} (of degree {degree}), so the input is inconsistent; \
-                 {NON_INTEGER_CAUSES}"
+                 {curve:?} (of degree {degree}); {NON_INTEGER_CAUSES}"
             ),
             Self::Interrupted => write!(f, "the computation was interrupted"),
         }

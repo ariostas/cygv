@@ -1210,7 +1210,8 @@ fn test_compute_from_fan() {
     let mut generators = problem.clone();
     generators.cone = MoriCone::Generators(DMatrix::from_row_slice(2, 2, &[0, 1, 1, -1]));
     assert_eq!(gv(&generators, Method::Auto).unwrap(), gv_auto);
-    // A cone given with the fan must contain the walls, here not (1, -1).
+    // A cone given with the fan need not contain its walls (CYTools' cone leaves out those
+    // that are not curves of the CY), but one that misses a curve, here (1, -1), fails.
     for cone in [
         MoriCone::Generators(DMatrix::from_row_slice(2, 2, &[1, -1, 0, 1])),
         MoriCone::Inequalities {
@@ -1221,10 +1222,7 @@ fn test_compute_from_fan() {
         let mut wrong = problem.clone();
         wrong.cone = cone;
         for m in [Method::Auto, Method::Reference] {
-            assert!(matches!(
-                field(gv(&wrong, m)),
-                "generators" | "mori_hyperplanes"
-            ));
+            assert!(gv(&wrong, m).is_err());
         }
     }
     // Target points are checked to be in the Mori cone.

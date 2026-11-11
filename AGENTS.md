@@ -385,12 +385,13 @@ indices differently (the first index is a reference surface in the n-fold case).
   certify in a vex phase — and returns `Error::Input { field, reason }` naming the field
   (`Error::Unsupported`, `Error::MoriCone`, `Error::Modular`, `Error::Reference` otherwise).
   `compute` then resolves the cone's inequalities (given, `cone::facets` of the generators, or
-  `Fan::mori_cone`), checks that a cone given with a fan contains its wall classes
-  (`Fan::wall_outside`; the fan's own cone would take minutes at large $h^{1,1}$), that a
-  hypersurface's cone given by generators without a fan contains the rays of $\{C : Q_r \cdot C \ge 0\}$ within
+  `Fan::mori_cone`), checks that a hypersurface's cone given by generators, with a fan or
+  without, contains the rays of $\{C : Q_r \cdot C \ge 0\}$ within
   its span (`outside_class`: that cone is dual to the effective cone, so it lies in the Mori
   cone of every phase and in the cap CYTools passes, and within the span of a face, in the
-  face; skipped when the double description overflows, for complete intersections, whose
+  face; a cone given with a fan need not contain its walls, since CYTools' cone leaves out
+  those that are not curves of the CY, and a missing curve is left to `verify`; skipped when
+  the double description overflows, for complete intersections, whose
   charges may leave out divisors, and for inequalities, which can imply equations of a span
   that only the generators' facets give), that a plain hypersurface's cone (its generators, or the
   rays of at most `MAX_RAYS_FROM` inequalities, and below the Hilbert bases each pipeline

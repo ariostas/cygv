@@ -133,8 +133,8 @@ guard against that:
   method checks the same condition at every curve. Neither can see intersection numbers scaled
   by a common factor, nor anything at $h^{1,1} = 1$ or for an n-fold.
 - With the `fan`, the intersection numbers are checked against the toric intersection ring,
-  scalings included, the cone against the walls of the fan, and the strata come from it, which
-  settles all of the above but the Hilbert bases.
+  scalings included, and the strata come from it, which settles all of the above but the
+  Hilbert bases and a Mori cone given too small.
 
 `report.lift` and `report.consistency` say what was established: `certify` is about the lift
 from residues only.
@@ -159,9 +159,10 @@ The fan checks the intersection numbers, gives the strata of a vex phase, and gi
 cone of the ambient variety of that phase (a double description in dimension $h^{1,1}$, which
 takes minutes in the hundreds). This holds for a hypersurface whose triangulation leaves out
 the points interior to facets, as CYTools' does by default; for other triangulations the
-simplices name points that are not divisors of `q`. Without the fan, CYTools' own call passes
-`generators=cy.mori_cone_cap(in_basis=True).rays()`, a smaller cone: given with the fan, that
-one is refused when it misses walls of the fan.
+simplices name points that are not divisors of `q`. To skip computing the Mori cone at large
+$h^{1,1}$, also pass `generators=cy.mori_cone_cap(in_basis=True).rays()`, the cone CYTools'
+own call uses. It can be smaller than the fan's, leaving out walls that are not curves of the
+CY, and is used as given.
 
 **Errors and interrupts.** Invalid input raises a `ValueError`, and a failed computation (for
 instance invariants that are not integers, which usually means inconsistent input) a
