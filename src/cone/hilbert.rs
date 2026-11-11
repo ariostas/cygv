@@ -745,6 +745,53 @@ pub fn cone_data(
     })
 }
 
+/// The Hilbert bases of the cones $K_T$ of the given sets $T$ of divisors (which may have any
+/// size), as in [`cone_data`] but each on its own: the Mori cone's basis without its elements
+/// of degree above `max_deg`, cut by every row of `q` that is not in $T$. For the spot check
+/// of Hilbert bases that come with the input.
+pub(crate) fn hilbert_bases_of(
+    hyperplanes: &DMatrix<i32>,
+    equations: &DMatrix<i32>,
+    q: &DMatrix<i32>,
+    sets: &[&[usize]],
+    grading_vector: &[i32],
+    max_deg: u32,
+) -> Result<Vec<DMatrix<i32>>, ConeError> {
+    let n = grading_vector.len();
+    let coords = Coordinates::new(n, equations)?;
+    let hs = columns(hyperplanes)
+        .map(|h| coords.form(&widen(h)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let w = coords.form(&widen(grading_vector))?;
+    let max_deg = max_deg as i64;
+    let mut mori = Vec::new();
+    for e in basis_full(&hs, coords.basis.len())? {
+        let deg = dot(&w, &e.x)?;
+        if deg <= 0 {
+            return Err(ConeError::NonpositiveDegree);
+        }
+        if deg <= max_deg {
+            mori.push(e);
+        }
+    }
+    let rows = (0..q.nrows())
+        .map(|r| coords.form(&q.row(r).iter().map(|&x| x as i64).collect::<Vec<_>>()))
+        .collect::<Result<Vec<_>, _>>()?;
+    sets.iter()
+        .map(|t| {
+            let mut basis = mori.clone();
+            for (r, row) in rows.iter().enumerate() {
+                // Rows nonnegative on the basis leave it as it is.
+                if t.contains(&r) || basis.iter().all(|e| dot(row, &e.x).is_ok_and(|x| x >= 0)) {
+                    continue;
+                }
+                basis = cut(&basis, row, Some((&w, max_deg)))?;
+            }
+            Ok(coords.matrix(&basis)?)
+        })
+        .collect()
+}
+
 /// The tree of cuts that gives the cones $K_T$ of the sets $T$ of divisors negative somewhere.
 struct Tree<'a> {
     /// The rows $Q_r$, in the coordinates of the span.

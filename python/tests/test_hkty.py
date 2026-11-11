@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import _thread
+import inspect
 import pickle
 import threading
 import time
@@ -33,7 +34,8 @@ def test_threefold() -> None:
     assert gv.dimension == 3
     assert gv.grading_vector == (3, -1)
     assert gv.report.method == "reference"
-    assert gv.report.certified
+    assert gv.report.lift == "exact"
+    assert gv.report.consistency == "full"
     assert not gv.report.grading_vector_derived
     # Sorted by degree, then by curve class.
     keys = [(gv.degree(c), c) for c, _ in gv]
@@ -235,10 +237,12 @@ def test_methods() -> None:
     for method in (None, *METHODS, "Modular"):
         assert QUINTIC.gv(max_deg=5, method=method) == expected
     assert QUINTIC.gv(max_deg=5).report.method == "modular"
-    assert not QUINTIC.gv(max_deg=5).report.certified
+    assert QUINTIC.gv(max_deg=5).report.lift == "stable"
+    # The quintic has h11 = 1, where the consistency check does not apply.
+    assert QUINTIC.gv(max_deg=5).report.consistency == "unchecked"
     certified = QUINTIC.gv(max_deg=5, certify=True)
     assert certified == expected
-    assert certified.report.certified
+    assert certified.report.lift == "certified"
     assert QUINTIC.gv(max_deg=5, low_memory=True) == expected
     expected = QUINTIC.gw(max_deg=5, method="reference")
     assert expected[1] == ((2,), Fraction(609250 * 8 + 2875, 8))
@@ -303,9 +307,23 @@ def test_compute_functions() -> None:
     with pytest.raises(TypeError):
         compute_gv(q, intnums, generators=[[1]], max_deg=4, bad_keyword=1)
     # The positional order of earlier versions, (generators, grading_vector, q, intnums),
-    # is rejected.
+    # is rejected, with what to write instead, and so are their removed keywords.
+    with pytest.raises(TypeError, match=r"cygv 0\.3 took"):
+        compute_gv([[1]], [1], q, intnums, max_deg=4)  # type: ignore[list-item]
+    with pytest.raises(TypeError, match="always exact"):
+        compute_gv(q, intnums, generators=[[1]], max_deg=4, prec=100)
+    with pytest.raises(TypeError, match="hilbert_bases"):
+        compute_gw(q, intnums, generators=[[1]], max_deg=4, cones=[])
+    # Without a selection, 0.3 computed at the generators.
+    with pytest.raises(ValueError, match="curve_classes=generators"):
+        compute_gv(q, intnums, generators=[[1]], max_deg=None, min_points=None)
+    # The keywords are explicit, for help() and completion.
+    params = inspect.signature(compute_gv).parameters
+    assert {"generators", "max_deg", "verify", "certify", "fan"} <= set(params)
+    # Problem's fields after intnums are keywords only: by position, generators would have
+    # been taken for the nef partition.
     with pytest.raises(TypeError):
-        compute_gv([[1]], [1], q, intnums, max_deg=4)  # type: ignore[call-arg]
+        Problem(q, intnums, [[1]])  # type: ignore[call-arg]
 
 
 def test_verbose(capsys: pytest.CaptureFixture[str]) -> None:
@@ -324,7 +342,7 @@ def test_invalid_input() -> None:
     # Invalid input is a ValueError with either method, not a crash of the computation.
     bad_intnums = {(0, 0, 0): 5, (0, 0, 1): 1}
     for method in ("reference", "modular"):
-        with pytest.raises(ValueError, match="every row"):
+        with pytest.raises(ValueError, match="every toric divisor"):
             compute_gv(
                 [[1, 1, 1, 1, 1]],
                 {(0, 0, 0): 5},
@@ -507,8 +525,8 @@ def test_vex_phase() -> None:
     with pytest.raises(ValueError, match="stratum"):
         replace(by_inequalities, hilbert_bases=bases[:-1]).gv(max_deg=4)
 
-    # Without the stratum the invariants are not integers.
-    with pytest.raises(ComputationError, match="not an integer"):
+    # Without the stratum, the curve of negative anticanonical degree gives it away.
+    with pytest.raises(ValueError, match="negative anticanonical degree"):
         Problem(q, intnums, generators=generators).gv(max_deg=6)
 
     # The fan gives the stratum, the Mori cone and the grading vector.
@@ -578,3 +596,49 @@ def test_inequalities() -> None:
         replace(problem, hilbert_bases=bases[1:]).gv(max_deg=6)
     with pytest.raises(ValueError, match="needs mori_hyperplanes"):
         Problem(q, intnums, mori_equations=[[0, 1]]).gv(max_deg=6)
+
+
+def test_consistency() -> None:
+    # A spurious intersection number gives integers at degree 4 without the check, wrong ones,
+    # and an error with it, in both methods.
+    q = [[0, 0, 1, 1, 1, 1], [1, 1, 0, 0, 0, -2]]
+    good = Problem(q, {(0, 0, 0): 8, (0, 0, 1): 4}, generators=[[1, 0], [0, 1]])
+    wrong = replace(good, intnums={(0, 0, 0): 8, (0, 0, 1): 4, (0, 1, 1): 1})
+    assert wrong.gv(max_deg=4, verify="off")[(1, 0)] == 896
+    assert good.gv(max_deg=4)[(1, 0)] == 640
+    for method in ("modular", "reference"):
+        with pytest.raises(ComputationError, match="do not agree"):
+            wrong.gv(max_deg=4, method=method)
+    with pytest.raises(ComputationError, match="do not agree"):
+        wrong.gv(max_deg=4, verify=True, certify=True)
+    cases: list[tuple[str | bool, str]] = [
+        ("full", "full"),
+        (False, "unchecked"),
+        ("quick", "quick"),
+    ]
+    for verify, consistency in cases:
+        assert good.gv(max_deg=3, verify=verify).report.consistency == consistency
+    with pytest.raises(ValueError, match="verify"):
+        good.gv(max_deg=3, verify="sometimes")
+    # The dimension, when given, is checked.
+    with pytest.raises(ValueError, match="dimension"):
+        replace(good, dimension=4).gv(max_deg=3)
+    assert replace(good, dimension=3).gv(max_deg=3) == good.gv(max_deg=3)
+
+
+def test_lookup() -> None:
+    gv = QUINTIC.gv(max_deg=3)
+    # `in` and indexing look up the same keys, from any sequence of ints.
+    assert (1,) in gv  # type: ignore[comparison-overlap]
+    assert [1] in gv  # type: ignore[comparison-overlap]
+    assert np.array([2]) in gv
+    assert (4,) not in gv  # type: ignore[comparison-overlap]
+    # The (key, value) pairs that iterating gives are in it too.
+    assert ((1,), 2875) in gv
+    assert ((1,), 1) not in gv
+    assert gv[[1]] == gv[(1,)] == gv[np.array([1])] == 2875
+    assert gv.get([4]) is None
+    with pytest.raises(KeyError):
+        gv[(4,)]
+    with pytest.raises(KeyError):
+        gv[("a",)]

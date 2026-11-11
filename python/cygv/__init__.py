@@ -5,6 +5,7 @@ from importlib.metadata import version
 from cygv.cygv import ComputationError
 from cygv.hkty import (
     METHODS,
+    VERIFY,
     Invariants,
     Problem,
     Report,
@@ -16,6 +17,7 @@ __version__ = version("cygv")
 
 __all__ = [
     "METHODS",
+    "VERIFY",
     "ComputationError",
     "Invariants",
     "Problem",

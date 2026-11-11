@@ -18,7 +18,7 @@ mod hilbert;
 mod hull;
 
 pub use hilbert::{cone_data, hilbert_basis, ConeError};
-pub(crate) use hilbert::{det, kernel_basis, rank};
+pub(crate) use hilbert::{det, hilbert_bases_of, kernel_basis, rank};
 pub use hull::{facets, rays, Generators, HullError, Inequalities, TooLarge};
 
 use crate::Stratum;
@@ -141,7 +141,7 @@ pub(crate) fn check_cone_data(
             return cones_err("a cone K_T must have one or two divisors, or three for a stratum");
         }
         if t[t.len() - 1] >= n_divisors || t.windows(2).any(|w| w[0] == w[1]) {
-            return cones_err("the divisors of a cone K_T must be distinct rows of the charges");
+            return cones_err("the divisors of a cone K_T must be distinct toric divisors (0-based positions in the charge vectors)");
         }
         if t.len() == 3 && !strata_sets.iter().any(|s| s[..] == t[..]) {
             return cones_err("a cone K_T of three divisors must be on a stratum");

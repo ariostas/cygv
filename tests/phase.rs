@@ -1144,26 +1144,15 @@ fn test_phases() {
 /// The problem of a case up to `max_deg` from its fan, without generators and with the default
 /// grading vector.
 fn from_fan(case: &Case, max_deg: u32) -> Problem {
-    Problem {
-        geometry: Geometry {
-            q: columns(case.q),
-            intnums: case.intnums(),
-            nefpart: Vec::new(),
-            ambient: Ambient::Fan(case.cones.iter().map(|c| c.to_vec()).collect()),
-        },
-        cone: MoriCone::FromFan,
-        hilbert_bases: None,
-        selection: Selection::MaxDeg(max_deg),
-        grading_vector: None,
-    }
+    let mut geometry = Geometry::new(columns(case.q), case.intnums());
+    geometry.ambient = Ambient::Fan(case.cones.iter().map(|c| c.to_vec()).collect());
+    Problem::new(geometry, MoriCone::FromFan, Selection::MaxDeg(max_deg))
 }
 
 /// The GV invariants of a problem.
 fn gv(problem: &Problem, method: Method) -> Result<HashMap<Vec<i32>, Integer>, Error> {
-    let options = Options {
-        method,
-        ..Options::default()
-    };
+    let mut options = Options::default();
+    options.method = method;
     let res = compute_gv(problem, &options)?;
     Ok(res
         .entries
@@ -1209,26 +1198,17 @@ fn test_compute_from_fan() {
 
     // A grading vector that is given is checked against the Mori cone, which contains the
     // class (1, -1).
-    let negative = Problem {
-        grading_vector: Some(vec![0, 1]),
-        ..problem.clone()
-    };
+    let mut negative = problem.clone();
+    negative.grading_vector = Some(vec![0, 1]);
     assert_eq!(field(gv(&negative, Method::Auto)), "grading_vector");
 
     // Without a fan, the Mori cone cannot come from it.
-    let plain = Problem {
-        geometry: Geometry {
-            ambient: Ambient::Plain,
-            ..problem.geometry.clone()
-        },
-        ..problem.clone()
-    };
+    let mut plain = problem.clone();
+    plain.geometry.ambient = Ambient::Plain;
     assert_eq!(field(gv(&plain, Method::Auto)), "generators");
     // With generators, they span the cone instead of the walls of the fan.
-    let generators = Problem {
-        cone: MoriCone::Generators(DMatrix::from_row_slice(2, 2, &[0, 1, 1, -1])),
-        ..problem.clone()
-    };
+    let mut generators = problem.clone();
+    generators.cone = MoriCone::Generators(DMatrix::from_row_slice(2, 2, &[0, 1, 1, -1]));
     assert_eq!(gv(&generators, Method::Auto).unwrap(), gv_auto);
     // A cone given with the fan must contain the walls, here not (1, -1).
     for cone in [
@@ -1238,10 +1218,8 @@ fn test_compute_from_fan() {
             equations: DMatrix::zeros(2, 0),
         },
     ] {
-        let wrong = Problem {
-            cone,
-            ..problem.clone()
-        };
+        let mut wrong = problem.clone();
+        wrong.cone = cone;
         for m in [Method::Auto, Method::Reference] {
             assert!(matches!(
                 field(gv(&wrong, m)),
@@ -1250,12 +1228,10 @@ fn test_compute_from_fan() {
         }
     }
     // Target points are checked to be in the Mori cone.
-    let outside = Problem {
-        selection: Selection::TargetPoints {
-            points: DMatrix::from_row_slice(2, 1, &[-1, 3]),
-            max_deg: None,
-        },
-        ..problem.clone()
+    let mut outside = problem.clone();
+    outside.selection = Selection::TargetPoints {
+        points: DMatrix::from_row_slice(2, 1, &[-1, 3]),
+        max_deg: None,
     };
     for m in [Method::Auto, Method::Reference] {
         assert_eq!(field(gv(&outside, m)), "target_points");

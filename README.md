@@ -11,7 +11,8 @@ Every computation needs three things, with the same names in all three:
 
 - **the CY**: its GLSM charges `q` and intersection numbers `intnums`; for a complete
   intersection its nef partition `nefpart`, and for a vex phase of the ambient toric variety its
-  `fan` or its `strata`;
+  `fan` or its `strata` (the fan is worth giving in any phase: see "Checks" below); optionally
+  its `dimension`, to have it checked;
 - **its Mori cone**: vectors that span it (`generators`), the inequalities that cut it out
   (`mori_hyperplanes`, with `mori_equations` for a face), or nothing when the `fan` gives it,
   and optionally the Hilbert bases of its cones $K_T$ (`hilbert_bases`);
@@ -54,7 +55,7 @@ gv[(1, 0)], gv.get((5, 5))
 gv.curves[:2], gv.values[:2]
 # (array([[0, 1], [1, 0]], dtype=int32), array([  4, 640]))
 gv.grading_vector, gv.report
-# ((1, 1), Report(method='modular', certified=False, grading_vector_derived=True, seconds=0.003))
+# ((1, 1), Report(method='modular', lift='stable', consistency='quick', grading_vector_derived=True, seconds=0.003))
 
 list(problem.gw(max_deg=3))
 # [((0, 1), Fraction(4, 1)), ((1, 0), Fraction(640, 1)), ((0, 2), Fraction(1, 2)), ...]
@@ -107,7 +108,8 @@ They are trusted, so a missing element silently drops classes.
 | Keyword | Effect |
 | --- | --- |
 | `method` | `"modular"` computes modulo primes and lifts by the CRT, and is much faster; `"reference"` is a faithful implementation in exact rationals. The default, `"auto"`, picks `modular` for everything but `min_points`, which it does not support. |
-| `certify` | Proves the modular result, by bounding every invariant and taking primes until the bounds fit, for about twice the time. Without it the result is accepted once one more prime agrees, which makes an error vanishingly unlikely. Not for vex phases yet. |
+| `verify` | Checks that the input is consistent (see "Checks" below): `"quick"`, the default, up to about half the maximum degree, for a few percent of the time; `"full"` up to the maximum degree, for about half a pass more; `"off"`. Threefolds with $h^{1,1} \ge 2$ only. |
+| `certify` | Proves that the modular method's lift from residues is right, by bounding every invariant and taking primes until the bounds fit, for about twice the time. Without it the lift is accepted once one more prime agrees, which makes an error vanishingly unlikely. It says nothing about the input. Not for vex phases yet. |
 | `low_memory` | About a third of the memory, for about two and a half times the time. |
 | `n_threads` | The number of threads, one per logical CPU by default. |
 | `verbose` | Writes the progress to `sys.stderr`; `2` also writes each degree. |
@@ -116,23 +118,58 @@ The modular method takes curve classes of up to 512 bits; on a face of the Mori 
 reduced basis of the lattice they span, so faces of rank up to a few dozen fit even when
 $h^{1,1}$ is in the hundreds. Larger classes are an error, not a slow run of the reference.
 
+**Checks.** The modular method only uses the intersection numbers contracted with the grading
+vector, so input that does not fit together (intersection numbers in another basis than the
+charges, a Mori cone too small, a vex phase without its fan or strata, Hilbert bases that miss
+elements) can give wrong invariants that are still integers at low degree. Several checks
+guard against that:
+
+- Cheap ones before computing: the cone must contain every class that meets all toric
+  divisors nonnegatively, a hypersurface whose cone has curves of negative anticanonical
+  degree needs its `fan` or `strata`, a few of the given `hilbert_bases` are recomputed, and
+  `dimension`, if given, must match.
+- `verify` (on by default) computes once more modulo a prime with a second contraction of the
+  intersection numbers and raises a `ComputationError` when the two disagree; the reference
+  method checks the same condition at every curve. Neither can see intersection numbers scaled
+  by a common factor, nor anything at $h^{1,1} = 1$ or for an n-fold.
+- With the `fan`, the intersection numbers are checked against the toric intersection ring,
+  scalings included, the cone against the walls of the fan, and the strata come from it, which
+  settles all of the above but the Hilbert bases.
+
+`report.lift` and `report.consistency` say what was established: `certify` is about the lift
+from residues only.
+
 **CYTools.** A CY of [CYTools](https://cy.tools) (which calls cygv in `cy.compute_gvs`) gives its
-data in the form cygv takes, with the origin of the polytope left out of the charges:
+data in the form cygv takes, with the origin of the polytope left out of the charges. The fan is
+the triangulation's simplices without the origin, shifted by one to the positions in `q`:
 
 ```python
+from cygv import compute_gv
+
+fan = [[i - 1 for i in s if i != 0] for s in cy.triangulation().simplices()]
 gv = compute_gv(
     cy.curve_basis(include_origin=False, as_matrix=True),
     cy.intersection_numbers(in_basis=True, format="dok"),
-    generators=cy.mori_cone_cap(in_basis=True).rays(),
+    fan=fan,
     max_deg=10,
 )
 ```
 
+The fan checks the intersection numbers, gives the strata of a vex phase, and gives the Mori
+cone of the ambient variety of that phase (a double description in dimension $h^{1,1}$, which
+takes minutes in the hundreds). This holds for a hypersurface whose triangulation leaves out
+the points interior to facets, as CYTools' does by default; for other triangulations the
+simplices name points that are not divisors of `q`. Without the fan, CYTools' own call passes
+`generators=cy.mori_cone_cap(in_basis=True).rays()`, a smaller cone: given with the fan, that
+one is refused when it misses walls of the fan.
+
 **Errors and interrupts.** Invalid input raises a `ValueError`, and a failed computation (for
 instance invariants that are not integers, which usually means inconsistent input) a
 `cygv.ComputationError`. The computation runs on threads of its own with the GIL released, and
-ctrl+c (or interrupting a Jupyter kernel) stops it within a fraction of a second, raising
-`KeyboardInterrupt`; a second ctrl+c stops waiting. Since it runs in the Python process, running
+ctrl+c (or interrupting a Jupyter kernel) stops it at its next checkpoint, raising
+`KeyboardInterrupt`: usually within a fraction of a second, but the instanton stage of a run of
+high degree and small $h^{1,1}$ checks less often (about ten seconds at degree 400 with
+$h^{1,1} = 2$); a second ctrl+c stops waiting. Since it runs in the Python process, running
 out of memory takes the process or the kernel with it, which `low_memory=True` helps avoid.
 
 ## Rust
@@ -145,25 +182,22 @@ use cygv::{compute_gv, Geometry, MoriCone, Options, Problem, Selection};
 use nalgebra::dmatrix;
 use std::collections::HashMap;
 
-let problem = Problem {
-    geometry: Geometry {
-        // One row per toric divisor, one column per Kähler parameter.
-        q: dmatrix![0, 1; 0, 1; 1, 0; 1, 0; 1, 0; 1, -2],
-        intnums: HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]),
-        ..Geometry::default()
-    },
-    // One generator per column.
-    cone: MoriCone::Generators(dmatrix![1, 0; 0, 1]),
-    hilbert_bases: None,
-    selection: Selection::MaxDeg(3),
-    grading_vector: None,
-};
+let geometry = Geometry::new(
+    // One row per toric divisor, one column per Kähler parameter.
+    dmatrix![0, 1; 0, 1; 1, 0; 1, 0; 1, 0; 1, -2],
+    HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]),
+);
+// One generator per column.
+let cone = MoriCone::Generators(dmatrix![1, 0; 0, 1]);
+let problem = Problem::new(geometry, cone, Selection::MaxDeg(3));
 let gv = compute_gv(&problem, &Options::default()).unwrap();
 assert_eq!(gv.grading_vector, [1, 1]);
 assert_eq!((gv.entries[1].curve.as_slice(), gv.entries[1].value.clone()), (&[1, 0][..], 640.into()));
 ```
 
-The crate re-exports `nalgebra` and `malachite`, whose matrices and big integers it takes and
+The other fields (`nefpart`, `ambient`, `dimension`; `hilbert_bases`, `grading_vector`; and
+those of `Options`) are set on the values, which cannot be built field by field outside the crate
+so that fields can be added. The crate re-exports `nalgebra` and `malachite`, whose matrices and big integers it takes and
 returns. Progress goes through the [`log`](https://docs.rs/log) facade; `cygv::log_to_stderr`
 installs a minimal logger.
 
@@ -193,7 +227,7 @@ name: an example threefold
 invariants: gv
 dimension: 3
 grading_vector: [1, 1]
-report: {method: modular, certified: false, grading_vector_derived: true}
+report: {method: modular, lift: stable, consistency: quick, grading_vector_derived: true}
 results:
   - {curve_class: [0, 1], degree: 1, gv: 4}
   - {curve_class: [1, 0], degree: 1, gv: 640}
@@ -203,7 +237,7 @@ results:
   - {curve_class: [3, 0], degree: 3, gv: 288384}
 ```
 
-`--method`, `--threads`, `--max-deg`, `--invariants`, `--certify` and `--low-memory` override
+`--method`, `--threads`, `--max-deg`, `--invariants`, `--certify`, `--verify` and `--low-memory` override
 those for every document, and `-v` (or `-vv`) writes the progress to stderr. See `cygv --help`
 and the `examples` directory. The executable is the default `cli` feature; library users can
 leave it out with `default-features = false`.

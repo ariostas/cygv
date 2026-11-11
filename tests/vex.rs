@@ -7,7 +7,6 @@
 //! the stored tables.
 
 use cygv::malachite::{Integer, Rational};
-use cygv::modular;
 use cygv::{
     compute_gv, Ambient, Error, Geometry, Method, MoriCone, Options, Problem, Selection, Stratum,
 };
@@ -37,30 +36,24 @@ impl Phase {
                 rows.iter().flat_map(|r| r.iter().copied()),
             )
         };
-        let problem = Problem {
-            geometry: Geometry {
-                q: columns(self.q),
-                intnums: self
-                    .intnums
-                    .iter()
-                    .map(|&[a, b, c, v]| ((a as usize, b as usize, c as usize), v))
-                    .collect(),
-                nefpart: Vec::new(),
-                ambient: if self.strata.is_empty() {
-                    Ambient::Plain
-                } else {
-                    Ambient::Strata(self.strata.clone())
-                },
-            },
-            cone: MoriCone::Generators(columns(self.generators)),
-            hilbert_bases: None,
-            selection: Selection::MaxDeg(max_deg),
-            grading_vector: Some(self.grading_vector.to_vec()),
-        };
-        let options = Options {
-            method,
-            ..Options::default()
-        };
+        let mut geometry = Geometry::new(
+            columns(self.q),
+            self.intnums
+                .iter()
+                .map(|&[a, b, c, v]| ((a as usize, b as usize, c as usize), v))
+                .collect(),
+        );
+        if !self.strata.is_empty() {
+            geometry.ambient = Ambient::Strata(self.strata.clone());
+        }
+        let mut problem = Problem::new(
+            geometry,
+            MoriCone::Generators(columns(self.generators)),
+            Selection::MaxDeg(max_deg),
+        );
+        problem.grading_vector = Some(self.grading_vector.to_vec());
+        let mut options = Options::default();
+        options.method = method;
         let res = compute_gv(&problem, &options)?;
         Ok(res
             .entries
@@ -99,13 +92,16 @@ fn test_h2_vex() {
         assert_eq!(gv[&c[..]], expected, "{c:?}");
     }
 
-    // Without its strata, the modular pipeline finds invariants that are not integers.
+    // Without its strata, its curve of negative anticanonical degree is refused, in both
+    // methods, before anything is computed.
     let mut phase = h2_vex();
     phase.strata.clear();
-    assert!(matches!(
-        phase.gv(6, Method::Auto),
-        Err(Error::Modular(modular::Error::NotInteger { .. }))
-    ));
+    for method in [Method::Auto, Method::Reference] {
+        assert!(matches!(
+            phase.gv(6, method),
+            Err(Error::Input { field: "fan", .. })
+        ));
+    }
 
     // Both methods give the same invariants, and the strata are checked.
     assert_eq!(h2_vex().gv(6, Method::Modular).unwrap(), gv);

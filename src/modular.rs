@@ -45,14 +45,16 @@ pub(crate) mod table;
 mod reference_tests;
 
 use crate::cone::ConeData;
-use crate::{check_strata, CYKind, Stratum, NON_INTEGER_CAUSES};
-use bound::{Bound, BoundRing};
+use crate::{check_strata, CYKind, Stratum, Verify, NON_INTEGER_CAUSES};
+pub use bound::Bound;
+use bound::BoundRing;
 pub use candidates::CandidateSource;
 use core::fmt;
 use crt::Residues;
 pub use extraction::Tuning as ExtractionTuning;
-use field::{LaneField, Ring};
-use key::{field_widths, Key, KeyError, KeyLayout, PackedKey, PackedLayout, Wide, Word};
+use field::{LaneField, Lanes, Ring};
+pub use key::KeyError;
+use key::{field_widths, Key, KeyLayout, PackedKey, PackedLayout, Wide, Word};
 use lightcone::Lightcone;
 use malachite::base::num::logic::traits::SignificantBits;
 use malachite::{Integer, Natural, Rational};
@@ -62,6 +64,7 @@ use table::SparsePoly;
 
 /// Errors of the modular pipeline.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// The curve classes do not fit the keys, or the grading vector is not positive.
     Key(KeyError),
@@ -96,6 +99,10 @@ pub enum Error {
     /// A basis of the lattice the curve classes span, or the coordinates in it, overflow
     /// their integers.
     LatticeTooLarge,
+    /// The consistency check ([`Options::verify`]) found the curve class given, of the degree
+    /// given, where the second contraction of the intersection numbers disagrees with the
+    /// invariants: the input is inconsistent.
+    Inconsistent { degree: u32, curve: Vec<i32> },
     /// The computation was interrupted ([`crate::Interrupt`]).
     Interrupted,
 }
@@ -141,8 +148,15 @@ impl fmt::Display for Error {
             ),
             Self::CertifyPrimes { needed, allowed } => write!(
                 f,
-                "the bounds of the certifier need {needed} primes, more than the {allowed} \
-                 allowed"
+                "the bounds of the certifier need {needed} primes, more than a run takes \
+                 ({allowed}); without certify the lift is accepted once one more prime agrees \
+                 with it, which makes an error vanishingly unlikely"
+            ),
+            Self::Inconsistent { degree, curve } => write!(
+                f,
+                "the instanton corrections do not agree on the invariant of the curve class \
+                 {curve:?} (of degree {degree}), so the input is inconsistent; \
+                 {NON_INTEGER_CAUSES}"
             ),
             Self::Interrupted => write!(f, "the computation was interrupted"),
         }
@@ -191,6 +205,19 @@ pub struct Geometry {
     forms: Vec<i64>,
     strata: Vec<VexStratum>,
     curves: Option<CurveSide>,
+    check: Option<Box<Check>>,
+}
+
+/// The second contraction of a threefold's intersection numbers, which the consistency check
+/// runs the stages with (see [`Options::verify`] and [`Geometry::with_check`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Check {
+    /// The weights $w'$ of the contraction, as a function on the curve classes, in their
+    /// coordinates.
+    weights: Vec<i32>,
+    /// The geometry with $K' = \sum_t w'_t \kappa_{tab}$ as its form, and the strata
+    /// contracted with $w'$.
+    geometry: Geometry,
 }
 
 /// The curve side of a [`Geometry`] whose curve classes are in the coordinates of a lattice.
@@ -249,6 +276,7 @@ impl Geometry {
             forms,
             strata: Vec::new(),
             curves: None,
+            check: None,
         })
     }
 
@@ -266,7 +294,15 @@ impl Geometry {
                 .concat())
         };
         let dim = lattice.rank();
+        let check = match &self.check {
+            None => None,
+            Some(c) => Some(Box::new(Check {
+                weights: lattice.restrict(&c.weights)?,
+                geometry: c.geometry.in_lattice(lattice)?,
+            })),
+        };
         Ok(Self {
+            check,
             curves: Some(CurveSide {
                 dim,
                 q: restrict(&self.q)?,
@@ -318,6 +354,46 @@ impl Geometry {
             });
         }
         Ok(self)
+    }
+
+    /// The same geometry with a second contraction of the intersection numbers, for the
+    /// consistency check of [`Options::verify`]: `check` is the geometry of the same threefold
+    /// from [`Geometry::from_toric`] and [`Geometry::with_strata`] with `weights` in the place
+    /// of the grading vector. Only threefolds take one, and the weights should be
+    /// pseudorandom: the check only sees an inconsistency whose defect they do not happen to
+    /// be orthogonal to.
+    pub fn with_check(mut self, check: Geometry, weights: &[i32]) -> Result<Self, Error> {
+        let same_strata = self.strata.len() == check.strata.len()
+            && self
+                .strata
+                .iter()
+                .zip(&check.strata)
+                .all(|(a, b)| a.divisors == b.divisors);
+        if !self.kind.is_threefold()
+            || check.kind != self.kind
+            || check.h11 != self.h11
+            || check.q != self.q
+            || check.q0 != self.q0
+            || check.n_forms() != 1
+            || !same_strata
+            || weights.len() != self.h11
+            || self.curves.is_some()
+            || check.curves.is_some()
+            || check.check.is_some()
+        {
+            return Err(Error::DimensionMismatch);
+        }
+        self.check = Some(Box::new(Check {
+            weights: weights.to_vec(),
+            geometry: check,
+        }));
+        Ok(self)
+    }
+
+    /// The weights and the geometry of the second contraction, if any (see
+    /// [`Geometry::with_check`]).
+    pub(crate) fn check(&self) -> Option<(&[i32], &Geometry)> {
+        self.check.as_ref().map(|c| (&c.weights[..], &c.geometry))
     }
 
     /// Derives the data from the inputs of the reference pipeline: the charge matrix `q` with
@@ -539,6 +615,7 @@ impl Geometry {
 
 /// The options of [`compute_gv`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct Options {
     /// The number of worker threads, at least one, or `None` for one per logical CPU. The run
     /// builds a thread pool of its own rather than use rayon's global one.
@@ -554,6 +631,11 @@ pub struct Options {
     /// On the benchmark models it takes about a third of the memory, for about two and a
     /// half times the time.
     pub low_memory: bool,
+    /// Whether to check that the input is consistent, by a pass modulo one more prime with
+    /// the second contraction of a geometry that has one ([`Geometry::with_check`]), and up
+    /// to which degree (see [`Verify`]); a geometry without one is not checked. A mismatch is
+    /// [`Error::Inconsistent`].
+    pub verify: Verify,
     /// How many primes the run takes, and how the extraction parallelizes.
     pub tuning: Tuning,
 }
@@ -573,6 +655,7 @@ impl Options {
 
 /// The tuning of [`compute_gv`], which does not change its results.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Tuning {
     /// The number of primes that only check the lift, at least one: the lift from the other
     /// primes is accepted when it agrees with these at every curve.
@@ -1049,6 +1132,9 @@ fn run<T>(
 /// The lift of a run: the key, degree and invariants of each curve.
 type Lifted<K> = Vec<(K, u32, Vec<Integer>)>;
 
+/// The lift of a run, with the primes it took.
+type LiftedWith<K> = (Lifted<K>, Vec<u64>);
+
 /// How the passes of a run with keys of a [`Word`] take their primes.
 ///
 /// Keys of 128 bits take as many per pass as the options say, or [`choose_lanes`] predicts,
@@ -1060,14 +1146,14 @@ trait Lift: Word {
     fn lift(
         run: &Run<'_, PackedLayout<Self>>,
         options: &Options,
-    ) -> Result<Lifted<PackedKey<Self>>, Error>;
+    ) -> Result<LiftedWith<PackedKey<Self>>, Error>;
 }
 
 impl Lift for u128 {
     fn lift(
         run: &Run<'_, PackedLayout<Self>>,
         options: &Options,
-    ) -> Result<Lifted<PackedKey<Self>>, Error> {
+    ) -> Result<LiftedWith<PackedKey<Self>>, Error> {
         let lanes = match options.tuning.lanes {
             Some(lanes) => lanes,
             None if options.low_memory => 1,
@@ -1086,7 +1172,7 @@ impl<const N: usize> Lift for Wide<N> {
     fn lift(
         run: &Run<'_, PackedLayout<Self>>,
         options: &Options,
-    ) -> Result<Lifted<PackedKey<Self>>, Error> {
+    ) -> Result<LiftedWith<PackedKey<Self>>, Error> {
         if options.low_memory {
             lifted::<1, _>(run, options)
         } else {
@@ -1111,7 +1197,15 @@ fn run_in<W: Lift, T>(
         return Ok(finish(Vec::new(), prep.max_deg, &in_lightcone));
     }
     let run = prep.run(geometry, options);
-    let mut lift = prep.pool.install(|| W::lift(&run, options))?;
+    let (mut lift, primes) = prep.pool.install(|| W::lift(&run, options))?;
+    if let Some(deg) = options.verify.degree(prep.max_deg) {
+        if let Some((key, degree)) = prep.pool.install(|| verify(&run, &lift, &primes, deg))? {
+            return Err(Error::Inconsistent {
+                degree,
+                curve: prep.curve(key)?,
+            });
+        }
+    }
     // Converted from the end, the lift shrinking as it goes, so that the two are never both
     // whole.
     let mut gv = Vec::with_capacity(lift.len());
@@ -1661,7 +1755,7 @@ fn passes<const NL: usize, L: KeyLayout>(
 fn lifted<const NL: usize, L: KeyLayout>(
     run: &Run<'_, L>,
     options: &Options,
-) -> Result<Lifted<L::Key>, Error> {
+) -> Result<LiftedWith<L::Key>, Error> {
     let width = run.geometry.n_forms();
     let mut residues = passes::<NL, _>(
         run,
@@ -1672,7 +1766,7 @@ fn lifted<const NL: usize, L: KeyLayout>(
     loop {
         let lift = residues.lift();
         if !options.certify {
-            return Ok(lift);
+            return Ok((lift, residues.primes().to_vec()));
         }
         // The lift is taken again once the bounds hold rather than kept through their pass.
         let known = Known::from_lift(width, &lift);
@@ -1680,7 +1774,7 @@ fn lifted<const NL: usize, L: KeyLayout>(
         log::info!("certifying: bounds on the invariants");
         let Some((n, twice)) = primes_needed(run, &known, residues.primes())? else {
             log::info!("certified with {} primes", residues.primes().len());
-            return Ok(residues.lift());
+            return Ok((residues.lift(), residues.primes().to_vec()));
         };
         log::info!("the bounds need {n} primes");
         if n > options.tuning.max_primes {
@@ -1700,7 +1794,7 @@ fn lifted<const NL: usize, L: KeyLayout>(
                 "certified with {} primes, which leave the lift unchanged",
                 residues.primes().len()
             );
-            return Ok(residues.lift());
+            return Ok((residues.lift(), residues.primes().to_vec()));
         }
     }
 }
@@ -1742,6 +1836,105 @@ fn primes_needed<L: KeyLayout>(
         .expect("the primes go on")
         + 1;
     Ok(Some((n, twice)))
+}
+
+/// The consistency check of [`Options::verify`] up to degree `max_deg`, on the lift of a
+/// threefold from `primes`: `None` when it passes or the geometry has no second contraction,
+/// and otherwise the first curve, by degree and key, where it fails, with its degree.
+///
+/// The stages run up to the extraction modulo a prime the lift did not take, with the second
+/// contraction $K'$ in the place of the first, on the same candidates. A consistent geometry
+/// has $n'_C = (w' \cdot C) A_C$, with $A_C = \sum_{m \mid C} \mathrm{GV}_{C/m} / m^3$ from
+/// the lift (see `multicover`), which is compared at every curve in the lightcones that has a
+/// coefficient or a lifted invariant. With the multiples of the lifted curves left out
+/// otherwise, a mismatch there alone would pass, but an inconsistency shows at many curves.
+fn verify<L: KeyLayout>(
+    run: &Run<'_, L>,
+    lift: &Lifted<L::Key>,
+    primes: &[u64],
+    max_deg: u32,
+) -> Result<Option<(L::Key, u32)>, Error> {
+    use malachite::base::num::arithmetic::traits::Mod;
+    let Some((weights, geometry)) = run.geometry.check() else {
+        return Ok(None);
+    };
+    if !geometry.kind().is_threefold() {
+        return Err(Error::DimensionMismatch);
+    }
+    let n = run.cands.partition_point(|&(_, deg)| deg <= max_deg);
+    let check = Run {
+        geometry,
+        cands: &run.cands[..n],
+        max_deg,
+        ..*run
+    };
+    log::info!("consistency check up to degree {max_deg}");
+    // A prime that the denominators of the strata do not divide, which a few tries find.
+    for p in field::primes().filter(|p| !primes.contains(p)).take(8) {
+        let ring = LaneField::<1>::new([p]);
+        let mut coeffs = SparsePoly::new(1);
+        let inv = match extracted(&ring, &check, None, &mut |part, _| coeffs.append(part)) {
+            Err(Error::NotInvertible) => continue,
+            r => r?,
+        };
+        let layout = run.layout;
+        let modulus = Integer::from(p);
+        let gv: HashMap<L::Key, Lanes<1>> = lift
+            .iter()
+            .filter(|(_, deg, _)| *deg <= max_deg)
+            .map(|(key, _, v)| {
+                let r = u64::try_from(&(&v[0]).mod_op(&modulus)).expect("a residue");
+                (*key, ring.int(r as i64))
+            })
+            .collect();
+        let inv_cube: Vec<Lanes<1>> = inv.iter().map(|&x| ring.mul(ring.mul(x, x), x)).collect();
+        let (mut c, mut cn) = (vec![0; layout.dim()], vec![0; layout.dim()]);
+        let mut expected = |key: L::Key, c: &mut [i32]| {
+            layout.unpack(key, c);
+            let g = multicover::gcd(c);
+            let mut a = Lanes::<1>::default();
+            for m in (1..=g).filter(|m| g.is_multiple_of(*m)) {
+                for (y, &x) in cn.iter_mut().zip(c.iter()) {
+                    *y = x / m as i32;
+                }
+                if let Some(&v) = gv.get(&layout.pack(&cn)) {
+                    a = ring.add(a, ring.mul(v, inv_cube[m as usize]));
+                }
+            }
+            ring.mul(a, ring.int(dot(weights, c)))
+        };
+        let in_lightcone =
+            |key: L::Key, c: &[i32]| run.lightcone.is_all() || run.lightcone.contains(key, c);
+        let mut first: Option<(u32, L::Key)> = None;
+        let mut fail = |deg: u32, key: L::Key| {
+            if first.is_none_or(|f| (deg, key) < f) {
+                first = Some((deg, key));
+            }
+        };
+        let mut seen = HashSet::new();
+        for i in 0..coeffs.len() {
+            let (key, deg) = (coeffs.keys()[i], coeffs.degs()[i]);
+            if deg == 0 || deg > max_deg {
+                continue;
+            }
+            seen.insert(key);
+            let want = expected(key, &mut c);
+            if in_lightcone(key, &c) && want != coeffs.values(i)[0] {
+                fail(deg, key);
+            }
+        }
+        for &(key, deg, _) in lift {
+            if deg == 0 || deg > max_deg || seen.contains(&key) {
+                continue;
+            }
+            let want = expected(key, &mut c);
+            if in_lightcone(key, &c) && !ring.is_zero(want) {
+                fail(deg, key);
+            }
+        }
+        return Ok(first.map(|(deg, key)| (key, deg)));
+    }
+    Err(Error::NotInvertible)
 }
 
 /// The GV invariants in `ring`, modulo its primes, or, with a `source` for the extraction,

@@ -71,6 +71,7 @@ pub trait KeyLayout: Send + Sync {
 
 /// Errors in setting up or using a key layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeyError {
     /// The generators, grading vector and bounds do not all have the same dimension.
     DimensionMismatch,

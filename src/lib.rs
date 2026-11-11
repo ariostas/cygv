@@ -130,7 +130,7 @@ pub(crate) fn check_strata(
         let mut d = s.divisors;
         d.sort_unstable();
         if d[2] >= n_divisors || d[0] == d[1] || d[1] == d[2] {
-            return Err("the divisors of a stratum must be three distinct rows of the charges");
+            return Err("the divisors of a stratum must be three distinct toric divisors (0-based positions in the charge vectors)");
         }
         if !seen.insert(d) {
             return Err("two strata have the same divisors");
@@ -162,7 +162,7 @@ pub(crate) fn check_nefpart(nefpart: &[Vec<usize>], n_divisors: usize) -> Result
         }
         for &r in part {
             if r >= n_divisors {
-                return Err("the nef partition must consist of indices of rows of the charges");
+                return Err("the nef partition must consist of toric divisors (0-based positions in the charge vectors)");
             }
             if core::mem::replace(&mut seen[r], true) {
                 return Err("the parts of the nef partition must be disjoint");
@@ -170,7 +170,7 @@ pub(crate) fn check_nefpart(nefpart: &[Vec<usize>], n_divisors: usize) -> Result
         }
     }
     if seen.contains(&false) {
-        return Err("the nef partition must include every row of the charges");
+        return Err("the nef partition must include every toric divisor (every position in the charge vectors)");
     }
     Ok(())
 }
@@ -227,9 +227,9 @@ pub(crate) fn check_intnums(
 /// The likely causes of GV invariants that are not integers (or, in the reference, of
 /// instanton corrections that disagree), for the error messages of both pipelines.
 pub(crate) const NON_INTEGER_CAUSES: &str = "this usually means that the input is \
-    inconsistent (e.g. charges and intersection numbers of different geometries, or a nef \
-    partition that is missing or wrong), or that the generators do not span the Mori cone or \
-    one of its faces";
+    inconsistent (e.g. charges and intersection numbers of different geometries or bases, a \
+    nef partition that is missing or wrong, or a vex phase given without its fan or strata), \
+    or that the generators do not span the Mori cone or one of its faces";
 
 /// Which pipeline computes the invariants.
 ///
@@ -269,9 +269,74 @@ impl Method {
     }
 }
 
+/// Whether to check that the input is consistent by computing the invariants a second way,
+/// and how far.
+///
+/// For a threefold, the modular pipeline only sees the intersection numbers contracted with
+/// the grading vector, $K_{ab} = \sum_t w_t \kappa_{tab}$, and inconsistent input (intersection
+/// numbers of another basis or geometry, a Mori cone too small, a vex phase without its fan or
+/// strata, Hilbert bases that miss elements) then gives invariants that are wrong, and often
+/// still integers at low degree. The check runs the stages once more, modulo a prime the
+/// lift did not use, with a second contraction $K' = \sum_t w'_t \kappa_{tab}$ by a
+/// pseudorandom $w'$, and compares the coefficients $n'_C$ of the instanton series with
+/// $(w' \cdot C) A_C$, $A_C = \sum_{m \mid C} \mathrm{GV}_{C/m} / m^3$ from the result: their
+/// equality for every $w'$ is the condition that the instanton corrections of the Kähler
+/// parameters are those of one set of invariants, which the reference pipeline checks
+/// directly. A mismatch is [`modular::Error::Inconsistent`].
+///
+/// It cannot see what keeps that condition: intersection numbers scaled by a common factor,
+/// and anything at $h^{1,1} = 1$. It only applies to threefolds with $h^{1,1} \ge 2$, and
+/// does nothing for n-folds, which have no such condition; [`Report::consistency`] says what
+/// ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Verify {
+    /// No check.
+    Off,
+    /// The check up to half the maximum degree (rounded up, and at least the maximum degree
+    /// up to 4), where inconsistent input shows first, for a few percent of the time.
+    #[default]
+    Quick,
+    /// The check up to the maximum degree, for about half the time of a pass more.
+    Full,
+}
+
+impl Verify {
+    /// The name of the check in the input formats.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Quick => "quick",
+            Self::Full => "full",
+        }
+    }
+
+    /// The check with the given name, ignoring case.
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Off, Self::Quick, Self::Full]
+            .into_iter()
+            .find(|v| v.as_str().eq_ignore_ascii_case(name))
+    }
+
+    /// The degree up to which the check runs for the maximum degree `max_deg`, if at all.
+    pub(crate) fn degree(self, max_deg: u32) -> Option<u32> {
+        match self {
+            Self::Off => None,
+            Self::Quick => Some(max_deg.div_ceil(2).max(max_deg.min(4))),
+            Self::Full => Some(max_deg),
+        }
+    }
+}
+
+/// The largest degree that a computation may reach, $2^{20}$: the modular pipeline keeps
+/// tables of every degree up to it, and the cost of a degree grows with it (degree 20000 of
+/// a threefold with $h^{1,1} = 2$ takes a minute and 4.5 GB), so a computation above it
+/// would not finish. Real grading vectors stay far below it even with large entries.
+pub const MAX_DEGREE: u32 = 1 << 20;
+
 #[doc(inline)]
 pub use dispatch::{
-    compute, compute_gv, compute_gw, Computed, Error, Invariant, Invariants, Report,
+    compute, compute_gv, compute_gw, Computed, Consistency, Error, Invariant, Invariants, Lift,
+    Report,
 };
 #[doc(inline)]
 pub use interrupt::Interrupt;

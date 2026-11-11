@@ -102,6 +102,7 @@ pub type Source<'a, E> = &'a (dyn Fn(&[i32], u32, &mut [E]) + Sync);
 
 /// When the extraction applies a layer level-synchronously rather than curve by curve. The defaults were tuned on a machine with four cores and hyperthreading.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Tuning {
     /// Layers with fewer curves than this per thread are applied level-synchronously when
     /// their curves are large.

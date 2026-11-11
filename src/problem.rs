@@ -10,12 +10,14 @@ use crate::dispatch::Error;
 use crate::phase::{Fan, FanError};
 use crate::{
     check_intnums, check_nefpart, check_strata, modular, CYKind, Interrupt, Method, Stratum,
+    Verify, MAX_DEGREE,
 };
 use nalgebra::DMatrix;
 use std::collections::HashMap;
 
 /// A Calabi-Yau hypersurface or complete intersection in a toric variety.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct Geometry {
     /// The GLSM charges: one row per toric divisor, one column per Kähler parameter. (In
     /// Python and YAML, `q` is given as one charge vector per Kähler parameter, i.e. by its
@@ -31,6 +33,10 @@ pub struct Geometry {
     pub nefpart: Vec<Vec<usize>>,
     /// What else is known about the ambient toric variety.
     pub ambient: Ambient,
+    /// The dimension of the CY, if the caller knows it: it is then checked against the one
+    /// the charges and the nef partition imply ([`Geometry::implied_dimension`]), which a complete
+    /// intersection given without its nef partition gets wrong.
+    pub dimension: Option<usize>,
 }
 
 /// What is known about the ambient toric variety beyond its charges.
@@ -106,6 +112,7 @@ impl Selection {
 /// A computation of invariants: the Calabi-Yau, its Mori cone, which curve classes, and the
 /// grading vector that defines their degrees.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Problem {
     pub geometry: Geometry,
     pub cone: MoriCone,
@@ -125,22 +132,30 @@ pub struct Problem {
 
 /// How to compute the invariants. None of these change the results.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct Options {
     /// Which pipeline to use.
     pub method: Method,
     /// The number of worker threads, at least one, or `None` for one per logical CPU.
     pub n_threads: Option<usize>,
-    /// Whether to prove the results exact (see [`modular::Options::certify`]); the reference
-    /// pipeline is exact anyway. Not supported in vex phases yet.
+    /// Whether to prove that the modular pipeline's lift from residues is right (see
+    /// [`modular::Options::certify`]); the reference pipeline is exact anyway. It is about the
+    /// arithmetic only, not about the input (see [`Options::verify`]). Not supported in vex
+    /// phases yet.
     pub certify: bool,
     /// Whether to prefer memory to speed (see [`modular::Options::low_memory`]), for the runs
     /// that do not fit otherwise: about a third of the memory for about two and a half times
     /// the time. Only the modular pipeline has such a mode; the reference ignores it.
     pub low_memory: bool,
+    /// Whether to check the consistency of the input by a second computation, and how far
+    /// (see [`Verify`]): by default up to about half the maximum degree, for a few percent of
+    /// the time. Only the modular pipeline takes it; the reference one always checks.
+    pub verify: Verify,
     /// The tuning of the modular pipeline.
     pub tuning: modular::Tuning,
     /// A handle that interrupts the computation from another thread: it then stops at its
-    /// next checkpoint, usually within a fraction of a second, with [`Error::Interrupted`].
+    /// next checkpoint, usually within a fraction of a second (but the instanton stage of a
+    /// run of high degree and small $h^{1,1}$ checks less often), with [`Error::Interrupted`].
     pub interrupt: Option<Interrupt>,
 }
 
@@ -213,6 +228,21 @@ pub(crate) fn check_target_degrees(
     Ok(())
 }
 
+/// Checks that the largest degree a computation reaches is at most [`MAX_DEGREE`].
+pub(crate) fn check_top_degree(degree: i64, field: &'static str) -> Result<(), Error> {
+    if degree > MAX_DEGREE as i64 {
+        return Err(input_err(
+            field,
+            format!(
+                "the computation would reach degree {degree}, above the largest supported, \
+                 {MAX_DEGREE}: every degree up to it costs time and memory, and the run would \
+                 not finish"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// The input field of the Mori cone, for the error messages.
 pub(crate) fn cone_field(cone: &MoriCone) -> &'static str {
     match cone {
@@ -227,18 +257,43 @@ impl Geometry {
         self.q.ncols()
     }
 
-    /// The dimension of the Calabi-Yau that the charges and the nef partition imply.
-    pub fn dimension(&self) -> i64 {
+    /// The geometry of the charges `q` and the intersection numbers `intnums`, a
+    /// hypersurface with no more known about its ambient variety; the other fields can be
+    /// set afterwards.
+    pub fn new(q: DMatrix<i32>, intnums: HashMap<(usize, usize, usize), i32>) -> Self {
+        Self {
+            q,
+            intnums,
+            ..Self::default()
+        }
+    }
+
+    /// The dimension of the CY that the charges and the nef partition imply: the number of
+    /// toric divisors less $h^{1,1}$ and the number of parts of the nef partition (one for a
+    /// hypersurface).
+    pub fn implied_dimension(&self) -> i64 {
         self.q.nrows() as i64 - self.q.ncols() as i64 - self.nefpart.len().max(1) as i64
     }
 
     /// The kind of Calabi-Yau, once [`Problem::validate`] has accepted it.
     pub(crate) fn cy_kind(&self) -> CYKind {
-        CYKind::from_is_threefold(self.dimension() == 3)
+        CYKind::from_is_threefold(self.implied_dimension() == 3)
     }
 }
 
 impl Problem {
+    /// The problem of the geometry, its Mori cone and the selection, without Hilbert bases
+    /// and with the default grading vector; those can be set afterwards.
+    pub fn new(geometry: Geometry, cone: MoriCone, selection: Selection) -> Self {
+        Self {
+            geometry,
+            cone,
+            hilbert_bases: None,
+            selection,
+            grading_vector: None,
+        }
+    }
+
     /// Checks everything about the problem and the options that can be checked before the
     /// computation, returning the first error, which names the field at fault. The
     /// computation checks them anyway; this is for callers that want to know before they
@@ -253,6 +308,7 @@ impl Problem {
             intnums,
             nefpart,
             ambient,
+            dimension,
         } = &self.geometry;
         let (n_divisors, h11) = q.shape();
         if n_divisors == 0 || h11 == 0 {
@@ -269,7 +325,20 @@ impl Problem {
                  origin of the polytope; leave it out (in CYTools, with include_origin=False)",
             ));
         }
-        let dim = self.geometry.dimension();
+        let dim = self.geometry.implied_dimension();
+        if let Some(d) = *dimension {
+            if d as i64 != dim {
+                return Err(input_err(
+                    "dimension",
+                    format!(
+                        "the charges and the nef partition give a CY of dimension {dim}, not \
+                         {d}: the dimension is the number of toric divisors less h11 and the \
+                         number of parts of the nef partition (one for a hypersurface), so a \
+                         complete intersection needs its nefpart"
+                    ),
+                ));
+            }
+        }
         if dim < 3 {
             // One charge vector per divisor instead of one per Kähler parameter.
             let transposed = n_divisors as i64 - h11 as i64;
@@ -381,6 +450,10 @@ impl Problem {
                     ));
                 }
             }
+        }
+        // Target points too high are refused once their degrees are known.
+        if let Selection::MaxDeg(d) = self.selection {
+            check_top_degree(d.into(), "max_deg")?;
         }
         match &self.selection {
             Selection::MaxDeg(_) | Selection::MinPoints(_) => {}

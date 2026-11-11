@@ -7,7 +7,7 @@
 #![cfg(feature = "cli")]
 
 use cygv::io::Input;
-use cygv::{compute_gv, Method, Options};
+use cygv::{compute_gv, Method};
 use std::collections::HashMap;
 use std::path::Path;
 use yaml_rust2::{Yaml, YamlLoader};
@@ -89,10 +89,8 @@ fn check(file: &str) {
             methods.push(Method::Reference);
         }
         for method in methods {
-            let options = Options {
-                method,
-                ..input.options.clone()
-            };
+            let mut options = input.options.clone();
+            options.method = method;
             let gv = compute_gv(&input.problem, &options)
                 .unwrap_or_else(|e| panic!("{name} ({method:?}): {e}"));
             assert_eq!(&gv.grading_vector, grading_vector, "{name}");

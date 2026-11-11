@@ -212,7 +212,7 @@ max_deg: 6
     let certified = run(&["--certify"], &input);
     assert!(certified.status.success());
     let out = String::from_utf8_lossy(&certified.stdout);
-    assert!(out.contains("certified: true"), "{out}");
+    assert!(out.contains("lift: certified"), "{out}");
     assert_eq!(without_report(&certified.stdout), outputs[0]);
     let in_input = input.replace("max_deg: 6\n", "max_deg: 6\ncertify: true\n");
     let certified = run(&[], &in_input);
@@ -220,7 +220,7 @@ max_deg: 6
     assert_eq!(without_report(&certified.stdout), outputs[0]);
     let uncertified = run(&["--no-certify"], &in_input);
     let out = String::from_utf8_lossy(&uncertified.stdout);
-    assert!(out.contains("certified: false"), "{out}");
+    assert!(out.contains("lift: stable"), "{out}");
 
     // So are those of the low-memory mode, as the flag or in the input.
     let low = run(&["--low-memory"], &input);

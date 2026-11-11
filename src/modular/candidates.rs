@@ -347,7 +347,8 @@ fn fits(m: &nalgebra::DMatrix<i32>, dim: usize) -> bool {
 /// - A cone $K_{s,u}$ whose points with two negative intersections all have vanishing
 ///   period. At those points $c_0$ and $c_1$ vanish and $S_2^{(k)}$ is a multiple of
 ///   $Q_s K^{(k)} Q_u$, so if that vanishes for every form $k$ the cone adds nothing to what
-///   $K_s$ and $K_u$ give.
+///   $K_s$ and $K_u$ give. With a second contraction for the consistency check
+///   ([`Geometry::with_check`]) it must vanish for that one too.
 ///
 /// So the candidates can be fewer than the lattice points with at most two negative
 /// intersections, but the missing ones have no period data. In a vex phase the cones of the
@@ -390,7 +391,12 @@ pub(crate) fn cone_candidates<L: KeyLayout>(
     if skip {
         for (u, c) in used.iter_mut().zip(cones) {
             if let [s, t] = c.divisors[..] {
-                *u = !vanishing_form(geometry, s, t);
+                // The consistency check's contraction must vanish too, or its pass would miss
+                // the curves of the cone.
+                *u = !vanishing_form(geometry, s, t)
+                    || geometry
+                        .check()
+                        .is_some_and(|(_, check)| !vanishing_form(check, s, t));
             }
         }
         // The divisors that the elements of each cone meet negatively, in increasing order.

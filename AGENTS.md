@@ -90,12 +90,19 @@ structured `modular` pipeline sits beside it). `src/problem.rs` holds the public
 input (`Problem`, `Options`) and `src/dispatch.rs` the public entry points, which pick a
 pipeline by the `Method` enum of `src/lib.rs`, and `src/io.rs`, the CLI and `src/python.rs` sit
 on top of those (see "One problem, one dispatch" below). The public surface is the root
-(`Problem`, `Options`, the entry points and their results), `cone` and `phase` (the cone
+(`Problem`, `Options`, the entry points and their results, `Method`, `Verify`, `Lift`,
+`Consistency`, `MAX_DEGREE`, `InvariantKind`, `CYKind`, `Stratum`, `Interrupt`,
+`log_to_stderr` and the two memory functions), `cone` and `phase` (the cone
 computations and the fan), `io` (behind the `cli` feature), `modular`'s low-level entry
-points (`compute_gv`, `compute_gw`, `bound_gv`, and their `Geometry`, `Options`, `Tuning`,
-`ExtractionTuning`, `CandidateSource`, `CurveInvariants`, `Error`) and `reference`'s errors;
-the stage submodules of both pipelines, and `reference::run_hkty`, are `pub(crate)`, so
-items only the tests use are `#[cfg(test)]`. `src/cone.rs` holds the *cone data*
+points (`compute_gv`, `compute_gw`, `bound_gv`, and their `Geometry`, `VexStratum`,
+`Options`, `Tuning`, `ExtractionTuning`, `CandidateSource`, `CurveInvariants`, `Error`, and
+`KeyError` and `Bound`, which those expose) and `reference`'s errors, and `pub mod python`
+behind its feature; the stage submodules of both pipelines, and `reference::run_hkty`, are
+`pub(crate)`, so items only the tests use are `#[cfg(test)]`. The input structs (`Problem`,
+`Geometry`, `Options`, `modular::Options`, `Tuning`, `ExtractionTuning`) and the error enums
+are `#[non_exhaustive]`, so that fields and variants can be added after the release: outside
+the crate they are built by `Problem::new`, `Geometry::new` and `Default` and then set field
+by field, which the tests and benches do too. `src/cone.rs` holds the *cone data*
 (`ConeData`: the Mori cone's inequalities and equations, and the Hilbert basis of each cone
 $K_T$, the curve classes in the Mori cone that only meet the divisors in $T$ negatively, for
 every $T$ of one or two divisors and, in a vex phase, the three divisors of every stratum) and
@@ -341,22 +348,26 @@ indices differently (the first index is a reference surface in the n-fold case).
 
 - **One problem, one dispatch.** The public input is `src/problem.rs`: a `Problem` of a
   `Geometry` (`q` with one row per divisor,
-  `intnums`, `nefpart` as divisor indices, and `ambient`: `Plain`, `Fan(cones)` or
-  `Strata(list)`), a `MoriCone` (`Generators`, `Inequalities { hyperplanes, equations }` or
+  `intnums`, `nefpart` as divisor indices, `ambient`: `Plain`, `Fan(cones)` or
+  `Strata(list)`, and an optional `dimension` checked against `implied_dimension`, which a
+  complete intersection without its `nefpart` gets wrong), a `MoriCone` (`Generators`, `Inequalities { hyperplanes, equations }` or
   `FromFan`) with the optional `hilbert_bases` of its cones $K_T$, a `Selection` (`MaxDeg`,
   `TargetPoints { points, max_deg }`, `MinPoints`, `CurveClasses`) and an optional
-  `grading_vector`, plus `Options` (`method`, `n_threads`, `certify`, `low_memory`, and
-  `tuning: modular::Tuning`), none of which change the results. Every field has the name of the
+  `grading_vector`, plus `Options` (`method`, `n_threads`, `certify`, `verify`, `low_memory`,
+  and `tuning: modular::Tuning`), none of which change the results. Every field has the name of the
   Python keyword and YAML key that set it, and every choice is an enum, so conflicting input
   cannot be built. `compute_gv`, `compute_gw` and the runtime-kind `compute` (returning
   `Computed::Gv` or `Computed::Gw`, for Python and the CLI) in `src/dispatch.rs` (a private
   module, re-exported at the root) take `&Problem` and `&Options` and return `Invariants<T>`:
   the `dimension`, the `grading_vector` used, the nonzero `entries` (`Invariant { curve,
   surface: Option<usize>, degree, value }`, sorted by degree, curve, surface) and a `Report`
-  (`#[non_exhaustive]`: the method that ran, `certified`, `grading_vector_derived`,
-  `elapsed`). `Problem::validate` (also run by `compute`, through `Problem::check`) checks
+  (`#[non_exhaustive]`: the method that ran, `lift` (`Lift::Exact` for the reference,
+  `Stable` or `Certified` for the modular pipeline: about the arithmetic only), `consistency`
+  (`Consistency::Unchecked`, `Quick` or `Full`: which check of the input ran, `Full` for the
+  reference on a threefold with $h^{1,1} \ge 2$), `grading_vector_derived`, `elapsed`). `Problem::validate` (also run by `compute`, through `Problem::check`) checks
   everything that is cheap before computing — `check_nefpart`, the dimension (with a hint
-  when `q` looks transposed), `check_intnums`, `check_strata`, the fan (`Fan::new`, its
+  when `q` looks transposed, and against `dimension` when given), a `max_deg` above
+  `MAX_DEGREE` ($2^{20}$; target points are checked once their degrees are known), `check_intnums`, `check_strata`, the fan (`Fan::new`, its
   intersection ring, its strata), the shapes of the cone and the selection, a given grading
   vector against the fan's wall classes and the generators, the target degrees, the Hilbert bases when the
   cone is given by inequalities, `method: modular` with a selection it does not support, and
@@ -364,15 +375,26 @@ indices differently (the first index is a reference surface in the n-fold case).
   (`Error::Unsupported`, `Error::MoriCone`, `Error::Modular`, `Error::Reference` otherwise).
   `compute` then resolves the cone's inequalities (given, `cone::facets` of the generators, or
   `Fan::mori_cone`), checks that a cone given with a fan contains its wall classes
-  (`Fan::wall_outside`; the fan's own cone would take minutes at large $h^{1,1}$) and that the
-  target points lie in the cone, takes the default grading vector (the primitive sum of those
+  (`Fan::wall_outside`; the fan's own cone would take minutes at large $h^{1,1}$), that a
+  hypersurface's cone given by generators without a fan contains the rays of $\{C : Q_r \cdot C \ge 0\}$ within
+  its span (`outside_class`: that cone is dual to the effective cone, so it lies in the Mori
+  cone of every phase and in the cap CYTools passes, and within the span of a face, in the
+  face; skipped when the double description overflows, for complete intersections, whose
+  charges may leave out divisors, and for inequalities, which can imply equations of a span
+  that only the generators' facets give), that a plain hypersurface's cone (its generators, or the
+  rays of at most `MAX_RAYS_FROM` inequalities, and below the Hilbert bases each pipeline
+  uses) has no curve of negative anticanonical degree (`check_negative_degree`: that is a vex
+  phase given without its strata, whose contributions would be dropped; field `fan`), and that the
+  target points lie in the cone and below `MAX_DEGREE`, takes the default grading vector (the primitive sum of those
   inequalities), runs `CurveClasses` as the `TargetPoints` of the nonzero classes (whose
   lightcones their invariants depend on; a set not closed downward gave wrong invariants
   silently) and keeps only theirs, and picks the pipeline: `Auto` runs `modular` for
   everything but `MinPoints` and the reference for that; curve classes too wide for the modular keys are `Error::Unsupported`
   naming `method: reference`, never a silent fallback. `modular` takes its candidates from
-  `Problem::hilbert_bases` (checked by `check_cone_data`) or from `cone::cone_data` of the
-  inequalities, truncated at the maximum degree lowered to the targets'; the reference runs on
+  `Problem::hilbert_bases` (checked by `check_cone_data`, and spot-checked by `spot_check`:
+  at most `SPOT_CHECKS` of the cones, spread over the list, recomputed by
+  `cone::hilbert_bases_of`, must contain every computed element up to the top degree) or from
+  `cone::cone_data` of the inequalities, truncated at the maximum degree lowered to the targets'; the reference runs on
   `cone::hilbert_basis` of the inequalities, and checks the Hilbert bases but does not use them. Errors of the cone computations that come
   from the input (`NotPointed`, `NonpositiveDegree`) name the Mori cone's field or the grading
   vector's (`cone_input`). With `TargetPoints` and `max_deg` the reference's results are
@@ -381,8 +403,26 @@ indices differently (the first index is a reference surface in the n-fold case).
   today, takes the `InvariantKind` and `CYKind` enums at runtime, and returns the error of
   the stage that fails (`reference::Error`): the checks come first so that those are about
   the geometry (invariants that are not integers), not about the shape of the input. Adding an option means a field of `Options` (or
-  `Problem`), its key in `src/io.rs` and its keyword in `src/python.rs` and `hkty.py`. The
+  `Problem`), its key in `src/io.rs` and its keyword in `src/python.rs` and `hkty.py`
+  (`compute_gv` and `compute_gw` there list every keyword explicitly). The
   computation is always exact: floating-point arithmetic (the old `prec` option) was removed.
+- **Consistency of the input** (`Verify`, `Options::verify`). For a threefold the modular
+  pipeline only sees $K = \sum_t w_t \kappa_{tab}$, so inconsistent input gives $n_C / \deg C$
+  with a denominator dividing the degree, which at low degree is often an integer: wrong
+  invariants, silently. The reference checks $I_t[C] = C_t N_C$ for every $t$
+  (`series_inversion`); the modular pipeline checks the same condition in one more direction:
+  the dispatch adds to a threefold with $h^{1,1} \ge 2$ a second geometry contracted with
+  the weights of `check_weights` (16-bit SplitMix64 numbers from a fixed seed, so runs repeat)
+  by `modular::Geometry::with_check` (its strata contracted with them too; `in_lattice` moves
+  both), and `run_in`, after the lift, runs `verify`: the stages up to the extraction modulo
+  a prime the lift did not take, on the candidates up to `Verify::degree` (`Quick`: half the
+  maximum degree rounded up, at least the maximum up to 4; `Full`: all), comparing $n'_C$ with
+  $(w' \cdot C) A_C$ from the lift at every curve in the lightcones with a coefficient or a
+  lifted invariant, and returns `Error::Inconsistent { degree, curve }` at the first that
+  differs. The candidates' skip of pair cones with vanishing $Q_s K Q_u$ must also see the
+  second form vanish, or the check would miss their curves. It cannot see uniform scalings of
+  $\kappa$, $h^{1,1} = 1$ or n-folds (no such condition); `tests/consistency.rs` holds the
+  review's cases of inconsistent input, the blind spots among them.
 - **`PolynomialCoeff<T>`** (`src/reference/polynomial/coefficient.rs`) is the compound trait the
   pipeline is written against, so that the exact number type can be swapped. It is built almost
   entirely from `*Assign` traits (`Assign` itself is ours): coefficient arithmetic is done in
@@ -469,19 +509,19 @@ indices differently (the first index is a reference surface in the n-fold case).
 `io::Input::parse_all` (which takes `--max-deg` as the `max_deg` of a document that selects no
 curve classes, and leaves the checks to `Input::validate`), applies the overrides (`--threads`,
 `--method`, `--max-deg` through `Input::set_max_deg`, `--invariants`,
-`--certify`/`--no-certify`, `--low-memory`, and `-v`/`-vv`, which installs `log_to_stderr`) and
+`--certify`/`--no-certify`, `--verify`, `--low-memory`, and `-v`/`-vv`, which installs `log_to_stderr`) and
 validates every document before computing any (a closed output pipe, as from `head`, ends it
 quietly), and writes one YAML document of results per input document to a file or
 stdout, flushing after each one. All of the parsing and formatting lives in `src/io.rs`, whose
 `Input` holds a `Problem`, the `InvariantKind` and the `Options`, with the field names of the
 Python API (each inner list is a *column*), in a flat document. `Input::from_yaml` rejects
-unknown fields (with what replaced the removed `cones` and `is_threefold`), parses the one-of
+unknown fields (with what replaced the removed `cones`, `is_threefold` and `prec`), parses the one-of
 groups (`fan`/`strata`; `generators`/`mori_hyperplanes`(+`mori_equations`)/nothing with a fan;
 `max_deg`/`target_points`(+`max_deg`)/`min_points`/`curve_classes`) into their enums
 (`IoError::Conflicting`, `IoError::MissingOneOf`), and calls `Problem::validate`, mapping
 `Error::Input { field, .. }` to `IoError::InvalidField`; it does not check anything itself. The
-output carries `dimension`, the `grading_vector` and a `report` line (method, certified,
-grading_vector_derived; no timing, so outputs stay comparable), and `surface` for n-folds.
+output carries `dimension`, the `grading_vector` and a `report` line (method, lift,
+consistency, grading_vector_derived; no timing, so outputs stay comparable), and `surface` for n-folds.
 Example inputs live in `examples/*.yaml` and are exercised by `tests/cli.rs`.
 `tests/data/h11_9_*.yaml` holds the inequalities and Hilbert bases computed with Normaliz for
 `benches/data/h11_9.yaml` (the whole Mori cone, and a facet with its generators), which
@@ -519,16 +559,20 @@ values (and denominators of GW invariants) as an `int64` array when they all fit
 Python ints otherwise (malachite's `enable_pyo3`).
 
 `python/cygv/hkty.py` wraps it: `Problem` is a dataclass of the geometry and the Mori cone (`q`,
-`intnums` as a dict or `[i, j, k, value]` entries, `nefpart`, `fan`, `strata`, `generators`,
+`intnums` as a dict or `[i, j, k, value]` entries, and by keyword only, since the generators
+given by position went to `nefpart`: `nefpart`, `dimension`, `fan`, `strata`, `generators`,
 `mori_hyperplanes`, `mori_equations`, `hilbert_bases`, `grading_vector`) whose `gv` and `gw`
-methods take the selection and the options as keywords; `compute_gv(q, intnums, **kwargs)` and `compute_gw` split
-their keywords between the two. The result, `Invariants`, is a `Sequence` of `(key, value)`
+methods take the selection and the options as keywords; `compute_gv(q, intnums, ...)` and
+`compute_gw` list both sets of keywords (so that `help()` shows them) and split them, and turn
+the arguments of cygv 0.3 (more positional arguments, `prec`, `cones`, `is_threefold`, no
+selection with generators) into errors that say what to write instead. The result, `Invariants`, is a `Sequence` of `(key, value)`
 pairs (the key a curve tuple, or `(curve, surface)` for an n-fold), built lazily from the
 read-only arrays `curves`, `surfaces`, `degrees` and `values`, with `kind`, `dimension`,
 `grading_vector` and a `Report` dataclass attached. It must not have a `keys` method, which
-would make `dict(invariants)` take it for a mapping. Invalid or unsupported input is a
-`ValueError`, a failed computation (`NotStable`, `CertifyPrimes`, invariants that are not
-integers in the reference, cones too large) a `cygv.ComputationError` (a `RuntimeError` created
+would make `dict(invariants)` take it for a mapping. Indexing by anything but an int or a
+slice, and `in`, look up keys (any sequence of ints), as a dict's do. Invalid or unsupported input is a
+`ValueError`, a failed computation (`NotStable`, `CertifyPrimes`, `Inconsistent`, invariants that
+are not integers or corrections that disagree in the reference, cones too large) a `cygv.ComputationError` (a `RuntimeError` created
 in `src/python.rs`), and a panic a `RuntimeError`. `hkty.py` checks that the vectors and counts
 are integers (integral floats too) that fit their Rust types, rather than truncating them.
 

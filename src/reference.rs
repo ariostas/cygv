@@ -28,6 +28,7 @@ pub use series_inversion::error::SeriesInversionError;
 
 /// The errors of the reference pipeline, by the stage that failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     Semigroup(SemigroupError),
     IntersectionNumbers(MiscError),

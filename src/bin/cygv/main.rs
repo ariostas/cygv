@@ -2,7 +2,7 @@
 
 use clap::Parser;
 use cygv::io::{error::IoError, Input};
-use cygv::{InvariantKind, Method};
+use cygv::{InvariantKind, Method, Verify};
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, BufWriter, IsTerminal, Read, Write};
@@ -33,6 +33,8 @@ The Calabi-Yau:
                  a reference surface.
   nefpart        The nef partition of a complete intersection, as lists of
                  divisor indices. Left out for a hypersurface.
+  dimension      Optionally, the dimension of the CY, which is then checked
+                 against the one that q and nefpart imply.
   fan            The maximal cones of the fan of the ambient toric variety, as
                  lists of divisor indices. It gives the strata of a vex phase,
                  the Mori cone and the default grading vector, and the
@@ -72,10 +74,19 @@ Options:
   method         Which pipeline to use: auto, modular or reference. It defaults
                  to auto, which uses the much faster modular pipeline for
                  everything but min_points, and the reference one for that.
-  certify        Whether to prove the results exact: the modular pipeline then
-                 bounds every invariant, and takes more primes until the bounds
-                 are below half their product. Not in vex phases. It defaults to
-                 false; the reference pipeline is exact anyway.
+  verify         Whether to check that the input is consistent, for threefolds
+                 with h11 >= 2: off, quick or full. The modular pipeline only
+                 uses the intersection numbers contracted with the grading
+                 vector, so inconsistent input can give wrong integers; the check
+                 computes once more with another contraction and fails when the
+                 two disagree. quick, the default, checks up to about half the
+                 maximum degree, for a few percent of the time, and full up to
+                 the maximum degree. The reference pipeline always checks.
+  certify        Whether to prove that the modular pipeline's lift from residues
+                 is right: it then bounds every invariant, and takes more primes
+                 until the bounds are below half their product. It says nothing
+                 about the input. Not in vex phases. It defaults to false, which
+                 accepts the lift once one more prime agrees with it.
   low_memory     Whether to prefer memory to speed, for the runs that do not fit
                  otherwise: the modular pipeline then takes about a third of the
                  memory, for about two and a half times the time. It defaults to
@@ -84,7 +95,8 @@ Options:
                  CPU.
 
 The output gives the dimension of the CY, the grading vector, and a report of
-the pipeline that ran and whether the results are certified.";
+the pipeline that ran, how the lift is known to be right (exact, stable or
+certified) and which consistency check ran (unchecked, quick or full).";
 
 /// Compute GV and GW invariants of the CY manifolds specified in the input.
 #[derive(Parser, Debug)]
@@ -99,7 +111,7 @@ struct Args {
     /// Number of threads to use. It overrides the value given in the input
     #[arg(short = 'j', long, value_name = "N")]
     threads: Option<u32>,
-    /// Pipeline to use. It overrides the value given in the input
+    /// Pipeline to use: auto, modular or reference. It overrides the value given in the input
     #[arg(short, long, value_parser = parse_method)]
     method: Option<Method>,
     /// Maximum degree, for every input. It overrides the value given in the input, is the
@@ -110,12 +122,15 @@ struct Args {
     /// Which invariants to compute, gv or gw, for every input
     #[arg(short, long, value_parser = parse_invariants)]
     invariants: Option<InvariantKind>,
-    /// Prove the results exact, for every input
+    /// Prove that the lift from residues is right (not that the input is), for every input
     #[arg(long, conflicts_with = "no_certify")]
     certify: bool,
-    /// Do not prove the results exact, for every input
+    /// Do not prove the lift right, for every input
     #[arg(long)]
     no_certify: bool,
+    /// Consistency check of the input: off, quick or full, for every input
+    #[arg(long, value_parser = parse_verify)]
+    verify: Option<Verify>,
     /// Prefer memory to speed, for every input
     #[arg(long)]
     low_memory: bool,
@@ -132,6 +147,11 @@ fn parse_invariants(name: &str) -> Result<InvariantKind, String> {
         "gw" => Ok(InvariantKind::GW),
         _ => Err("expected gv or gw".to_owned()),
     }
+}
+
+/// Parse the name of a consistency check.
+fn parse_verify(name: &str) -> Result<Verify, String> {
+    Verify::from_name(name).ok_or_else(|| "expected off, quick or full".to_owned())
 }
 
 /// Parse the name of a method.
@@ -218,6 +238,9 @@ fn run(args: &Args) -> Result<(), Box<dyn Error>> {
         }
         if args.certify || args.no_certify {
             input.options.certify = args.certify;
+        }
+        if let Some(verify) = args.verify {
+            input.options.verify = verify;
         }
         if args.low_memory {
             input.options.low_memory = true;

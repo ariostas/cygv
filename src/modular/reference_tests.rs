@@ -819,6 +819,7 @@ fn computed(
             } else {
                 Ambient::Strata(case.strata.clone())
             },
+            dimension: None,
         },
         cone,
         hilbert_bases,

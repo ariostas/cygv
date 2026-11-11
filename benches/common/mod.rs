@@ -109,7 +109,7 @@ fn fixture(name: &'static str, data: &str, cones: &str) -> Model {
         name,
         generators,
         grading_vector: RowDVector::from_vec(problem.grading_vector.unwrap()),
-        cy_kind: CYKind::from_is_threefold(geometry.dimension() == 3),
+        cy_kind: CYKind::from_is_threefold(geometry.implied_dimension() == 3),
         q: geometry.q,
         nefpart: geometry.nefpart,
         intnums: geometry.intnums,
@@ -427,24 +427,16 @@ impl Scenario {
                 (Method::Modular, Some(cone), Some(cd.cones))
             }
         };
-        let problem = Problem {
-            geometry: Geometry {
-                q: m.q.clone(),
-                intnums: m.intnums.clone(),
-                nefpart: m.nefpart.clone(),
-                ..Geometry::default()
-            },
-            cone: cone.unwrap_or_else(|| MoriCone::Generators(m.generators.clone())),
-            hilbert_bases,
-            selection: Selection::MaxDeg(self.max_deg),
-            grading_vector: Some(m.grading_vector.iter().copied().collect()),
-        };
-        let options = Options {
-            method,
-            n_threads: n_threads().map(|n| n.max(1) as usize),
-            low_memory: self.pipeline == Pipeline::ModularLowMemory,
-            ..Options::default()
-        };
+        let mut geometry = Geometry::new(m.q.clone(), m.intnums.clone());
+        geometry.nefpart = m.nefpart.clone();
+        let cone = cone.unwrap_or_else(|| MoriCone::Generators(m.generators.clone()));
+        let mut problem = Problem::new(geometry, cone, Selection::MaxDeg(self.max_deg));
+        problem.hilbert_bases = hilbert_bases;
+        problem.grading_vector = Some(m.grading_vector.iter().copied().collect());
+        let mut options = Options::default();
+        options.method = method;
+        options.n_threads = n_threads().map(|n| n.max(1) as usize);
+        options.low_memory = self.pipeline == Pipeline::ModularLowMemory;
         match self.variant {
             Variant::GvRat => compute_gv(&problem, &options).unwrap().entries.len(),
             Variant::GwRat => compute_gw(&problem, &options).unwrap().entries.len(),

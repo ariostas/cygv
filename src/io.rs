@@ -31,8 +31,11 @@
 //! # Which pipeline to use: auto, modular or reference. Defaults to auto, which uses the
 //! # modular one, which is much faster, for everything but min_points.
 //! method: auto
-//! # Whether to prove the results exact, taking more primes if needed (not in vex phases).
-//! # Defaults to false.
+//! # Whether to check that the input is consistent by a second computation (threefolds with
+//! # h11 >= 2): off, quick (up to about half the maximum degree) or full. Defaults to quick.
+//! verify: quick
+//! # Whether to prove that the lift from residues is right, taking more primes if needed
+//! # (not in vex phases). It says nothing about the input. Defaults to false.
 //! certify: false
 //! # Whether to prefer memory to speed, for the runs that do not fit otherwise: about a third
 //! # of the memory for about two and a half times the time. Defaults to false.
@@ -81,7 +84,7 @@
 //! invariants: gv
 //! dimension: 3
 //! grading_vector: [3, -1]
-//! report: {method: modular, certified: false, grading_vector_derived: false}
+//! report: {method: modular, lift: stable, consistency: quick, grading_vector_derived: false}
 //! results:
 //!   - {curve_class: [0, -1], degree: 1, gv: 6}
 //!   - {curve_class: [1, 2], degree: 1, gv: 252}
@@ -96,7 +99,7 @@ pub mod error;
 use crate::cone::CandidateCone;
 use crate::{
     compute, Ambient, Computed, Error, Geometry, Invariant, InvariantKind, Invariants, Method,
-    MoriCone, Options, Problem, Selection, Stratum,
+    MoriCone, Options, Problem, Selection, Stratum, Verify,
 };
 use error::IoError;
 use malachite::Rational;
@@ -108,13 +111,14 @@ use std::str::FromStr;
 use yaml_rust2::yaml::{Hash, Yaml};
 use yaml_rust2::YamlLoader;
 
-/// The fields that are accepted in an input document. Those that were removed, `cones` and
-/// `is_threefold`, are rejected before with what to write instead.
-const INPUT_FIELDS: [&str; 20] = [
+/// The fields that are accepted in an input document. Those that were removed, `cones`,
+/// `is_threefold` and `prec`, are rejected before with what to write instead.
+const INPUT_FIELDS: [&str; 22] = [
     "name",
     "q",
     "intnums",
     "nefpart",
+    "dimension",
     "fan",
     "strata",
     "generators",
@@ -130,6 +134,7 @@ const INPUT_FIELDS: [&str; 20] = [
     "method",
     "n_threads",
     "certify",
+    "verify",
     "low_memory",
 ];
 
@@ -224,7 +229,14 @@ impl Input {
                 Some("is_threefold") => {
                     return Err(IoError::invalid_field(
                         "is_threefold",
-                        "the dimension is derived from q and nefpart, so leave it out",
+                        "the dimension is derived from q and nefpart, so leave it out, or give \
+                         dimension to have it checked",
+                    ))
+                }
+                Some("prec") => {
+                    return Err(IoError::invalid_field(
+                        "prec",
+                        "the computation is always exact now, so leave it out",
                     ))
                 }
                 Some(k) if INPUT_FIELDS.contains(&k) => {}
@@ -247,6 +259,9 @@ impl Input {
             None => Vec::new(),
             Some(y) => as_index_lists(y, "nefpart")?,
         };
+        let dimension = get_field(hash, "dimension")
+            .map(|y| as_u32(y, "dimension").map(|d| d as usize))
+            .transpose()?;
         let ambient = match (get_field(hash, "fan"), get_field(hash, "strata")) {
             (Some(_), Some(_)) => return Err(IoError::Conflicting("fan", "strata")),
             (Some(fan), None) => Ambient::Fan(as_index_lists(fan, "fan")?),
@@ -359,6 +374,14 @@ impl Input {
                 .as_bool()
                 .ok_or_else(|| IoError::invalid_field("low_memory", "expected true or false"))?,
         };
+        let verify = match get_field(hash, "verify") {
+            None => Verify::default(),
+            Some(Yaml::Boolean(false)) => Verify::Off,
+            Some(Yaml::Boolean(true)) => Verify::default(),
+            Some(y) => y.as_str().and_then(Verify::from_name).ok_or_else(|| {
+                IoError::invalid_field("verify", "expected one of \"off\", \"quick\" or \"full\"")
+            })?,
+        };
         let method = match get_field(hash, "method") {
             None => Method::default(),
             Some(y) => y.as_str().and_then(Method::from_name).ok_or_else(|| {
@@ -376,6 +399,7 @@ impl Input {
                     intnums,
                     nefpart,
                     ambient,
+                    dimension,
                 },
                 cone,
                 hilbert_bases,
@@ -388,6 +412,7 @@ impl Input {
                 n_threads,
                 certify,
                 low_memory,
+                verify,
                 ..Options::default()
             },
         })
@@ -446,9 +471,10 @@ impl Input {
         let report = &invariants.report;
         writeln!(
             writer,
-            "report: {{method: {}, certified: {}, grading_vector_derived: {}}}",
+            "report: {{method: {}, lift: {}, consistency: {}, grading_vector_derived: {}}}",
             report.method.as_str(),
-            report.certified,
+            report.lift.as_str(),
+            report.consistency.as_str(),
             report.grading_vector_derived
         )?;
         if invariants.entries.is_empty() {
@@ -950,7 +976,7 @@ min_points: 20
         assert_eq!(geometry.intnums[&(0, 1, 1)], -1);
         assert!(geometry.nefpart.is_empty());
         assert_eq!(geometry.ambient, Ambient::Plain);
-        assert_eq!(geometry.dimension(), 3);
+        assert_eq!(geometry.implied_dimension(), 3);
         assert_eq!(problem.selection, Selection::MinPoints(20));
         assert_eq!(input.kind, InvariantKind::GV);
         assert_eq!(input.options, Options::default());
@@ -1281,6 +1307,7 @@ hilbert_bases:
         for (field, extra) in [
             ("cones", "cones: []\n"),
             ("is_threefold", "is_threefold: true\n"),
+            ("prec", "prec: 128\n"),
         ] {
             assert_eq!(field_of(&format!("{THREEFOLD}{extra}")), field);
         }
@@ -1377,7 +1404,7 @@ hilbert_bases:
         let data = format!("{data}nefpart: [[0, 1], [2, 3, 4, 5, 6, 7]]\n");
         let input = load_one(&data).unwrap();
         assert_eq!(input.problem.geometry.nefpart.len(), 2);
-        assert_eq!(input.problem.geometry.dimension(), 4);
+        assert_eq!(input.problem.geometry.implied_dimension(), 4);
         // The nef partition must split the rays: indices of the rays, each in one part.
         for parts in [
             "[2, 3, 4, 5, 6, 8]",
@@ -1469,7 +1496,8 @@ hilbert_bases:
             entries,
             report: Report {
                 method: Method::Modular,
-                certified: false,
+                lift: crate::Lift::Stable,
+                consistency: crate::Consistency::Quick,
                 grading_vector_derived: false,
                 elapsed: std::time::Duration::ZERO,
             },
@@ -1497,7 +1525,7 @@ hilbert_bases:
         assert_eq!(
             String::from_utf8(buf).unwrap(),
             "---\nname: test\ninvariants: gv\ndimension: 3\ngrading_vector: [3, -1]\n\
-             report: {method: modular, certified: false, grading_vector_derived: false}\n\
+             report: {method: modular, lift: stable, consistency: quick, grading_vector_derived: false}\n\
              results:\n  \
              - {curve_class: [0, -1], degree: 1, gv: -4}\n  \
              - {curve_class: [1, 0], degree: 3, gv: 7524}\n"
@@ -1515,7 +1543,8 @@ hilbert_bases:
             }],
             report: Report {
                 method: Method::Reference,
-                certified: true,
+                lift: crate::Lift::Exact,
+                consistency: crate::Consistency::Unchecked,
                 grading_vector_derived: true,
                 elapsed: std::time::Duration::ZERO,
             },
@@ -1525,7 +1554,7 @@ hilbert_bases:
         assert_eq!(
             String::from_utf8(buf).unwrap(),
             "---\ninvariants: gw\ndimension: 4\ngrading_vector: [3, -1]\n\
-             report: {method: reference, certified: true, grading_vector_derived: true}\n\
+             report: {method: reference, lift: exact, consistency: unchecked, grading_vector_derived: true}\n\
              results:\n  \
              - {curve_class: [0, -1], degree: 1, surface: 2, gw: '-4'}\n"
         );
@@ -1574,7 +1603,8 @@ hilbert_bases:
         assert_eq!(output[0]["invariants"].as_str(), Some("gv"));
         assert_eq!(output[0]["dimension"].as_i64(), Some(3));
         assert_eq!(output[0]["report"]["method"].as_str(), Some("reference"));
-        assert_eq!(output[0]["report"]["certified"].as_bool(), Some(true));
+        assert_eq!(output[0]["report"]["lift"].as_str(), Some("exact"));
+        assert_eq!(output[0]["report"]["consistency"].as_str(), Some("full"));
         assert_eq!(
             as_int_vec(&output[0]["grading_vector"], "").unwrap(),
             [3, -1]

@@ -40,7 +40,7 @@ fn case(yaml: &str, cones: Option<&str>) -> Case {
         .iter()
         .map(|p| DVector::from_iterator(p.len(), p.iter().map(|&r| r as i32)))
         .collect();
-    let kind = cygv::CYKind::from_is_threefold(g.dimension() == 3);
+    let kind = cygv::CYKind::from_is_threefold(g.implied_dimension() == 3);
     let geometry = Geometry::from_toric(&g.q, &nefpart, &g.intnums, kind, &w).unwrap();
     let MoriCone::Generators(generators) = problem.cone else {
         panic!("no generators")
@@ -90,32 +90,24 @@ fn test_stress() {
         ("h11_9, generators", case(H11_9, None), 12),
         ("fourfold", case(FOURFOLD, None), 15),
     ];
-    let tree = |depth| Tuning {
-        tree_depth: Some(depth),
-        ..Tuning::default()
+    let tree = |depth| {
+        let mut tuning = Tuning::default();
+        tuning.tree_depth = Some(depth);
+        tuning
     };
-    let by_level = Tuning {
-        sync_max_curves: usize::MAX,
-        sync_min_terms: 0,
-        ..tree(0)
-    };
+    let mut by_level = tree(0);
+    by_level.sync_max_curves = usize::MAX;
+    by_level.sync_min_terms = 0;
     for (name, case, max_deg) in &cases {
-        let one = Options {
-            threads: Some(1),
-            ..Options::default()
-        };
+        let mut one = Options::default();
+        one.threads = Some(1);
         let expected = run(case, *max_deg, &one);
         assert!(!expected.is_empty());
         for threads in [2, 3, 4, 8] {
             for extraction in [tree(2), tree(3), tree(0), by_level.clone()] {
-                let options = Options {
-                    threads: Some(threads),
-                    tuning: cygv::modular::Tuning {
-                        extraction,
-                        ..Default::default()
-                    },
-                    ..Options::default()
-                };
+                let mut options = Options::default();
+                options.threads = Some(threads);
+                options.tuning.extraction = extraction;
                 for _ in 0..5 {
                     let got = run(case, *max_deg, &options);
                     assert!(

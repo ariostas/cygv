@@ -11,7 +11,7 @@ name: vex phase of P(1,1,2,2,2)[8]
 q: [[1, 0, -1, 1, 0, 1], [0, 1, 1, 1, 1, 0]]
 intnums: [[0, 1, 1, 4], [1, 1, 1, 2]]
 max_deg: 10
-# The maximal cones, as indices of the divisors, i.e. of the columns of q.
+# The maximal cones, as toric divisors: 0-based positions in the charge vectors of q.
 fan:
   - [0, 1, 2, 3]
   - [0, 1, 2, 4]

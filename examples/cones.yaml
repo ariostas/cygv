@@ -14,7 +14,7 @@ intnums: [[0, 0, 0, 8], [0, 0, 1, 4]]
 max_deg: 10
 # The inequalities h . C >= 0 of the Mori cone, which is spanned by (1, 0) and (0, 1).
 mori_hyperplanes: [[1, 0], [0, 1]]
-# For every set T of one or two divisors (rows of the charge matrix), the Hilbert basis of
+# For every set T of one or two divisors (0-based positions in the charge vectors of q), the Hilbert basis of
 # the cone K_T of the curve classes in the Mori cone that only meet the divisors in T
 # negatively. Here only the last divisor can be negative, on the classes (x, y) with
 # x < 2y.

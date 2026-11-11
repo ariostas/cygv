@@ -100,10 +100,8 @@ fn grading_vector(input: &Input) -> Vec<i32> {
 type Results = HashMap<(Vec<i32>, usize), String>;
 
 fn results(input: &Input, method: Method) -> Result<Results, Error> {
-    let options = Options {
-        method,
-        ..input.options.clone()
-    };
+    let mut options = input.options.clone();
+    options.method = method;
     let label = |c: Vec<i32>, s: Option<usize>| (c, s.unwrap_or(0));
     Ok(match compute(&input.problem, input.kind, &options)? {
         Computed::Gv(gv) => gv
@@ -443,7 +441,7 @@ fn test_facet_target_points() {
 /// keys of 512 bits.
 #[test]
 fn test_facet_lattice() {
-    use cygv::modular::{self, CandidateSource, Tuning};
+    use cygv::modular::{self, CandidateSource};
     let input = input(H11_9, false, 10, H11_9_FACET);
     let cone_data = cone_data(&input);
     let gens = generators(H11_9_FACET);
@@ -463,14 +461,12 @@ fn test_facet_lattice() {
     let mut off = [0; 9];
     off[1] = 1;
     let targets: Vec<&[i32]> = targets.as_slice().chunks(9).chain([&off[..]]).collect();
-    let options = |lattice, certify, min_key_bits| modular::Options {
-        certify,
-        tuning: Tuning {
-            lattice,
-            min_key_bits,
-            ..Tuning::default()
-        },
-        ..modular::Options::default()
+    let options = |lattice, certify, min_key_bits| {
+        let mut options = modular::Options::default();
+        options.certify = certify;
+        options.tuning.lattice = lattice;
+        options.tuning.min_key_bits = min_key_bits;
+        options
     };
     for source in [
         CandidateSource::Cones(&cone_data),
@@ -524,16 +520,16 @@ fn p11222(
 ) -> Result<Results, Error> {
     let input = Input {
         name: None,
-        problem: Problem {
-            geometry: Geometry {
-                q: DMatrix::from_row_slice(6, 2, &[0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, -2]),
-                intnums: HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]),
-                ..Geometry::default()
-            },
-            cone,
-            hilbert_bases,
-            selection: min_points.map_or(Selection::MaxDeg(6), Selection::MinPoints),
-            grading_vector: Some(vec![1, 1]),
+        problem: {
+            let geometry = Geometry::new(
+                DMatrix::from_row_slice(6, 2, &[0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, -2]),
+                HashMap::from([((0, 0, 0), 8), ((0, 0, 1), 4)]),
+            );
+            let selection = min_points.map_or(Selection::MaxDeg(6), Selection::MinPoints);
+            let mut problem = Problem::new(geometry, cone, selection);
+            problem.hilbert_bases = hilbert_bases;
+            problem.grading_vector = Some(vec![1, 1]);
+            problem
         },
         kind: InvariantKind::GV,
         options: Options::default(),
@@ -586,10 +582,11 @@ fn test_entry_points() {
         "hilbert_bases"
     );
     // The generators span the Mori cone, which (0, 1), in some of the Hilbert bases, is not in
-    // with (2, -1) as a generator.
+    // with (1, 1) as a generator. (With (2, -1) instead, the cone would miss (2, 1), which meets
+    // every divisor nonnegatively, and be refused for that first.)
     assert_eq!(
         field(p11222(
-            MoriCone::Generators(dmatrix![1, 2; 0, -1]),
+            MoriCone::Generators(dmatrix![1, 1; 0, 1]),
             Some(bases),
             None,
             Method::Auto

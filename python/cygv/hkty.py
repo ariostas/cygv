@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, fields
+from dataclasses import KW_ONLY, dataclass, fields
 from fractions import Fraction
 from functools import cached_property
-from typing import Any, overload
+from typing import Any, cast, overload
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -16,6 +16,7 @@ from cygv.cygv import _compute
 Key = tuple[int, ...] | tuple[tuple[int, ...], int]
 
 METHODS = ("auto", "modular", "reference")
+VERIFY = ("off", "quick", "full")
 
 
 @dataclass(frozen=True)
@@ -24,9 +25,15 @@ class Report:
 
     #: The pipeline that ran, "modular" or "reference".
     method: str
-    #: Whether the results are proven exact (the reference pipeline is exact; the modular one
-    #: with ``certify=True``).
-    certified: bool
+    #: How the values are known to be those the input determines, which is about the
+    #: arithmetic, not about the input: "exact" (the reference pipeline), "stable" (the
+    #: modular one, whose lift from residues one more prime agreed with) or "certified" (the
+    #: modular one with ``certify=True``, which bounds every invariant).
+    lift: str
+    #: Which check of the consistency of the input ran: "quick" or "full" (see ``verify`` in
+    #: :meth:`Problem.gv`; the reference pipeline checks fully), or "unchecked" (turned off,
+    #: or for n-folds and ``h11 = 1``, where it does not apply).
+    consistency: str
     #: Whether the grading vector is the default rather than given.
     grading_vector_derived: bool
     #: The wall-clock time of the computation, in seconds.
@@ -131,15 +138,20 @@ class Invariants(Sequence[tuple[Any, Any]]):
     def __getitem__(self, i: slice) -> list[tuple[Any, Any]]: ...
 
     @overload
-    def __getitem__(self, i: tuple[Any, ...]) -> Any: ...
+    def __getitem__(self, i: Sequence[Any] | NDArray[Any]) -> Any: ...
 
     def __getitem__(
-        self, i: int | slice | tuple[Any, ...]
+        self, i: int | slice | Sequence[Any] | NDArray[Any]
     ) -> tuple[Any, Any] | list[tuple[Any, Any]] | Any:
-        if isinstance(i, tuple):
+        # A key can be any sequence of ints (a list, an array) as well as a tuple.
+        if not isinstance(i, int | np.integer | slice):
             if self._index is None:
                 self._index = {k: j for j, k in enumerate(self._keys())}
-            j = self._index.get(self._key(i))
+            try:
+                k = self._key(tuple(i))
+            except (TypeError, ValueError):
+                raise KeyError(i) from None
+            j = self._index.get(k)
             if j is None:
                 raise KeyError(i)
             return self[j][1]
@@ -153,18 +165,46 @@ class Invariants(Sequence[tuple[Any, Any]]):
             value = Fraction(value, int(self._denominators[i]))
         return key, value
 
+    def __contains__(self, key: object) -> bool:
+        """Whether ``key`` is the key of a nonzero invariant here, as ``invariants[key]``
+        looks it up (a curve class, or for an n-fold a ``(curve, surface)`` pair, from any
+        sequences of ints), or one of the ``(key, value)`` pairs that iterating gives."""
+        if isinstance(key, int | np.integer | slice | str):
+            return False
+        if isinstance(key, tuple) and self._is_pair(key):
+            return any(p == key for p in self)
+        try:
+            self[cast(Any, key)]
+        except KeyError:
+            return False
+        return True
+
+    def _is_pair(self, x: tuple[Any, ...]) -> bool:
+        """Whether ``x`` is a ``(key, value)`` pair rather than a key: its first entry is
+        a key, which is a sequence, of ints for a threefold and a pair for an n-fold."""
+        if len(x) != 2 or isinstance(x[0], int | np.integer | str):
+            return False
+        if self.surfaces is None:
+            return True
+        first = x[0]
+        return (
+            isinstance(first, Sequence)
+            and len(first) == 2
+            and not isinstance(first[0], int | np.integer)
+        )
+
     def get(self, key: Any, default: Any = None) -> Any:
         """The value of a key (a curve class, or for an n-fold the pair of a curve class and a
         reference surface), or ``default`` if it has no nonzero invariant here."""
         try:
             return self[tuple(key)]
-        except KeyError:
+        except (KeyError, TypeError):
             return default
 
     def _key(self, key: tuple[Any, ...]) -> Key:
         """A key as :meth:`_keys` gives them, from any sequences of ints."""
         if self.surfaces is None:
-            return tuple(int(x) for x in key)
+            return tuple(_int(x, "a curve class") for x in key)
         if len(key) != 2:
             msg = "the keys of an n-fold's invariants are (curve, surface) pairs"
             raise KeyError(msg)
@@ -400,6 +440,16 @@ def _method(method: Any) -> str | None:
     return method
 
 
+def _verify(verify: Any) -> str:
+    """The consistency check, from its name or a bool."""
+    if isinstance(verify, bool | np.bool_):
+        return "quick" if verify else "off"
+    if not isinstance(verify, str) or verify.lower() not in VERIFY:
+        msg = f'verify must be "off", "quick" or "full" (or a bool), not {verify!r}'
+        raise ValueError(msg)
+    return verify.lower()
+
+
 def _verbosity(verbose: Any) -> int:
     """The verbosity, 0 to 2, from a bool or an int (larger ones are 2)."""
     if isinstance(verbose, bool | np.bool_):
@@ -414,7 +464,8 @@ class Problem:
     """A Calabi-Yau hypersurface or complete intersection in a toric variety, and its Mori
     cone, whose GV or GW invariants :meth:`gv` and :meth:`gw` compute.
 
-    The vectors are given as lists (or array-likes) of ints, one vector per inner list:
+    ``q`` and ``intnums`` can be given by position, the others only by keyword. The vectors
+    are given as lists (or array-likes) of ints, one vector per inner list:
 
     - ``q``: the GLSM charges, one charge vector per Kähler parameter. A divisor index is a
       position in these vectors.
@@ -423,6 +474,9 @@ class Problem:
       reference surface.
     - ``nefpart``: the nef partition of a complete intersection, as lists of divisor
       indices; ``None`` for a hypersurface.
+    - ``dimension``: optionally, the dimension of the CY, which is then checked against the
+      one that ``q`` and ``nefpart`` imply (a complete intersection given without its nef
+      partition would be taken for a hypersurface of higher dimension).
     - ``fan``: the maximal cones of the fan of the ambient toric variety, as lists of divisor
       indices (threefold hypersurfaces only). It gives the strata of a vex phase, the Mori
       cone and the default grading vector, and ``intnums`` is checked against it.
@@ -442,7 +496,11 @@ class Problem:
 
     q: ArrayLike
     intnums: Mapping[Any, int] | Iterable[Sequence[int]]
+    # The rest by keyword only: given by position, the generators would be taken for the nef
+    # partition.
+    _: KW_ONLY
     nefpart: Iterable[ArrayLike] | None = None
+    dimension: int | None = None
     fan: Iterable[ArrayLike] | None = None
     strata: Iterable[tuple[ArrayLike, Iterable[Any]]] | None = None
     generators: ArrayLike | None = None
@@ -461,6 +519,7 @@ class Problem:
         method: str | None = None,
         n_threads: int | None = None,
         certify: bool = False,
+        verify: str | bool = "quick",
         low_memory: bool = False,
         verbose: bool | int = False,
     ) -> Invariants:
@@ -476,7 +535,22 @@ class Problem:
 
         ``method`` is "auto" (the default), "modular" or "reference": auto runs the much
         faster modular pipeline for every selection but ``min_points``, and the reference one
-        for that. ``certify`` proves the results exact. ``low_memory`` prefers memory to
+        for that.
+
+        ``verify`` checks that the input is consistent, for a threefold with ``h11 >= 2``: the
+        modular pipeline only uses the intersection numbers contracted with the grading
+        vector, so wrong ones (or a Mori cone too small, or a vex phase without its fan or
+        strata) can give wrong integers, which a second pass with another contraction then
+        detects, raising a :class:`ComputationError`. "quick" (the default, or ``True``) checks
+        up to about half the maximum degree, for a few percent of the time, "full" up to the
+        maximum degree, for about half a pass more, and "off" (or ``False``) not at all. It
+        cannot detect intersection numbers all scaled by a common factor, nor anything for
+        ``h11 = 1`` or an n-fold. The reference pipeline always checks.
+
+        ``certify`` proves that the lift from residues is right, by bounding every invariant
+        and taking primes until the bounds fit, for about twice the time; it says nothing
+        about the input, and without it a wrong lift is already vanishingly unlikely. It is
+        not supported for vex phases yet. ``low_memory`` prefers memory to
         speed, for the runs that do not fit otherwise: the modular pipeline then takes about a
         third of the memory, for about two and a half times the time. ``n_threads`` defaults
         to one per logical CPU. ``verbose`` writes the progress of the computation to
@@ -495,6 +569,7 @@ class Problem:
             method=method,
             n_threads=n_threads,
             certify=certify,
+            verify=verify,
             low_memory=low_memory,
             verbose=verbose,
         )
@@ -509,6 +584,7 @@ class Problem:
         method: str | None = None,
         n_threads: int | None = None,
         certify: bool = False,
+        verify: str | bool = "quick",
         low_memory: bool = False,
         verbose: bool | int = False,
     ) -> Invariants:
@@ -523,6 +599,7 @@ class Problem:
             method=method,
             n_threads=n_threads,
             certify=certify,
+            verify=verify,
             low_memory=low_memory,
             verbose=verbose,
         )
@@ -538,6 +615,7 @@ class Problem:
         method: str | None,
         n_threads: int | None,
         certify: bool,
+        verify: str | bool,
         low_memory: bool,
         verbose: bool | int,
     ) -> Invariants:
@@ -549,6 +627,7 @@ class Problem:
             "q": q,
             "intnums": _intnums(self.intnums),
             "nefpart": _index_lists(self.nefpart, "nefpart"),
+            "dimension": _count(self.dimension, "dimension"),
             "fan": _index_lists(self.fan, "fan"),
             "strata": _strata(self.strata),
             "generators": _vectors(self.generators, "generators"),
@@ -564,6 +643,7 @@ class Problem:
             "method": _method(method),
             "n_threads": _count(n_threads, "n_threads"),
             "certify": _flag(certify, "certify"),
+            "verify": _verify(verify),
             "low_memory": _flag(low_memory, "low_memory"),
             "verbose": _verbosity(verbose),
         }
@@ -592,25 +672,127 @@ class Problem:
         )
 
 
+# The keywords of cygv 0.3 that are gone, with what to write instead.
+_REMOVED = {
+    "prec": "the computation is always exact now; leave prec out",
+    "cones": "it is called hilbert_bases now, and the Mori cone it came with is given by "
+    "mori_hyperplanes alone",
+    "is_threefold": "the dimension is derived from q and nefpart; leave it out, or give "
+    "dimension to have it checked",
+    "find_gv": "call compute_gv or compute_gw",
+}
+
+# The order of the positional arguments of cygv 0.3.
+_OLD_ORDER = (
+    "cygv 0.3 took (generators, grading_vector, q, intnums, max_deg, min_points, "
+    "target_points, nefpart, prec) by position; now q and intnums come first and everything "
+    "else is a keyword, e.g. compute_gv(q, intnums, generators=generators, "
+    "grading_vector=grading_vector, max_deg=10)"
+)
+
+
+def _compute_checked(
+    kind: str,
+    q: ArrayLike,
+    intnums: Any,
+    args: tuple[Any, ...],
+    keywords: dict[str, Any],
+    removed: dict[str, Any],
+) -> Invariants:
+    """The invariants for :func:`compute_gv` and :func:`compute_gw`, with errors that say
+    what to write instead of the arguments of cygv 0.3."""
+    name = f"compute_{kind}"
+    if args:
+        msg = f"{name}() takes 2 positional arguments but {2 + len(args)} were given; {_OLD_ORDER}"
+        raise TypeError(msg)
+    for key in removed:
+        hint = _REMOVED.get(key)
+        msg = f"{name}() got an unexpected keyword argument {key!r}"
+        raise TypeError(f"{msg} ({hint})" if hint else msg)
+    problem = {k: keywords.pop(k) for k in _PROBLEM_FIELDS if k not in ("q", "intnums")}
+    selection = ("max_deg", "target_points", "min_points", "curve_classes")
+    if (
+        all(keywords[k] is None for k in selection)
+        and problem["generators"] is not None
+    ):
+        msg = (
+            "which curve classes: give max_deg, target_points, min_points or curve_classes "
+            "(cygv 0.3 computed the invariants at the generators when none of the first "
+            "three was given, which is curve_classes=generators now)"
+        )
+        raise ValueError(msg)
+    p = Problem(q, intnums, **problem)
+    return p.gv(**keywords) if kind == "gv" else p.gw(**keywords)
+
+
 _PROBLEM_FIELDS = tuple(f.name for f in fields(Problem))
 
 
-def _split(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The keywords of :class:`Problem`, and the others."""
-    problem = {k: v for k, v in kwargs.items() if k in _PROBLEM_FIELDS}
-    rest = {k: v for k, v in kwargs.items() if k not in _PROBLEM_FIELDS}
-    return problem, rest
-
-
-def compute_gv(q: ArrayLike, intnums: Any, **kwargs: Any) -> Invariants:
+def compute_gv(
+    q: ArrayLike,
+    intnums: Mapping[Any, int] | Iterable[Sequence[int]],
+    *args: Any,
+    nefpart: Iterable[ArrayLike] | None = None,
+    dimension: int | None = None,
+    fan: Iterable[ArrayLike] | None = None,
+    strata: Iterable[tuple[ArrayLike, Iterable[Any]]] | None = None,
+    generators: ArrayLike | None = None,
+    mori_hyperplanes: ArrayLike | None = None,
+    mori_equations: ArrayLike | None = None,
+    hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
+    grading_vector: ArrayLike | None = None,
+    max_deg: int | None = None,
+    target_points: ArrayLike | None = None,
+    min_points: int | None = None,
+    curve_classes: ArrayLike | None = None,
+    method: str | None = None,
+    n_threads: int | None = None,
+    certify: bool = False,
+    verify: str | bool = "quick",
+    low_memory: bool = False,
+    verbose: bool | int = False,
+    **removed: Any,
+) -> Invariants:
     """The GV invariants: ``Problem(q, intnums, ...).gv(...)``, with the keywords of
-    :class:`Problem` and of :meth:`Problem.gv` together."""
-    problem, rest = _split(kwargs)
-    return Problem(q, intnums, **problem).gv(**rest)
+    :class:`Problem` and of :meth:`Problem.gv` together, which describe them."""
+    keywords = {
+        k: v
+        for k, v in locals().items()
+        if k not in ("q", "intnums", "args", "removed")
+    }
+    return _compute_checked("gv", q, intnums, args, keywords, removed)
 
 
-def compute_gw(q: ArrayLike, intnums: Any, **kwargs: Any) -> Invariants:
+def compute_gw(
+    q: ArrayLike,
+    intnums: Mapping[Any, int] | Iterable[Sequence[int]],
+    *args: Any,
+    nefpart: Iterable[ArrayLike] | None = None,
+    dimension: int | None = None,
+    fan: Iterable[ArrayLike] | None = None,
+    strata: Iterable[tuple[ArrayLike, Iterable[Any]]] | None = None,
+    generators: ArrayLike | None = None,
+    mori_hyperplanes: ArrayLike | None = None,
+    mori_equations: ArrayLike | None = None,
+    hilbert_bases: Iterable[tuple[ArrayLike, ArrayLike]] | None = None,
+    grading_vector: ArrayLike | None = None,
+    max_deg: int | None = None,
+    target_points: ArrayLike | None = None,
+    min_points: int | None = None,
+    curve_classes: ArrayLike | None = None,
+    method: str | None = None,
+    n_threads: int | None = None,
+    certify: bool = False,
+    verify: str | bool = "quick",
+    low_memory: bool = False,
+    verbose: bool | int = False,
+    **removed: Any,
+) -> Invariants:
     """The GW invariants: ``Problem(q, intnums, ...).gw(...)``, with the keywords of
-    :class:`Problem` and of :meth:`Problem.gw` together."""
-    problem, rest = _split(kwargs)
-    return Problem(q, intnums, **problem).gw(**rest)
+    :class:`Problem` and of :meth:`Problem.gw` together, which describe them."""
+    keywords = {
+        k: v
+        for k, v in locals().items()
+        if k not in ("q", "intnums", "args", "removed")
+    }
+    return _compute_checked("gw", q, intnums, args, keywords, removed)

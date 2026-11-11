@@ -14,7 +14,7 @@ use crate::modular::Error as ModularError;
 use crate::reference::{self, series_inversion::error::SeriesInversionError};
 use crate::{
     compute, Ambient, CandidateCone, Computed, Error, Geometry, Interrupt, InvariantKind,
-    Invariants, Method, MoriCone, Options, Problem, Selection, Stratum,
+    Invariants, Method, MoriCone, Options, Problem, Selection, Stratum, Verify,
 };
 use malachite::{Integer, Rational};
 use nalgebra::DMatrix;
@@ -189,23 +189,27 @@ fn parse(args: &Bound<'_, PyDict>) -> PyResult<(Problem, Options)> {
             ))
         })?,
     };
-    let problem = Problem {
-        geometry: Geometry {
-            q,
-            intnums,
-            nefpart,
-            ambient,
-        },
-        cone,
-        hilbert_bases,
-        selection,
-        grading_vector: get(args, "grading_vector")?,
+    let verify = match get::<String>(args, "verify")? {
+        None => Verify::default(),
+        Some(name) => Verify::from_name(&name).ok_or_else(|| {
+            value_error(format!(
+                "unknown verify \"{name}\", expected \"off\", \"quick\" or \"full\""
+            ))
+        })?,
     };
+    let mut geometry = Geometry::new(q, intnums);
+    geometry.nefpart = nefpart;
+    geometry.ambient = ambient;
+    geometry.dimension = get(args, "dimension")?;
+    let mut problem = Problem::new(geometry, cone, selection);
+    problem.hilbert_bases = hilbert_bases;
+    problem.grading_vector = get(args, "grading_vector")?;
     let options = Options {
         method,
         n_threads: get(args, "n_threads")?,
         certify: get(args, "certify")?.unwrap_or(false),
         low_memory: get(args, "low_memory")?.unwrap_or(false),
+        verify,
         ..Options::default()
     };
     Ok((problem, options))
@@ -222,6 +226,7 @@ fn to_py_err(e: Error) -> PyErr {
                     | ModularError::NotInteger { .. }
                     | ModularError::CertifyPrimes { .. }
                     | ModularError::NotInvertible
+                    | ModularError::Inconsistent { .. }
             )
             | Error::Reference(reference::Error::SeriesInversion(
                 SeriesInversionError::NonIntegerGVError | SeriesInversionError::Inconsistent
@@ -369,7 +374,9 @@ struct Columns {
     denominators: Option<Values>,
     dimension: usize,
     grading_vector: Vec<i32>,
-    report: (String, bool, bool, f64),
+    /// The method, the lift, the consistency check, whether the grading vector was derived,
+    /// and the seconds.
+    report: (String, String, String, bool, f64),
 }
 
 impl Columns {
@@ -408,7 +415,8 @@ impl Columns {
             grading_vector: inv.grading_vector,
             report: (
                 report.method.as_str().to_owned(),
-                report.certified,
+                report.lift.as_str().to_owned(),
+                report.consistency.as_str().to_owned(),
                 report.grading_vector_derived,
                 report.elapsed.as_secs_f64(),
             ),

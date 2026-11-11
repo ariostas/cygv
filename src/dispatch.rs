@@ -18,11 +18,11 @@ use crate::cone::{columns, ConeData, ConeError};
 use crate::modular::key::KeyError;
 use crate::modular::{self, CandidateSource, CurveInvariants};
 use crate::problem::{
-    check_hilbert_bases, check_target_degrees, cone_field, input_err, Checked, MoriCone, Options,
-    Selection,
+    check_hilbert_bases, check_target_degrees, check_top_degree, cone_field, input_err, Checked,
+    MoriCone, Options, Selection,
 };
 use crate::reference::{self, run_hkty};
-use crate::{CYKind, InvariantKind, Method, Problem, Stratum};
+use crate::{CYKind, InvariantKind, Method, Problem, Stratum, Verify};
 use core::fmt;
 use malachite::{Integer, Rational};
 use nalgebra::{DMatrix, DVector, RowDVector};
@@ -118,13 +118,67 @@ pub struct Invariant<T> {
 pub struct Report {
     /// The pipeline that ran, never [`Method::Auto`].
     pub method: Method,
-    /// Whether the results are proven exact: by the reference pipeline, which is exact, or by
-    /// the modular one with [`Options::certify`].
-    pub certified: bool,
+    /// How the values are known to be those the input determines (see [`Lift`]). This is
+    /// about the arithmetic only, not about whether the input is right.
+    pub lift: Lift,
+    /// Which consistency check of the input ran (see [`Consistency`]).
+    pub consistency: Consistency,
     /// Whether the grading vector is the default rather than given.
     pub grading_vector_derived: bool,
     /// The wall-clock time of the computation.
     pub elapsed: Duration,
+}
+
+/// How the values of [`Invariants`] are known to be those that the input determines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Lift {
+    /// Computed in exact arithmetic, by the reference pipeline.
+    Exact,
+    /// Lifted from residues by the CRT, and accepted once one more prime agrees with the
+    /// lift at every curve: wrong only if every invariant that differs is larger than the
+    /// product of the primes and agrees with the check prime by a $2^{-62}$ accident.
+    Stable,
+    /// Lifted as for [`Lift::Stable`], with bounds on every invariant proving that the
+    /// primes determine them ([`Options::certify`]).
+    Certified,
+}
+
+impl Lift {
+    /// The name in the output formats.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Stable => "stable",
+            Self::Certified => "certified",
+        }
+    }
+}
+
+/// Which check of the consistency of the input ran: of the condition that the instanton
+/// corrections of the Kähler parameters of a threefold are those of one set of invariants
+/// (see [`crate::Verify`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Consistency {
+    /// None: it was turned off, or does not apply (n-folds, $h^{1,1} = 1$).
+    Unchecked,
+    /// Up to about half the maximum degree, by the modular pipeline ([`crate::Verify::Quick`]).
+    Quick,
+    /// Up to the maximum degree: by the modular pipeline with [`crate::Verify::Full`], or by
+    /// the reference pipeline, which checks every correction of every curve.
+    Full,
+}
+
+impl Consistency {
+    /// The name in the output formats.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unchecked => "unchecked",
+            Self::Quick => "quick",
+            Self::Full => "full",
+        }
+    }
 }
 
 /// GV or GW invariants, for callers that only know which at run time.
@@ -231,6 +285,39 @@ fn compute_in(
             ));
         }
     }
+    // Without a fan, which settles it, the cone must at least contain the classes that meet
+    // every divisor nonnegatively. Only a cone given by generators has the equations of its
+    // span at hand (from its facets): inequalities can imply equations, as h and -h do.
+    if fan.is_none()
+        && geometry.nefpart.is_empty()
+        && matches!(problem.cone, MoriCone::Generators(_))
+    {
+        if let Some(c) = outside_class(q, &hyperplanes, &equations)? {
+            return Err(input_err(
+                cone_field(&problem.cone),
+                format!(
+                    "the Mori cone does not contain the curve class {c:?}, which meets every \
+                     toric divisor nonnegatively and so lies in the Mori cone of every phase \
+                     (or in its face, as the span of the cone given): the cone is too small, or \
+                     in another basis than the charges"
+                ),
+            ));
+        }
+    }
+    // A plain hypersurface whose cone has curves of negative anticanonical degree is a vex
+    // phase given without its strata. The rays of a cone given by inequalities are only
+    // computed when they are few, and the Hilbert bases are checked again below.
+    match &problem.cone {
+        MoriCone::Generators(g) => check_negative_degree(problem, &strata, columns(g))?,
+        MoriCone::Inequalities { .. } if hyperplanes.ncols() <= MAX_RAYS_FROM => {
+            match crate::cone::rays(&hyperplanes, &equations) {
+                Ok(rays) => check_negative_degree(problem, &strata, columns(&rays.rays))?,
+                Err(crate::cone::HullError::Interrupted) => return Err(Error::Interrupted),
+                Err(_) => {}
+            }
+        }
+        _ => {}
+    }
     let grading_vector = match &problem.grading_vector {
         // Checked with the problem.
         Some(g) => RowDVector::from_row_slice(g),
@@ -281,6 +368,16 @@ fn compute_in(
             ));
         }
     }
+    if let Selection::TargetPoints { points, max_deg } = &*selection {
+        let top = columns(points)
+            .map(|p| degree(p, &grading_vector))
+            .max()
+            .unwrap_or(0);
+        check_top_degree(
+            max_deg.map_or(top, |m| top.min(m.into())),
+            problem.selection.name(),
+        )?;
+    }
     let use_modular = options.method != Method::Reference && selection.modular_supported();
     log::info!(
         "grading vector {:?}{}, {} method",
@@ -323,6 +420,24 @@ fn compute_in(
                     &computed
                 }
             };
+            if let Some(bases) = &problem.hilbert_bases {
+                spot_check(
+                    bases,
+                    &hyperplanes,
+                    &equations,
+                    q,
+                    &grading_vector,
+                    top_degree(&selection, &grading_vector),
+                )?;
+            }
+            check_negative_degree(
+                problem,
+                &strata,
+                cone_data
+                    .cones
+                    .iter()
+                    .flat_map(|c| columns(&c.hilbert_basis)),
+            )?;
             log::info!(
                 "cone data: {} cones, {} Hilbert basis elements{}",
                 cone_data.cones.len(),
@@ -388,17 +503,30 @@ fn compute_in(
             Entries::Gw(e) => e.len(),
         }
     );
+    // The check needs a second direction to compare with, and only threefolds have it.
+    let checkable = cy_kind.is_threefold() && q.ncols() >= 2;
     let report = Report {
         method: if use_modular {
             Method::Modular
         } else {
             Method::Reference
         },
-        certified: !use_modular || options.certify,
+        lift: match (use_modular, options.certify) {
+            (false, _) => Lift::Exact,
+            (true, false) => Lift::Stable,
+            (true, true) => Lift::Certified,
+        },
+        consistency: match (checkable, use_modular, options.verify) {
+            (false, _, _) => Consistency::Unchecked,
+            (true, false, _) => Consistency::Full,
+            (true, true, Verify::Off) => Consistency::Unchecked,
+            (true, true, Verify::Quick) => Consistency::Quick,
+            (true, true, Verify::Full) => Consistency::Full,
+        },
         grading_vector_derived: problem.grading_vector.is_none(),
         elapsed: start.elapsed(),
     };
-    let dimension = geometry.dimension() as usize;
+    let dimension = geometry.implied_dimension() as usize;
     let grading_vector = grading_vector.as_slice().to_vec();
     Ok(match &mut res {
         Entries::Gv(e) => Computed::Gv(Invariants {
@@ -414,6 +542,132 @@ fn compute_in(
             report,
         }),
     })
+}
+
+/// A class of the cone $\{C : Q_r \cdot C \ge 0\ \forall r\}$, within the span of the
+/// cone of `hyperplanes` and `equations`, that is outside that cone, if any.
+///
+/// That cone is dual to the effective cone of the toric variety, which contains the nef
+/// cone, so it lies in the Mori cone of every phase, and in the cone that the Mori cones of
+/// several phases share; within the span of a face of any of those, it lies in the face. So
+/// a cone that misses a class of it cannot be the Mori cone, or a face of it, in the basis
+/// of the charges. The rays are computed by the double description method; when they are
+/// too large for it, nothing is checked.
+fn outside_class(
+    q: &DMatrix<i32>,
+    hyperplanes: &DMatrix<i32>,
+    equations: &DMatrix<i32>,
+) -> Result<Option<Vec<i32>>, Error> {
+    let rows = q.transpose();
+    let rays = match crate::cone::rays(&rows, equations) {
+        Ok(rays) => rays,
+        Err(crate::cone::HullError::Interrupted) => return Err(Error::Interrupted),
+        Err(_) => return Ok(None),
+    };
+    // A line in that cone would be in the Mori cone too, which is pointed.
+    let outside = columns(&rays.rays)
+        .chain(columns(&rays.lineality))
+        .find(|c| columns(hyperplanes).any(|h| dot(h, c) < 0))
+        .map(<[i32]>::to_vec);
+    Ok(outside)
+}
+
+/// Refuses a hypersurface given without strata whose cone has curves of negative
+/// anticanonical degree among `classes` (Hilbert basis elements, whose sums are the classes
+/// computed): those are the curves of a vex phase, whose contributions come from its strata
+/// and would be dropped without them. In a phase that is not vex the anticanonical class is
+/// nef, so its Mori cone has none.
+fn check_negative_degree<'a>(
+    problem: &Problem,
+    strata: &[Stratum],
+    mut classes: impl Iterator<Item = &'a [i32]>,
+) -> Result<(), Error> {
+    let geometry = &problem.geometry;
+    if !strata.is_empty() || !geometry.nefpart.is_empty() {
+        return Ok(());
+    }
+    let q0: Vec<i32> = (0..geometry.q.ncols())
+        .map(|a| geometry.q.column(a).sum())
+        .collect();
+    let Some(c) = classes.find(|c| dot(&q0, c) < 0) else {
+        return Ok(());
+    };
+    let (field, what) = match geometry.ambient {
+        crate::Ambient::Fan(_) => (
+            cone_field(&problem.cone),
+            "which a fan without vex cones cannot have: the Mori cone is larger than the fan's",
+        ),
+        _ if geometry.implied_dimension() == 3 => (
+            "fan",
+            "which means that the phase is vex: give its fan (or its strata), without which \
+             their contributions would be dropped, or the Mori cone is larger than the toric \
+             variety's",
+        ),
+        _ => (
+            cone_field(&problem.cone),
+            "which means that the phase is vex, and vex phases are only supported for threefold \
+             hypersurfaces, or that the Mori cone is larger than the toric variety's",
+        ),
+    };
+    Err(input_err(
+        field,
+        format!("the Mori cone has the curve class {c:?} of negative anticanonical degree, {what}"),
+    ))
+}
+
+/// The most inequalities of a Mori cone whose rays are computed to look for curves of
+/// negative anticanonical degree, which the double description takes long for beyond that.
+const MAX_RAYS_FROM: usize = 200;
+
+/// The most cones $K_T$ of given Hilbert bases that [`spot_check`] recomputes.
+const SPOT_CHECKS: usize = 32;
+
+/// Checks given Hilbert bases against those computed here, for at most [`SPOT_CHECKS`] of
+/// their cones, spread over the list: each must contain the elements of the computed basis
+/// up to `max_deg`. A basis computed for a lower degree, or with an element missing, drops
+/// curve classes silently. It costs the Mori cone's Hilbert basis and one cut per divisor
+/// for each cone; when the cones are too large for that, nothing is checked.
+fn spot_check(
+    bases: &[crate::CandidateCone],
+    hyperplanes: &DMatrix<i32>,
+    equations: &DMatrix<i32>,
+    q: &DMatrix<i32>,
+    grading_vector: &RowDVector<i32>,
+    max_deg: u32,
+) -> Result<(), Error> {
+    let step = bases.len().div_ceil(SPOT_CHECKS).max(1);
+    let sample: Vec<&crate::CandidateCone> = bases.iter().step_by(step).collect();
+    let sets: Vec<&[usize]> = sample.iter().map(|c| c.divisors.as_slice()).collect();
+    let computed = match crate::cone::hilbert_bases_of(
+        hyperplanes,
+        equations,
+        q,
+        &sets,
+        grading_vector.as_slice(),
+        max_deg,
+    ) {
+        Ok(computed) => computed,
+        Err(ConeError::Interrupted) => return Err(Error::Interrupted),
+        Err(e @ (ConeError::NotPointed | ConeError::NonpositiveDegree)) => return Err(e.into()),
+        Err(_) => return Ok(()),
+    };
+    for (given, computed) in sample.iter().zip(&computed) {
+        let have: std::collections::HashSet<&[i32]> = columns(&given.hilbert_basis).collect();
+        if let Some(c) = columns(computed).find(|c| !have.contains(c)) {
+            return Err(input_err(
+                "hilbert_bases",
+                format!(
+                    "the Hilbert basis of the cone of the divisors {:?} lacks the element \
+                     {c:?} of degree {} (at most the degree computed, {max_deg}), so it is \
+                     incomplete or computed for a lower degree; leave the Hilbert bases out to \
+                     have them computed",
+                    given.divisors,
+                    degree(c, grading_vector),
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// An error of the cone computations that comes from the input, as an input error of its
@@ -525,20 +779,23 @@ fn run_modular(
         }
         _ => unreachable!("the modular pipeline only runs for max_deg and target_points"),
     };
-    let geometry = &problem.geometry;
-    let geometry = modular::Geometry::from_toric(
-        &geometry.q,
-        &nefpart_vectors(&geometry.nefpart),
-        &geometry.intnums,
-        cy_kind,
-        g,
-    )?
-    .with_strata(strata, g)?;
+    let input = &problem.geometry;
+    let nefpart = nefpart_vectors(&input.nefpart);
+    let contracted = |weights: &[i32]| {
+        modular::Geometry::from_toric(&input.q, &nefpart, &input.intnums, cy_kind, weights)?
+            .with_strata(strata, weights)
+    };
+    let mut geometry = contracted(g)?;
+    if options.verify != Verify::Off && cy_kind.is_threefold() && input.q.ncols() >= 2 {
+        let weights = check_weights(input.q.ncols());
+        geometry = geometry.with_check(contracted(&weights)?, &weights)?;
+    }
     let source = CandidateSource::Cones(cone_data);
     let modular_options = modular::Options {
         threads: options.n_threads,
         certify: options.certify,
         low_memory: options.low_memory,
+        verify: options.verify,
         tuning: options.tuning.clone(),
     };
     let threefold = cy_kind.is_threefold();
@@ -552,6 +809,24 @@ fn run_modular(
             threefold,
         )),
     })
+}
+
+/// The weights of the consistency check's contraction ([`Verify`]): pseudorandom integers
+/// of 16 bits, the same in every run (SplitMix64 from a fixed seed), so that a run can be
+/// repeated. They need only be unrelated to the defect of an inconsistent input, which a
+/// fixed sequence is, and small enough that the contraction fits its integers.
+fn check_weights(h11: usize) -> Vec<i32> {
+    let mut state: u64 = 0x6379_6776_5f63_6865;
+    (0..h11)
+        .map(|_| {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^= z >> 31;
+            (z >> 48) as i32 - (1 << 15)
+        })
+        .collect()
 }
 
 /// The nonzero invariants of the modular pipeline, one per curve class and component.
@@ -617,6 +892,7 @@ fn run_reference(
 ) -> Result<Entries, Error> {
     // Every lattice point of the Mori cone, from the Hilbert basis.
     let generators = crate::cone::hilbert_basis(hyperplanes, equations)?;
+    check_negative_degree(problem, &strata, columns(&generators))?;
     log::info!(
         "Hilbert basis of the Mori cone: {} elements",
         generators.ncols()

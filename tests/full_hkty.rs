@@ -1,7 +1,7 @@
 use cygv::malachite::{Integer, Rational};
 use cygv::{
-    compute_gv, compute_gw, Error, Geometry, Invariants, Method, MoriCone, Options, Problem,
-    Selection,
+    compute_gv, compute_gw, Consistency, Error, Geometry, Invariants, Lift, Method, MoriCone,
+    Options, Problem, Selection,
 };
 use nalgebra::{dmatrix, DMatrix};
 use std::collections::HashMap;
@@ -15,25 +15,21 @@ fn problem(
     grading_vector: &[i32],
     selection: Selection,
 ) -> Problem {
-    Problem {
-        geometry: Geometry {
-            q: q.clone(),
-            intnums: intnums.clone(),
-            nefpart: nefpart.to_vec(),
-            ..Geometry::default()
-        },
-        cone: MoriCone::Generators(generators.clone()),
-        hilbert_bases: None,
+    let mut geometry = Geometry::new(q.clone(), intnums.clone());
+    geometry.nefpart = nefpart.to_vec();
+    let mut problem = Problem::new(
+        geometry,
+        MoriCone::Generators(generators.clone()),
         selection,
-        grading_vector: Some(grading_vector.to_vec()),
-    }
+    );
+    problem.grading_vector = Some(grading_vector.to_vec());
+    problem
 }
 
 fn method(method: Method) -> Options {
-    Options {
-        method,
-        ..Options::default()
-    }
+    let mut options = Options::default();
+    options.method = method;
+    options
 }
 
 /// The curve classes, surfaces and values of the invariants.
@@ -266,16 +262,17 @@ fn test_methods() {
     // The report says which method ran.
     let auto = compute_gv(&quintic(Selection::MaxDeg(3)), &Options::default()).unwrap();
     assert_eq!(auto.report.method, Method::Modular);
-    assert!(!auto.report.certified);
-    let certified = Options {
-        certify: true,
-        ..Options::default()
-    };
-    assert!(
+    assert_eq!(auto.report.lift, Lift::Stable);
+    // The quintic has h11 = 1, which the consistency check does not apply to.
+    assert_eq!(auto.report.consistency, Consistency::Unchecked);
+    let mut certified = Options::default();
+    certified.certify = true;
+    assert_eq!(
         compute_gv(&quintic(Selection::MaxDeg(3)), &certified)
             .unwrap()
             .report
-            .certified
+            .lift,
+        Lift::Certified
     );
 
     // The modular method only supports max_deg and target_points; auto runs the reference
@@ -289,7 +286,7 @@ fn test_methods() {
     assert_eq!(gv(Method::Auto, Selection::MinPoints(4)).unwrap(), expected);
     let reference = compute_gv(&quintic(Selection::MinPoints(4)), &Options::default()).unwrap();
     assert_eq!(reference.report.method, Method::Reference);
-    assert!(reference.report.certified);
+    assert_eq!(reference.report.lift, Lift::Exact);
 }
 
 /// Invalid nef partitions, intersection numbers and curve classes are errors with each
@@ -311,9 +308,9 @@ fn test_invalid_input() {
             gv(Selection::MaxDeg(3), nefpart, intnums, m)
         };
         for (nefpart, reason) in [
-            (vec![vec![0, 1, 2, 3]], "include every row"),
+            (vec![vec![0, 1, 2, 3]], "include every toric divisor"),
             (vec![vec![0, 1, 2, 3, 4, 4]], "disjoint"),
-            (vec![vec![0, 1, 2, 3, 7]], "indices of rows"),
+            (vec![vec![0, 1, 2, 3, 7]], "consist of toric divisors"),
             (vec![vec![0, 1, 2, 3, 4], vec![]], "not be empty"),
         ] {
             let (f, r) = field(run(&nefpart, &quintic));
@@ -383,19 +380,20 @@ fn test_invalid_input() {
     }
 
     // A Mori cone of the origin alone has no curves, whichever the selection.
-    let point = |selection| Problem {
-        cone: MoriCone::Inequalities {
-            hyperplanes: dmatrix![1, -1],
-            equations: DMatrix::zeros(1, 0),
-        },
-        ..problem(
+    let point = |selection| {
+        let mut p = problem(
             &q.columns(0, 1).into(),
             &[],
             &intnums,
             &dmatrix![1],
             &[1],
             selection,
-        )
+        );
+        p.cone = MoriCone::Inequalities {
+            hyperplanes: dmatrix![1, -1],
+            equations: DMatrix::zeros(1, 0),
+        };
+        p
     };
     for selection in [Selection::MaxDeg(3), Selection::MinPoints(5)] {
         let res = compute_gv(&point(selection), &method(Method::Reference)).unwrap();
