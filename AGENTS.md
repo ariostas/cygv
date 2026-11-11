@@ -530,7 +530,10 @@ its generators. `tests/data/refs.yaml` and `refs_vex.yaml` are the frozen fixtur
 threefolds up to $h^{1,1} = 10$, cgv for vex phases and FRSTs, with the
 FRST side of each pair mapped from its vex phase), with the expected results in the output
 format in the matching `*_gv.yaml`, compared by `tests/fixtures.rs` (the reference method too,
-on the cheap ones). The files say where each geometry comes from, and adding a fixture is a
+on the cheap ones). `refs_030.yaml` adds what those do not cover, from the released cygv 0.3.0:
+the fourfold of `examples/fourfold.yaml` (GV and GW), GW invariants of a threefold and target
+points; its expected file has GW values as strings and `surface` for the n-fold, and gives no
+grading vector. The files say where each geometry comes from, and adding a fixture is a
 document in each. `tests/data/` is published with the crate, since the unit tests read it.
 
 The whole CLI sits behind the default `cli` feature: `clap` and `yaml-rust2` are optional

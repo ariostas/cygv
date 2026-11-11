@@ -1,0 +1,217 @@
+# The expected results of refs_030.yaml, from cygv 0.3.0, as curve classes, surfaces and
+# values (GW invariants as strings), in no particular order.
+---
+name: fourfold_gv
+invariants: gv
+results:
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 8, gv: 256}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 1, gv: 32}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 11, gv: 128}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 5, gv: -64}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 6, gv: -128}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 4, gv: 32}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 13, gv: -512}
+  - {curve_class: [1, 0, -4, 0, 0, 0], surface: 2, gv: 80}
+  - {curve_class: [1, 0, -4, 0, 0, 0], surface: 9, gv: -320}
+  - {curve_class: [1, 0, -4, 0, 0, 0], surface: 0, gv: -20}
+  - {curve_class: [0, 0, 0, 0, -2, 1], surface: 11, gv: -512}
+  - {curve_class: [0, 0, 0, 0, -2, 1], surface: 12, gv: 128}
+  - {curve_class: [0, 0, 0, 0, -2, 1], surface: 4, gv: -64}
+  - {curve_class: [0, 0, 0, 0, -2, 1], surface: 5, gv: 32}
+  - {curve_class: [2, 0, -8, 0, 0, 0], surface: 9, gv: -13120}
+  - {curve_class: [2, 0, -8, 0, 0, 0], surface: 0, gv: -820}
+  - {curve_class: [2, 0, -8, 0, 0, 0], surface: 2, gv: 3280}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 1, gv: -32}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 6, gv: -128}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 3, gv: 32}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 11, gv: 128}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 10, gv: -128}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 4, gv: 32}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 7, gv: 128}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 8, gv: 256}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 4, gv: -32}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 12, gv: 128}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 11, gv: -384}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 5, gv: -32}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 6, gv: -128}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 1, gv: 32}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 13, gv: -512}
+  - {curve_class: [3, 0, -12, 0, 0, 0], surface: 2, gv: 272240}
+  - {curve_class: [3, 0, -12, 0, 0, 0], surface: 9, gv: -1088960}
+  - {curve_class: [3, 0, -12, 0, 0, 0], surface: 0, gv: -68060}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 1, gv: -32}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 11, gv: -384}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 3, gv: 32}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 4, gv: -32}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 5, gv: 32}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 7, gv: 128}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 10, gv: -128}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 12, gv: 128}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 6, gv: -128}
+  - {curve_class: [4, 0, -16, 0, 0, 0], surface: 9, gv: -119783040}
+  - {curve_class: [4, 0, -16, 0, 0, 0], surface: 0, gv: -7486440}
+  - {curve_class: [4, 0, -16, 0, 0, 0], surface: 2, gv: 29945760}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 3, gv: 32}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 12, gv: 128}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 13, gv: -512}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 7, gv: 128}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 8, gv: 256}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 10, gv: -128}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 5, gv: -32}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 11, gv: -256}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 6, gv: -256}
+---
+name: fourfold_gw
+invariants: gw
+results:
+  - {curve_class: [0, 0, 0, 0, -2, 1], surface: 11, gw: '-512'}
+  - {curve_class: [0, 0, 0, 0, -2, 1], surface: 4, gw: '-64'}
+  - {curve_class: [0, 0, 0, 0, -2, 1], surface: 5, gw: '32'}
+  - {curve_class: [0, 0, 0, 0, -2, 1], surface: 12, gw: '128'}
+  - {curve_class: [1, 0, -4, 0, 0, 0], surface: 0, gw: '-20'}
+  - {curve_class: [1, 0, -4, 0, 0, 0], surface: 9, gw: '-320'}
+  - {curve_class: [1, 0, -4, 0, 0, 0], surface: 2, gw: '80'}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 6, gw: '-128'}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 13, gw: '-512'}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 11, gw: '128'}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 5, gw: '-64'}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 4, gw: '32'}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 8, gw: '256'}
+  - {curve_class: [0, 1, 0, 0, 1, -2], surface: 1, gw: '32'}
+  - {curve_class: [2, 0, -8, 0, 0, 0], surface: 9, gw: '-13200'}
+  - {curve_class: [2, 0, -8, 0, 0, 0], surface: 2, gw: '3300'}
+  - {curve_class: [2, 0, -8, 0, 0, 0], surface: 0, gw: '-825'}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 6, gw: '-128'}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 7, gw: '128'}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 4, gw: '32'}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 10, gw: '-128'}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 3, gw: '32'}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 11, gw: '128'}
+  - {curve_class: [0, -1, 0, 1, 1, 0], surface: 1, gw: '-32'}
+  - {curve_class: [0, 0, 0, 0, -4, 2], surface: 5, gw: '8'}
+  - {curve_class: [0, 0, 0, 0, -4, 2], surface: 4, gw: '-16'}
+  - {curve_class: [0, 0, 0, 0, -4, 2], surface: 11, gw: '-128'}
+  - {curve_class: [0, 0, 0, 0, -4, 2], surface: 12, gw: '32'}
+  - {curve_class: [0, 2, 0, 0, 2, -4], surface: 11, gw: '32'}
+  - {curve_class: [0, 2, 0, 0, 2, -4], surface: 1, gw: '8'}
+  - {curve_class: [0, 2, 0, 0, 2, -4], surface: 13, gw: '-128'}
+  - {curve_class: [0, 2, 0, 0, 2, -4], surface: 4, gw: '8'}
+  - {curve_class: [0, 2, 0, 0, 2, -4], surface: 5, gw: '-16'}
+  - {curve_class: [0, 2, 0, 0, 2, -4], surface: 8, gw: '64'}
+  - {curve_class: [0, 2, 0, 0, 2, -4], surface: 6, gw: '-32'}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 11, gw: '-384'}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 4, gw: '-32'}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 12, gw: '128'}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 5, gw: '-32'}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 1, gw: '32'}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 6, gw: '-128'}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 8, gw: '256'}
+  - {curve_class: [0, 1, 0, 0, -1, -1], surface: 13, gw: '-512'}
+  - {curve_class: [0, 0, 0, 0, -6, 3], surface: 12, gw: '128/9'}
+  - {curve_class: [0, 0, 0, 0, -6, 3], surface: 11, gw: '-512/9'}
+  - {curve_class: [0, 0, 0, 0, -6, 3], surface: 5, gw: '32/9'}
+  - {curve_class: [0, 0, 0, 0, -6, 3], surface: 4, gw: '-64/9'}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 4, gw: '-32'}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 6, gw: '-128'}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 7, gw: '128'}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 11, gw: '-384'}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 5, gw: '32'}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 10, gw: '-128'}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 3, gw: '32'}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 1, gw: '-32'}
+  - {curve_class: [0, -1, 0, 1, -1, 1], surface: 12, gw: '128'}
+  - {curve_class: [3, 0, -12, 0, 0, 0], surface: 0, gw: '-612560/9'}
+  - {curve_class: [3, 0, -12, 0, 0, 0], surface: 9, gw: '-9800960/9'}
+  - {curve_class: [3, 0, -12, 0, 0, 0], surface: 2, gw: '2450240/9'}
+  - {curve_class: [0, 3, 0, 0, 3, -6], surface: 11, gw: '128/9'}
+  - {curve_class: [0, 3, 0, 0, 3, -6], surface: 5, gw: '-64/9'}
+  - {curve_class: [0, 3, 0, 0, 3, -6], surface: 6, gw: '-128/9'}
+  - {curve_class: [0, 3, 0, 0, 3, -6], surface: 8, gw: '256/9'}
+  - {curve_class: [0, 3, 0, 0, 3, -6], surface: 1, gw: '32/9'}
+  - {curve_class: [0, 3, 0, 0, 3, -6], surface: 13, gw: '-512/9'}
+  - {curve_class: [0, 3, 0, 0, 3, -6], surface: 4, gw: '32/9'}
+  - {curve_class: [0, 2, 0, 0, -2, -2], surface: 4, gw: '-8'}
+  - {curve_class: [0, 2, 0, 0, -2, -2], surface: 6, gw: '-32'}
+  - {curve_class: [0, 2, 0, 0, -2, -2], surface: 12, gw: '32'}
+  - {curve_class: [0, 2, 0, 0, -2, -2], surface: 1, gw: '8'}
+  - {curve_class: [0, 2, 0, 0, -2, -2], surface: 13, gw: '-128'}
+  - {curve_class: [0, 2, 0, 0, -2, -2], surface: 11, gw: '-96'}
+  - {curve_class: [0, 2, 0, 0, -2, -2], surface: 8, gw: '64'}
+  - {curve_class: [0, 2, 0, 0, -2, -2], surface: 5, gw: '-8'}
+  - {curve_class: [0, -2, 0, 2, 2, 0], surface: 1, gw: '-8'}
+  - {curve_class: [0, -2, 0, 2, 2, 0], surface: 7, gw: '32'}
+  - {curve_class: [0, -2, 0, 2, 2, 0], surface: 10, gw: '-32'}
+  - {curve_class: [0, -2, 0, 2, 2, 0], surface: 6, gw: '-32'}
+  - {curve_class: [0, -2, 0, 2, 2, 0], surface: 3, gw: '8'}
+  - {curve_class: [0, -2, 0, 2, 2, 0], surface: 4, gw: '8'}
+  - {curve_class: [0, -2, 0, 2, 2, 0], surface: 11, gw: '32'}
+  - {curve_class: [0, 0, 0, 0, -8, 4], surface: 4, gw: '-4'}
+  - {curve_class: [0, 0, 0, 0, -8, 4], surface: 5, gw: '2'}
+  - {curve_class: [0, 0, 0, 0, -8, 4], surface: 11, gw: '-32'}
+  - {curve_class: [0, 0, 0, 0, -8, 4], surface: 12, gw: '8'}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 10, gw: '-128'}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 13, gw: '-512'}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 8, gw: '256'}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 3, gw: '32'}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 11, gw: '-256'}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 7, gw: '128'}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 5, gw: '-32'}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 12, gw: '128'}
+  - {curve_class: [0, 0, 0, 1, 0, -1], surface: 6, gw: '-256'}
+  - {curve_class: [0, 4, 0, 0, 4, -8], surface: 6, gw: '-8'}
+  - {curve_class: [0, 4, 0, 0, 4, -8], surface: 8, gw: '16'}
+  - {curve_class: [0, 4, 0, 0, 4, -8], surface: 13, gw: '-32'}
+  - {curve_class: [0, 4, 0, 0, 4, -8], surface: 11, gw: '8'}
+  - {curve_class: [0, 4, 0, 0, 4, -8], surface: 1, gw: '2'}
+  - {curve_class: [0, 4, 0, 0, 4, -8], surface: 4, gw: '2'}
+  - {curve_class: [0, 4, 0, 0, 4, -8], surface: 5, gw: '-4'}
+  - {curve_class: [4, 0, -16, 0, 0, 0], surface: 0, gw: '-29946585/4'}
+  - {curve_class: [4, 0, -16, 0, 0, 0], surface: 2, gw: '29946585'}
+  - {curve_class: [4, 0, -16, 0, 0, 0], surface: 9, gw: '-119786340'}
+---
+name: p11222_gw
+invariants: gw
+results:
+  - {curve_class: [1, 0], gw: '640'}
+  - {curve_class: [0, 1], gw: '4'}
+  - {curve_class: [1, 1], gw: '640'}
+  - {curve_class: [2, 0], gw: '10112'}
+  - {curve_class: [0, 2], gw: '1/2'}
+  - {curve_class: [3, 0], gw: '7787008/27'}
+  - {curve_class: [2, 1], gw: '72224'}
+  - {curve_class: [0, 3], gw: '4/27'}
+  - {curve_class: [3, 1], gw: '7539200'}
+  - {curve_class: [2, 2], gw: '10112'}
+  - {curve_class: [4, 0], gw: '10981248'}
+  - {curve_class: [0, 4], gw: '1/16'}
+  - {curve_class: [5, 0], gw: '12381737728/25'}
+  - {curve_class: [4, 1], gw: '757561520'}
+  - {curve_class: [3, 2], gw: '7539200'}
+  - {curve_class: [0, 5], gw: '4/125'}
+  - {curve_class: [6, 0], gw: '673530639872/27'}
+  - {curve_class: [0, 6], gw: '1/54'}
+  - {curve_class: [5, 1], gw: '74132328704'}
+  - {curve_class: [3, 3], gw: '7787008/27'}
+  - {curve_class: [4, 2], gw: '2346828548'}
+---
+name: p11222_targets
+invariants: gv
+results:
+  - {curve_class: [1, 0], gv: 640}
+  - {curve_class: [0, 1], gv: 4}
+  - {curve_class: [2, 0], gv: 10032}
+  - {curve_class: [1, 1], gv: 640}
+  - {curve_class: [3, 0], gv: 288384}
+  - {curve_class: [2, 1], gv: 72224}
+  - {curve_class: [3, 1], gv: 7539200}
+  - {curve_class: [4, 0], gv: 10979984}
+  - {curve_class: [2, 2], gv: 10032}
+  - {curve_class: [4, 1], gv: 757561520}
+  - {curve_class: [3, 2], gv: 7539200}
+  - {curve_class: [5, 0], gv: 495269504}
+  - {curve_class: [6, 0], gv: 24945542832}
+  - {curve_class: [5, 1], gv: 74132328704}
+  - {curve_class: [4, 2], gv: 2346819520}
+  - {curve_class: [3, 3], gv: 288384}
+  - {curve_class: [6, 1], gv: 7117563990784}
+  - {curve_class: [4, 3], gv: 757561520}
