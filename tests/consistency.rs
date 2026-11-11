@@ -154,15 +154,18 @@ fn test_vex_without_strata() {
     }
 }
 
-const FOURFOLD: &str = include_str!("../examples/fourfold.yaml");
+/// The fourfold example, with LF line endings, which a checkout on Windows may have changed.
+fn fourfold() -> String {
+    include_str!("../examples/fourfold.yaml").replace("\r\n", "\n")
+}
 
 #[test]
 fn test_dimension() {
     // A complete intersection without its nef partition is a hypersurface of one dimension
     // more, which only the dimension, when given, catches.
     let nefpart = "nefpart:\n  - [0, 1, 2, 3]\n  - [4, 5, 6, 7, 8, 9, 10, 11]\n";
-    assert!(FOURFOLD.contains(nefpart));
-    let without = FOURFOLD
+    assert!(fourfold().contains(nefpart));
+    let without = fourfold()
         .replace(nefpart, "")
         .replace("min_points: 100", "max_deg: 1");
     match run(&without, Method::Modular, Verify::Quick).unwrap() {
@@ -177,7 +180,7 @@ fn test_dimension() {
         )),
         "dimension"
     );
-    let with = FOURFOLD.replace("min_points: 100", "max_deg: 1");
+    let with = fourfold().replace("min_points: 100", "max_deg: 1");
     assert!(run(
         &format!("{with}dimension: 4\n"),
         Method::Modular,
@@ -190,8 +193,8 @@ fn test_dimension() {
 fn test_nfold_intnums() {
     // An n-fold has no consistency check: a changed intersection number only shows when an
     // invariant is not an integer, here at degree 4, while degree 1 gives a wrong integer.
-    assert!(FOURFOLD.contains("  - [0, 1, 1, -8]\n"));
-    let wrong = FOURFOLD.replace("  - [0, 1, 1, -8]\n", "  - [0, 1, 1, -7]\n");
+    assert!(fourfold().contains("  - [0, 1, 1, -8]\n"));
+    let wrong = fourfold().replace("  - [0, 1, 1, -8]\n", "  - [0, 1, 1, -7]\n");
     let low = run(
         &wrong.replace("min_points: 100", "max_deg: 1"),
         Method::Modular,
