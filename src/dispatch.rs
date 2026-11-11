@@ -830,27 +830,29 @@ fn entries<T: PartialEq + Default>(
         if invariants.capacity() - invariants.len() >= step {
             invariants.shrink_to_fit();
         }
-        let mut values: Vec<(usize, T)> = inv
-            .values
-            .into_iter()
-            .enumerate()
-            .filter(|(_, v)| *v != zero)
-            .collect();
-        // Backwards, like the curves; the first component takes the curve, the others a copy.
-        let first = (!values.is_empty()).then(|| values.remove(0));
-        for (k, value) in values.into_iter().rev() {
+        let CurveInvariants {
+            curve,
+            degree,
+            values,
+        } = inv;
+        // Backwards, like the curves; the first nonzero component takes the curve, the
+        // others a copy.
+        let mut left = values.iter().filter(|&v| *v != zero).count();
+        let mut curve = Some(curve);
+        for (k, value) in values.into_iter().enumerate().rev() {
+            if value == zero {
+                continue;
+            }
+            left -= 1;
+            let curve = if left == 0 {
+                curve.take()
+            } else {
+                curve.clone()
+            };
             res.push(Invariant {
-                curve: inv.curve.clone(),
+                curve: curve.expect("taken by the last component"),
                 surface: (!threefold).then_some(k),
-                degree: inv.degree,
-                value,
-            });
-        }
-        if let Some((k, value)) = first {
-            res.push(Invariant {
-                curve: inv.curve,
-                surface: (!threefold).then_some(k),
-                degree: inv.degree,
+                degree,
                 value,
             });
         }
