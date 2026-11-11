@@ -33,6 +33,8 @@ repos:
     hooks:
       - id: codespell
         args: ["-L", "crate,socio-economic"]
+        # License texts of other projects, with their authors' names.
+        exclude: ^(THIRD_PARTY_LICENSES\.md|licenses/)
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: "v2.4.0"
     hooks:

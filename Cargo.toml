@@ -11,7 +11,22 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/ariostas/cygv"
 readme = "README.md"
 # The tests and benchmarks read their data with `include_str!`, the unit tests of the
-# library among them, so all of it is published (about 300 KB compressed) for them to build.
+# library among them, so all of it is published (about 300 KB compressed) for them to build,
+# with the examples that the tests run. What only the Python package, CI or development use
+# is left out.
+exclude = [
+    "/.github",
+    "/.pre-commit-config.yaml",
+    "/python",
+    "/pyproject.toml",
+    "/noxfile.py",
+    "/scripts",
+    "/AGENTS.md",
+    "/CLAUDE.md",
+    "/CODE_OF_CONDUCT.md",
+    "/CONTRIBUTING.md",
+    "/uv.lock",
+]
 keywords = ["calabi-yau", "string-theory", "gopakumar-vafa", "gromov-witten", "mirror-symmetry"]
 categories = ["science", "mathematics", "algorithms"]
 

@@ -56,7 +56,18 @@ saved second restoring a `target/` built with the wrong profile.
 
 The Rust workflow also has a `lint` job (its own cache key, `lint`): `cargo fmt --check` and
 clippy with `-D warnings`, on all targets and on the Python bindings (`--no-default-features
---features python`), since pre-commit.ci skips the hooks that need a Rust toolchain. The
+--features python`), since pre-commit.ci skips the hooks that need a Rust toolchain, then
+`scripts/third_party_licenses.py --check` and `cargo doc` with `-D warnings`. Its `msrv` job
+checks the crate (all targets, and the bindings) with the toolchain of `rust-version` in
+`Cargo.toml` (1.90), and its `package` job runs `cargo package`, which builds what would be
+published: `exclude` in `Cargo.toml` leaves out what only CI, Python and development use, and
+keeps `tests/data`, `benches/data` and `examples`, which the tests read. The deploy
+workflow's `check-crate` job runs `cargo publish --dry-run`, and both deploys wait for it, so
+that a crate that cannot be published does not leave the wheels published alone. The stress
+test runs weekly (`stress.yml`, and by hand). `THIRD_PARTY_LICENSES.md`, the licenses of the
+crates that the wheels and the executable link (from `cargo metadata` of the lockfile; the
+malachite crates ship none, so the LGPL text comes from `licenses/LGPL-3.0.txt`), goes into
+the wheels through `license-files`; regenerate it with the script after a lockfile change. The
 release profile with LTO is built by the Python workflow, through maturin.
 
 `[tool.uv] cache-keys` in `pyproject.toml` lists `src/**/*.rs`; without it uv would not rebuild the

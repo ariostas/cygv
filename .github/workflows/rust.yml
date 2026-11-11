@@ -66,11 +66,58 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Run clippy on the Python bindings
         run: cargo clippy --locked --no-default-features --features python -- -D warnings
+      # The notices that the wheels ship must follow the lockfile.
+      - name: Check the third-party licenses
+        run: python3 scripts/third_party_licenses.py --check
+      - name: Build the documentation
+        run: cargo doc --locked --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # The oldest toolchain that `rust-version` in Cargo.toml promises. Only checked, not
+  # tested: the tests run on stable above, and type checking is what an older compiler
+  # rejects.
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+      - name: Read the minimum supported version
+        id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - name: Check
+        run: cargo check --locked --all-targets
+      - name: Check the Python bindings
+        run: cargo check --locked --no-default-features --features python
+
+  # What `cargo publish` uploads must build on its own, with the files that `exclude` in
+  # Cargo.toml leaves in.
+  package:
+    name: Package the crate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: package
+      - name: Package and build it
+        run: cargo package --locked
 
   check-rust:
     name: Check Rust
     if: always()
-    needs: [build-and-test, lint]
+    needs: [build-and-test, lint, msrv, package]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

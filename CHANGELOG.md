@@ -37,6 +37,8 @@ write instead of what 0.3.0 took.
 ### Changed
 
 - The big integers are `malachite`'s instead of `rug`'s, so no C toolchain is needed to build.
+- The wheels ship the licenses of the Rust crates they link (`THIRD_PARTY_LICENSES.md`), and
+  a `py.typed` marker; the crate no longer ships the Python package and the CI files.
 - The Python computation runs in the calling process, on its own threads with the GIL
   released, instead of in a `multiprocessing` subprocess.
 - GW invariants are always exact (`Fraction`s); floating-point arithmetic (`prec`) is gone, and
