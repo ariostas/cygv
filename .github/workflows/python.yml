@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-2022]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-26, windows-2022]
         python-version: ["3.10", "3.14", "3.14t"]
     env:
       # `pip install .` drives cargo through maturin, which takes its cargo

@@ -23,7 +23,7 @@ repos:
     - id: cargo-check
     - id: clippy
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.10
+    rev: v0.17.3
     hooks:
       - id: ruff-check
         args: ["--fix", "--show-fixes"]
@@ -36,7 +36,7 @@ repos:
         # License texts of other projects, with their authors' names.
         exclude: ^(THIRD_PARTY_LICENSES\.md|licenses/)
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: "v2.4.0"
+    rev: "v2.4.1"
     hooks:
       - id: mypy
         files: python
