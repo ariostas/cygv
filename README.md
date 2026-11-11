@@ -108,7 +108,7 @@ They are trusted, so a missing element silently drops classes.
 | Keyword | Effect |
 | --- | --- |
 | `method` | `"modular"` computes modulo primes and lifts by the CRT, and is much faster; `"reference"` is a faithful implementation in exact rationals. The default, `"auto"`, picks `modular` for everything but `min_points`, which it does not support. |
-| `verify` | Checks that the input is consistent (see "Checks" below): `"quick"`, the default, up to about half the maximum degree, for a few percent of the time; `"full"` up to the maximum degree, for about half a pass more; `"off"`. Threefolds with $h^{1,1} \ge 2$ only. |
+| `verify` | Checks that the input is consistent (see "Checks" below): `"quick"`, the default, up to about half the maximum degree, for a few percent of the time at most; `"full"` up to the maximum degree, for about as long as a pass (55–75% more time on the benchmark models); `"off"`. Threefolds with $h^{1,1} \ge 2$ only. |
 | `certify` | Proves that the modular method's lift from residues is right, by bounding every invariant and taking primes until the bounds fit, for about twice the time. Without it the lift is accepted once one more prime agrees, which makes an error vanishingly unlikely. It says nothing about the input. Not for vex phases yet. |
 | `low_memory` | About a third of the memory, for about two and a half times the time. |
 | `n_threads` | The number of threads, one per logical CPU by default. |

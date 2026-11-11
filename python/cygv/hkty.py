@@ -542,8 +542,9 @@ class Problem:
         vector, so wrong ones (or a Mori cone too small, or a vex phase without its fan or
         strata) can give wrong integers, which a second pass with another contraction then
         detects, raising a :class:`ComputationError`. "quick" (the default, or ``True``) checks
-        up to about half the maximum degree, for a few percent of the time, "full" up to the
-        maximum degree, for about half a pass more, and "off" (or ``False``) not at all. It
+        up to about half the maximum degree, for a few percent of the time at most, "full" up to
+        the maximum degree, for about as long as a pass (55 to 75% more time on the benchmark
+        models), and "off" (or ``False``) not at all. It
         cannot detect intersection numbers all scaled by a common factor, nor anything for
         ``h11 = 1`` or an n-fold. The reference pipeline always checks.
 

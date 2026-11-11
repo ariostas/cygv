@@ -293,10 +293,12 @@ pub enum Verify {
     /// No check.
     Off,
     /// The check up to half the maximum degree (rounded up, and at least the maximum degree
-    /// up to 4), where inconsistent input shows first, for a few percent of the time.
+    /// up to 4), where inconsistent input shows first: within the noise of the runs measured
+    /// (`h11_8` and `h11_10` of the benchmarks at degrees 14 to 20), a few percent at most.
     #[default]
     Quick,
-    /// The check up to the maximum degree, for about half the time of a pass more.
+    /// The check up to the maximum degree, which takes about as long as a pass of the run
+    /// with one prime fewer: 55% to 75% more time and up to 8% more memory on those runs.
     Full,
 }
 

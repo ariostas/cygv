@@ -80,8 +80,9 @@ Options:
                  vector, so inconsistent input can give wrong integers; the check
                  computes once more with another contraction and fails when the
                  two disagree. quick, the default, checks up to about half the
-                 maximum degree, for a few percent of the time, and full up to
-                 the maximum degree. The reference pipeline always checks.
+                 maximum degree, for a few percent of the time at most, and
+                 full up to the maximum degree, for about as long as a pass. The
+                 reference pipeline always checks.
   certify        Whether to prove that the modular pipeline's lift from residues
                  is right: it then bounds every invariant, and takes more primes
                  until the bounds are below half their product. It says nothing

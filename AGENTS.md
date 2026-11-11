@@ -431,7 +431,11 @@ indices differently (the first index is a reference surface in the n-fold case).
   $(w' \cdot C) A_C$ from the lift at every curve in the lightcones with a coefficient or a
   lifted invariant, and returns `Error::Inconsistent { degree, curve }` at the first that
   differs. The candidates' skip of pair cones with vanishing $Q_s K Q_u$ must also see the
-  second form vanish, or the check would miss their curves. It cannot see uniform scalings of
+  second form vanish, or the check would miss their curves. Measured on `h11_8` (cones, degree
+  20) and `h11_10` (cones at 16, generators at 18), release build, 8 threads: `Quick` within the
+  noise, `Full` 55–75% more time (its one-prime pass costs about what a two-prime pass of the
+  run does) and up to 8% more peak memory; the spot check of given Hilbert bases took 30 ms.
+  It cannot see uniform scalings of
   $\kappa$, $h^{1,1} = 1$ or n-folds (no such condition); `tests/consistency.rs` holds the
   review's cases of inconsistent input, the blind spots among them.
 - **`PolynomialCoeff<T>`** (`src/reference/polynomial/coefficient.rs`) is the compound trait the
