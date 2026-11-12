@@ -1,0 +1,27 @@
+name: Stress test
+
+# The stress test runs the parallel code over repeated runs and thread counts and checks that
+# the results never change. It takes too long for every pull request, so it runs weekly, and
+# by hand before releases and after changes to the parallel code.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  stress:
+    name: Stress test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: stress
+      - name: Run the stress test
+        run: cargo test --locked --release --test stress -- --ignored

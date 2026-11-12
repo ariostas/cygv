@@ -21,16 +21,20 @@ use std::hint::black_box;
 use std::time::Duration;
 
 fn benchmark_hkty(c: &mut Criterion) {
-    // Scenarios of the same group are emitted contiguously, so a running fold
-    // is enough to collect them.
+    // The scenarios of a group are not all next to each other (the modular
+    // pipeline's come after the reference ones of the same tier), so they are
+    // collected by name.
     let mut groups: Vec<(String, Vec<Scenario>)> = Vec::new();
     for scenario in common::scenarios()
         .into_iter()
         .filter(|s| s.tier != Tier::Huge)
     {
-        match groups.last_mut() {
-            Some((name, cases)) if *name == scenario.group() => cases.push(scenario),
-            _ => groups.push((scenario.group(), vec![scenario])),
+        match groups
+            .iter_mut()
+            .find(|(name, _)| *name == scenario.group())
+        {
+            Some((_, cases)) => cases.push(scenario),
+            None => groups.push((scenario.group(), vec![scenario])),
         }
     }
 
@@ -44,9 +48,8 @@ fn benchmark_hkty(c: &mut Criterion) {
         for scenario in cases {
             group.sample_size(scenario.sample_size);
             group.measurement_time(scenario.measurement_time());
-            group.bench_function(scenario.variant.name(), |b| {
-                b.iter(|| black_box(scenario.run(&model)))
-            });
+            let name = format!("{}{}", scenario.variant.name(), scenario.pipeline.suffix());
+            group.bench_function(name, |b| b.iter(|| black_box(scenario.run(&model))));
         }
 
         group.finish();
