@@ -53,6 +53,32 @@ numbers, so each entry looks like `(((0, -2, 0, 1, 0, 2), 3), -24)` instead.
 The computation runs in a subprocess, so it can be interrupted with ctrl+c without losing the
 Python session.
 
+### The cgv backend
+
+For hypersurface threefolds with `max_deg`, `backend="cgv"` computes the same GV and GW invariants
+with [cgv](cgv/), a C implementation that is also exact and much faster on deep degrees:
+
+```python
+compute_gv(generators, grading_vector, q, intnums, max_deg=30, backend="cgv")
+```
+
+It is fastest with [normaliz](https://github.com/Normaliz/Normaliz) on the `PATH`; without it, cgv
+enumerates the Mori cone itself (same result, about ten times slower on deep degrees).
+
+cgv can also run on a GPU: `device="auto"` (the default) picks a suitable GPU if there is one, else
+the CPU; `"cpu"`, `"gpu"` and `"gpu:N"` choose explicitly. The prebuilt wheels are CPU-only. For the
+GPU, install from source (needs a Rust toolchain) on a Linux machine with CUDA's `nvcc` or ROCm's `hipcc`:
+
+```bash
+pip install --no-binary cygv cygv
+```
+
+This builds for the GPUs in the machine; `CGV_CUDA_ARCH` or `CGV_HIP_ARCH` choose other
+architectures (e.g. `CGV_CUDA_ARCH=sm_89,sm_120`). AMD GPUs that ROCm does not officially support
+need the nearest supported architecture when building and an override when running, e.g. for an
+RX 6700 XT (gfx1031): `CGV_HIP_ARCH=gfx1030` when installing, `HSA_OVERRIDE_GFX_VERSION=10.3.0`
+when running.
+
 ## Command line interface
 
 This project also ships a `cygv` executable, so that it can be used without Python. It reads

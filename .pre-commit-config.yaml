@@ -1,3 +1,6 @@
+# cgv/ is a standalone C program with its own tools and tests, and python/cygv/_cgv_run.py is an
+# unchanged copy of cgv/tools/cgv_run.py (python/tests/test_cgv.py checks that): not linted here.
+exclude: ^(cgv/|python/cygv/_cgv_run\.py$)
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: "v6.0.0"
