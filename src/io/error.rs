@@ -15,8 +15,15 @@ pub enum IoError {
     MissingField(&'static str),
     /// A field that is not part of the input schema was found.
     UnknownField(String),
-    /// More than one of the fields that select the curve classes to compute was given.
-    ConflictingTruncations,
+    /// None of the fields that can give something required is given (the Mori cone, or which
+    /// curve classes to compute).
+    MissingOneOf(&'static [&'static str]),
+    /// Two fields that exclude each other were both given.
+    Conflicting(&'static str, &'static str),
+    /// The input is valid, but cannot be computed as asked, for the reason given.
+    Unsupported(String),
+    /// An error in one of several documents, counted from 1.
+    InDocument { number: usize, error: Box<IoError> },
     /// A field has an invalid type, shape, or value.
     InvalidField {
         /// The name of the offending field.
@@ -48,11 +55,20 @@ impl fmt::Display for IoError {
             ),
             IoError::MissingField(field) => write!(f, "the required field \"{field}\" is missing"),
             IoError::UnknownField(field) => write!(f, "unknown field \"{field}\""),
-            IoError::ConflictingTruncations => write!(
-                f,
-                "at most one of the fields \"max_deg\", \"min_points\", and \
-                 \"target_points\" may be given"
-            ),
+            IoError::MissingOneOf(fields) => {
+                let quoted: Vec<String> = fields.iter().map(|f| format!("\"{f}\"")).collect();
+                let (last, rest) = quoted.split_last().expect("there are several fields");
+                write!(
+                    f,
+                    "one of the fields {} or {last} is needed",
+                    rest.join(", ")
+                )
+            }
+            IoError::Conflicting(a, b) => {
+                write!(f, "the fields \"{a}\" and \"{b}\" cannot be given together")
+            }
+            IoError::Unsupported(reason) => write!(f, "{reason}"),
+            IoError::InDocument { number, error } => write!(f, "in document {number}: {error}"),
             IoError::InvalidField { field, reason } => {
                 write!(f, "invalid value for the field \"{field}\": {reason}")
             }
